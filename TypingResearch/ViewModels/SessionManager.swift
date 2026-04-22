@@ -1,6 +1,14 @@
 import Foundation
 import SwiftData
 import Observation
+import CoreGraphics
+
+// MARK: - SessionMode
+
+enum SessionMode {
+    case classic   // fixed rectangular hit regions (standard keyboard)
+    case gaussian  // per-key Gaussian + Mahalanobis hit classification
+}
 
 // MARK: - TapInfo
 
@@ -61,6 +69,9 @@ final class SessionManager {
     var isSessionComplete: Bool = false
     var completedTrials: [Trial] = []
 
+    // Which hit-test model the keyboard is using this session.
+    var sessionMode: SessionMode = .classic
+
     // Measured system keyboard height and safe area — set by ParticipantSetupView on first keyboard show
     var measuredKeyboardHeight: CGFloat = 291   // iPhone 16 default until measured
     var safeAreaBottom: CGFloat = 34            // iPhone 16 default until measured
@@ -93,11 +104,14 @@ final class SessionManager {
 
     // MARK: - Session Lifecycle
 
-    func startSession(participant: Participant, durationSeconds: Int) {
+    func startSession(participant: Participant,
+                      durationSeconds: Int,
+                      mode: SessionMode = .classic) {
         self.participant = participant
         self.sessionDurationSeconds = durationSeconds
         self.remainingSeconds = durationSeconds
         self.elapsedSeconds = 0
+        self.sessionMode = mode
 
         // Pick a fresh random corpus for this session
         WordGenerator.selectRandomCorpus()
@@ -411,6 +425,11 @@ final class SessionManager {
         isSessionComplete = true
         BackendClient.shared.flush()
         try? modelContext?.save()
+
+        // Every session — classic or gaussian — contributes to the Gaussian
+        // hit-test model. Subsequent Gaussian sessions re-use the accumulated
+        // per-key sufficient statistics.
+        GaussianModelStore.shared.update(with: allEvents)
     }
 
     // MARK: - Reset
@@ -419,8 +438,11 @@ final class SessionManager {
     func restartSameSession() {
         guard let existingParticipant = participant else { return }
         let duration = sessionDurationSeconds
+        let mode = sessionMode
         reset()
-        startSession(participant: existingParticipant, durationSeconds: duration)
+        startSession(participant: existingParticipant,
+                     durationSeconds: duration,
+                     mode: mode)
     }
 
     func reset() {

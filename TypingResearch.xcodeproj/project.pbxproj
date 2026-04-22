@@ -20,6 +20,10 @@
 		AA000000000000000000008 /* DataExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000008 /* DataExporter.swift */; };
 		AA000000000000000000009 /* Utilities.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000009 /* Utilities.swift */; };
 		AA000000000000000000012 /* KeystrokeCleaner.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000012 /* KeystrokeCleaner.swift */; };
+		AA000000000000000000013 /* GaussianKeyModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000013 /* GaussianKeyModel.swift */; };
+		AA000000000000000000014 /* GaussianModelStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000014 /* GaussianModelStore.swift */; };
+		AA000000000000000000015 /* GaussianKeyboardExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000015 /* GaussianKeyboardExporter.swift */; };
+		AA000000000000000000016 /* GaussianKeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000016 /* GaussianKeyboardView.swift */; };
 		JJ000000000000000000010 /* CustomKeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = JJ000000000000000000011 /* CustomKeyboardView.swift */; };
 /* End PBXBuildFile section */
 
@@ -38,6 +42,10 @@
 		BB000000000000000000008 /* DataExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataExporter.swift; sourceTree = "<group>"; };
 		BB000000000000000000009 /* Utilities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Utilities.swift; sourceTree = "<group>"; };
 		BB000000000000000000012 /* KeystrokeCleaner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeystrokeCleaner.swift; sourceTree = "<group>"; };
+		BB000000000000000000013 /* GaussianKeyModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaussianKeyModel.swift; sourceTree = "<group>"; };
+		BB000000000000000000014 /* GaussianModelStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaussianModelStore.swift; sourceTree = "<group>"; };
+		BB000000000000000000015 /* GaussianKeyboardExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaussianKeyboardExporter.swift; sourceTree = "<group>"; };
+		BB000000000000000000016 /* GaussianKeyboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaussianKeyboardView.swift; sourceTree = "<group>"; };
 		BB000000000000000000099 /* TypingResearch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TypingResearch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		JJ000000000000000000011 /* CustomKeyboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomKeyboardView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -108,6 +116,7 @@
 				BB000000000000000000006 /* TrialView.swift */,
 				BB000000000000000000007 /* LoggingTextField.swift */,
 				JJ000000000000000000011 /* CustomKeyboardView.swift */,
+				BB000000000000000000016 /* GaussianKeyboardView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -117,6 +126,8 @@
 			children = (
 				BB000000000000000000008 /* DataExporter.swift */,
 				BB000000000000000000012 /* KeystrokeCleaner.swift */,
+				BB000000000000000000013 /* GaussianKeyModel.swift */,
+				BB000000000000000000014 /* GaussianModelStore.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -127,6 +138,7 @@
 				87AA80492F6C999900764884 /* BackendClient.swift */,
 				87AA804A2F6C999900764884 /* KeyReportExporter.swift */,
 				BB000000000000000000009 /* Utilities.swift */,
+				BB000000000000000000015 /* GaussianKeyboardExporter.swift */,
 			);
 			path = Utilities;
 			sourceTree = "<group>";
@@ -211,6 +223,10 @@
 				AA000000000000000000007 /* LoggingTextField.swift in Sources */,
 				AA000000000000000000008 /* DataExporter.swift in Sources */,
 				AA000000000000000000012 /* KeystrokeCleaner.swift in Sources */,
+				AA000000000000000000013 /* GaussianKeyModel.swift in Sources */,
+				AA000000000000000000014 /* GaussianModelStore.swift in Sources */,
+				AA000000000000000000015 /* GaussianKeyboardExporter.swift in Sources */,
+				AA000000000000000000016 /* GaussianKeyboardView.swift in Sources */,
 				AA000000000000000000009 /* Utilities.swift in Sources */,
 				JJ000000000000000000010 /* CustomKeyboardView.swift in Sources */,
 			);

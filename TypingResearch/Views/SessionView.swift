@@ -39,7 +39,7 @@ struct SummaryView: View {
     @State private var generatingPDF: PDFKind? = nil
     @State private var plotLayout: TapDotPlotView.LayoutMode = .alpha
 
-    private enum PDFKind { case raw, cleaned }
+    private enum PDFKind { case raw, cleaned, gaussian }
 
     var body: some View {
         NavigationStack {
@@ -153,9 +153,39 @@ struct SummaryView: View {
                 pdfLabel: "Cleaned Keyboard View PDF",
                 pdfKind: .cleaned
             )
+
+            if sessionManager.sessionMode == .gaussian {
+                gaussianExportGroup
+            }
         }
         .sheet(item: $shareItem) { item in
             ShareSheet(activityItems: [item.url])
+        }
+    }
+
+    private var gaussianExportGroup: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Gaussian boundaries")
+                .font(.headline)
+            Text("Per-key ellipses fit from the persistent cross-session model.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            Button(action: { exportGaussianPDF() }) {
+                HStack {
+                    if generatingPDF == .gaussian {
+                        ProgressView().tint(.white).padding(.trailing, 4)
+                    } else {
+                        Image(systemName: "scope")
+                    }
+                    Text(generatingPDF == .gaussian ? "Generating\u{2026}"
+                         : "Gaussian Boundaries PDF")
+                }
+                .frame(maxWidth: .infinity).padding()
+                .background(Color.teal)
+                .foregroundColor(.white).cornerRadius(10)
+            }
+            .disabled(generatingPDF != nil)
         }
     }
 
@@ -213,6 +243,26 @@ struct SummaryView: View {
                 session: session,
                 participant: sessionManager.participant,
                 mode: mode
+            )
+            await MainActor.run {
+                generatingPDF = nil
+                if let url { shareItem = ShareItem(url: url) }
+            }
+        }
+    }
+
+    private func exportGaussianPDF() {
+        guard let session = sessionManager.currentSession else { return }
+        generatingPDF = .gaussian
+        Task.detached(priority: .userInitiated) {
+            // Fit from the full cross-session corpus (this session's taps
+            // were merged in finalizeSession before SummaryView appeared).
+            let events = GaussianModelStore.shared.loadEvents()
+            let exporter = GaussianKeyboardExporter()
+            let url = await exporter.exportPDF(
+                events: events,
+                session: session,
+                participant: sessionManager.participant
             )
             await MainActor.run {
                 generatingPDF = nil

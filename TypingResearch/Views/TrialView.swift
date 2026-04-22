@@ -7,6 +7,7 @@ struct TrialView: View {
     @State private var typedText: String = ""
     @State private var lastTapInfo: TapInfo = .none
     @State private var showNumericKeyboard: Bool = false
+    @State private var gaussianModel: GaussianKeyModel = GaussianKeyModel()
     @Environment(\.colorScheme) private var colorScheme
 
     // Mirror CustomKeyboardView layout constants so the buffer strip maps taps correctly
@@ -45,8 +46,20 @@ struct TrialView: View {
             // Buffer strip: same keyboard background color, forwards taps to nearest top-row key
             bufferStrip
 
-            CustomKeyboardView(overlayMode: false, showNumeric: $showNumericKeyboard) { key, tapInfo in
-                handleKeyTap(key: key, tapInfo: tapInfo)
+            Group {
+                if sessionManager.sessionMode == .gaussian {
+                    GaussianKeyboardView(
+                        overlayMode: false,
+                        showNumeric: $showNumericKeyboard,
+                        model: gaussianModel
+                    ) { key, tapInfo in
+                        handleKeyTap(key: key, tapInfo: tapInfo)
+                    }
+                } else {
+                    CustomKeyboardView(overlayMode: false, showNumeric: $showNumericKeyboard) { key, tapInfo in
+                        handleKeyTap(key: key, tapInfo: tapInfo)
+                    }
+                }
             }
             .frame(height: keyboardHeight)
         }
@@ -55,6 +68,13 @@ struct TrialView: View {
             kbBgColor
                 .frame(height: keyboardHeight + kbBufH + sessionManager.safeAreaBottom)
                 .ignoresSafeArea(edges: .bottom)
+        }
+        .onAppear {
+            if sessionManager.sessionMode == .gaussian {
+                gaussianModel = GaussianModelStore.shared.loadModel(
+                    keys: GaussianKeyboardView.fittableKeys
+                )
+            }
         }
     }
 
