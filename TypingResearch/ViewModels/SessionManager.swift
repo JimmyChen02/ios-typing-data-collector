@@ -162,12 +162,16 @@ final class SessionManager {
         totalStudySessions = totalSessions
         completedStudySessions = 0
         isStudyComplete = false
-        startSession(participant: participant, durationSeconds: 120, mode: .classic)
+        startSession(participant: participant, durationSeconds: 60, mode: .classic)
     }
 
     func continueToNextSession() {
         guard let p = participant else { return }
-        startSession(participant: p, durationSeconds: 120, mode: currentSessionMode)
+        startSession(participant: p, durationSeconds: 60, mode: currentSessionMode)
+    }
+
+    func endStudyEarly() {
+        isStudyComplete = true
     }
 
     private func startTimer() {

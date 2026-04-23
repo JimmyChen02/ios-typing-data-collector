@@ -584,6 +584,17 @@ struct BetweenSessionView: View {
             }
             .padding(.horizontal, 32)
 
+            Button(action: { sessionManager.endStudyEarly() }) {
+                Text("End Study & Export Data")
+                    .fontWeight(.semibold)
+                    .foregroundColor(.red)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color(.systemGray6))
+                    .cornerRadius(14)
+            }
+            .padding(.horizontal, 32)
+
             Spacer()
         }
     }

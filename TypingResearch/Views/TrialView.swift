@@ -238,7 +238,8 @@ struct TrialView: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 0) {
                             ForEach(Array(targetChars.enumerated()), id: \.offset) { index, char in
-                                Text(String(char))
+                                let isWrongSpace = char == " " && index < cursorIndex && typedChars[index] != char
+                                Text(isWrongSpace ? "·" : String(char))
                                     .font(.system(size: 22, weight: .medium, design: .monospaced))
                                     .foregroundColor(charColor(index: index, typedCount: cursorIndex, targetChar: char, typedChars: typedChars))
                                     .underline(index == cursorIndex)
