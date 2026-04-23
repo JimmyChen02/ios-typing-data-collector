@@ -3,9 +3,9 @@ import Foundation
 // MARK: - GaussianModelStore
 //
 // Cross-session persistence for the Gaussian keyboard model. The new
-// GaussianKeyModel fits directly from `[InputEventData]` (correct taps
-// only), so this store persists a minimal per-tap snapshot — just the
-// fields fit/exporter read — and re-fits on demand.
+// GaussianKeyModel fits directly from `[InputEventData]`, so this store
+// persists a minimal per-tap snapshot — just the fields fit/exporter read —
+// and re-fits on demand.
 //
 // Storage: `Documents/gaussian_taps.json`
 // Layout: { "version": 2, "taps": [ {...}, {...}, … ] }
@@ -16,11 +16,15 @@ final class GaussianModelStore {
 
     // Minimal persistable projection of InputEventData. Anything the new
     // GaussianKeyModel.fit reads must be here (tap coords, key size,
-    // keyLabel, isCorrect). Everything else is discarded — we don't need
-    // trial IDs or timestamps to fit a Gaussian.
+    // keyLabel, expectedChar, actual/corrected chars, eventType, isCorrect).
+    // Everything else is discarded — we don't need trial IDs or timestamps
+    // to fit a Gaussian.
     struct PersistedTap: Codable {
+        let eventType: InputEventType?
         let keyLabel: String
         let expectedChar: String
+        let actualChar: String?
+        let correctedChar: String?
         let tapLocalX: Double
         let tapLocalY: Double
         let keyWidth: Double
@@ -46,18 +50,21 @@ final class GaussianModelStore {
 
     // MARK: - Public API
 
-    // Append a session's valid insert taps (correct OR mistap) to the
-    // persistent corpus. The fit itself filters to correct taps — we keep
-    // all so a future threshold change can rebuild without losing data.
+    // Append a session's valid taps to the persistent corpus. Inserts train
+    // the inferred intended key; delete taps train the delete target and act
+    // as implicit correction feedback for nearby inserts.
     func update(with events: [InputEventData]) {
         var taps = loadTaps()
-        for e in events where e.eventType != .delete {
+        for e in events {
             guard !e.keyLabel.isEmpty,
                   allowed.contains(e.keyLabel),
                   e.keyWidth > 0, e.keyHeight > 0 else { continue }
             taps.append(PersistedTap(
+                eventType: e.eventType,
                 keyLabel: e.keyLabel,
                 expectedChar: e.expectedChar,
+                actualChar: e.actualChar,
+                correctedChar: e.correctedChar,
                 tapLocalX: e.tapLocalX,
                 tapLocalY: e.tapLocalY,
                 keyWidth: e.keyWidth,
@@ -106,7 +113,7 @@ final class GaussianModelStore {
     }
 
     private func save(_ taps: [PersistedTap]) {
-        let payload = Payload(version: 2, taps: taps)
+        let payload = Payload(version: 3, taps: taps)
         guard let data = try? JSONEncoder().encode(payload) else { return }
         try? data.write(to: fileURL(), options: .atomic)
     }
@@ -122,7 +129,7 @@ private extension GaussianModelStore.PersistedTap {
             trialId: UUID(),
             sessionId: UUID(),
             timestamp: Date(timeIntervalSince1970: 0),
-            eventType: .insert,
+            eventType: eventType ?? .insert,
             keyLabel: keyLabel,
             tapLocalX: tapLocalX,
             tapLocalY: tapLocalY,
@@ -131,13 +138,15 @@ private extension GaussianModelStore.PersistedTap {
             keyRow: "",
             keyCol: nil,
             expectedChar: expectedChar,
-            actualChar: keyLabel,
-            correctedChar: "",
+            actualChar: actualChar ?? (eventType == .delete ? "" : keyLabel),
+            correctedChar: correctedChar ?? "",
             isCorrect: isCorrect,
             previousKeyLabel: "",
             textBefore: "",
             textAfter: "",
-            interKeyIntervalMs: 0
+            interKeyIntervalMs: 0,
+            sessionMode: "classic",
+            studySessionIndex: 0
         )
     }
 }

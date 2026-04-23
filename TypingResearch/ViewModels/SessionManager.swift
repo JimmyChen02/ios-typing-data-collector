@@ -44,12 +44,24 @@ struct InputEventData {
     let textBefore: String
     let textAfter: String     // kept for liveTypedText tracking
     let interKeyIntervalMs: Double
+    let sessionMode: String        // "classic" or "gaussian"
+    let studySessionIndex: Int     // 0-based index within the study
 
     // Computed for legacy exporter compatibility (not exported to CSV)
     var tapNormX: Double { keyWidth  > 0 ? tapLocalX / keyWidth  : 0.5 }
     var tapNormY: Double { keyHeight > 0 ? tapLocalY / keyHeight : 0.5 }
     var keyScreenX: Double { 0 }
     var keyScreenY: Double { 0 }
+}
+
+// MARK: - StudySessionSummary
+
+struct StudySessionSummary {
+    let sessionIndex: Int   // 0-based
+    let mode: String        // "classic" or "gaussian"
+    let meanAccuracy: Double
+    let meanWPM: Double
+    let totalBackspaces: Int
 }
 
 // MARK: - SessionManager
@@ -71,6 +83,16 @@ final class SessionManager {
 
     // Which hit-test model the keyboard is using this session.
     var sessionMode: SessionMode = .classic
+
+    // Study-level state: total sessions chosen by researcher, split evenly classic/gaussian.
+    var totalStudySessions: Int = 4
+    var completedStudySessions: Int = 0
+    var isStudyComplete: Bool = false
+    var studySessionSummaries: [StudySessionSummary] = []
+
+    var currentSessionMode: SessionMode {
+        completedStudySessions < totalStudySessions / 2 ? .classic : .gaussian
+    }
 
     // Measured system keyboard height and safe area — set by ParticipantSetupView on first keyboard show
     var measuredKeyboardHeight: CGFloat = 291   // iPhone 16 default until measured
@@ -113,8 +135,8 @@ final class SessionManager {
         self.elapsedSeconds = 0
         self.sessionMode = mode
 
-        // Pick a fresh random corpus for this session
-        WordGenerator.selectRandomCorpus()
+        // Cycle through corpus sets so each session uses a different text set.
+        WordGenerator.selectCorpus(forSessionIndex: completedStudySessions)
 
         let session = Session(participantId: participant.id)
         self.currentSession = session
@@ -129,6 +151,18 @@ final class SessionManager {
 
         // Timer starts on first keypress, not here
         startNextTrial()
+    }
+
+    func startStudy(participant: Participant, totalSessions: Int) {
+        totalStudySessions = totalSessions
+        completedStudySessions = 0
+        isStudyComplete = false
+        startSession(participant: participant, durationSeconds: 120, mode: .classic)
+    }
+
+    func continueToNextSession() {
+        guard let p = participant else { return }
+        startSession(participant: p, durationSeconds: 120, mode: currentSessionMode)
     }
 
     private func startTimer() {
@@ -330,7 +364,9 @@ final class SessionManager {
             previousKeyLabel: prevKeyLabel,
             textBefore: textBefore,
             textAfter: textAfter,
-            interKeyIntervalMs: iki
+            interKeyIntervalMs: iki,
+            sessionMode: sessionMode == .gaussian ? "gaussian" : "classic",
+            studySessionIndex: completedStudySessions
         )
     }
 
@@ -420,29 +456,42 @@ final class SessionManager {
             }
         }
 
+        let sessionWPM = completedTrials.isEmpty ? 0.0
+            : completedTrials.map(\.wpm).reduce(0, +) / Double(completedTrials.count)
+        studySessionSummaries.append(StudySessionSummary(
+            sessionIndex: completedStudySessions,
+            mode: sessionMode == .gaussian ? "gaussian" : "classic",
+            meanAccuracy: currentSession?.meanAccuracy ?? 0,
+            meanWPM: sessionWPM,
+            totalBackspaces: currentSession?.totalBackspaces ?? 0
+        ))
+
         isSessionActive = false
         isTrialActive = false
         isSessionComplete = true
         BackendClient.shared.flush()
         try? modelContext?.save()
 
-        // Every session — classic or gaussian — contributes to the Gaussian
-        // hit-test model. Subsequent Gaussian sessions re-use the accumulated
-        // per-key sufficient statistics.
-        GaussianModelStore.shared.update(with: allEvents)
+        // Only classic sessions train the model — Gaussian sessions run on the
+        // frozen snapshot built from the first half of the study.
+        if sessionMode == .classic {
+            GaussianModelStore.shared.update(with: allEvents)
+        }
+
+        completedStudySessions += 1
+        if completedStudySessions >= totalStudySessions {
+            isStudyComplete = true
+        }
     }
 
     // MARK: - Reset
 
-    // Restart immediately with the same participant and duration — stays in session flow
+    // Restart the full study with the same participant.
     func restartSameSession() {
-        guard let existingParticipant = participant else { return }
-        let duration = sessionDurationSeconds
-        let mode = sessionMode
+        guard let p = participant else { return }
+        let total = totalStudySessions
         reset()
-        startSession(participant: existingParticipant,
-                     durationSeconds: duration,
-                     mode: mode)
+        startStudy(participant: p, totalSessions: total)
     }
 
     func reset() {
@@ -463,6 +512,10 @@ final class SessionManager {
         trialStartTime = nil
         lastEventTimestamp = nil
         lastKeyLabel = ""
+        totalStudySessions = 4
+        completedStudySessions = 0
+        isStudyComplete = false
+        studySessionSummaries = []
     }
 
     // MARK: - Formatted time

@@ -260,6 +260,11 @@ struct WordGenerator {
     /// The corpus selected for the current session. Call `selectRandomCorpus()` at session start.
     static var currentCorpus: [String] = corpusSets[0]
 
+    /// Picks a corpus set by cycling through available sets in order.
+    static func selectCorpus(forSessionIndex index: Int) {
+        currentCorpus = corpusSets[index % corpusSets.count]
+    }
+
     /// Randomly picks one of the corpus sets for this session.
     static func selectRandomCorpus() {
         currentCorpus = corpusSets.randomElement() ?? corpusSets[0]

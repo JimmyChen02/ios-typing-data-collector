@@ -13,8 +13,7 @@ struct ParticipantSetupView: View {
 
     @State private var showError: Bool = false
     @State private var errorMessage: String = ""
-
-    private let sessionDurationSeconds = 300   // fixed 5-minute sessions
+    @State private var totalSessions: Int = 4  // min 2, step 2
 
     var body: some View {
         NavigationStack {
@@ -39,9 +38,19 @@ struct ParticipantSetupView: View {
                     .pickerStyle(.segmented)
                 }
 
-                Section("Session Duration") {
-                    LabeledContent("Duration", value: "5 minutes")
-                    Text("A random corpus will be assigned when the session starts.")
+                Section("Study Setup") {
+                    Stepper(value: $totalSessions, in: 2...20, step: 2) {
+                        HStack {
+                            Text("Sessions")
+                            Spacer()
+                            Text("\(totalSessions)")
+                                .foregroundColor(.secondary)
+                                .monospacedDigit()
+                        }
+                    }
+                    LabeledContent("Classic sessions", value: "\(totalSessions / 2) × 2 min")
+                    LabeledContent("Adaptive sessions", value: "\(totalSessions / 2) × 2 min")
+                    Text("First \(totalSessions / 2) sessions use the standard keyboard. The Gaussian adaptive keyboard activates for the remaining \(totalSessions / 2).")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -53,29 +62,14 @@ struct ParticipantSetupView: View {
                 }
 
                 Section {
-                    Button(action: { startSession(mode: .classic) }) {
-                        HStack {
-                            Spacer()
-                            Text("Start Session")
-                                .fontWeight(.semibold)
-                                .foregroundColor(.white)
-                                .padding(.vertical, 8)
-                            Spacer()
-                        }
-                    }
-                    .listRowBackground(Color.orange)
-                    // Name fields are optional — session can start without them
-                }
-
-                Section {
-                    Button(action: { startSession(mode: .gaussian) }) {
+                    Button(action: startStudy) {
                         HStack {
                             Spacer()
                             VStack(spacing: 2) {
-                                Text("Start Gaussian Session")
+                                Text("Start Study")
                                     .fontWeight(.semibold)
                                     .foregroundColor(.white)
-                                Text(gaussianModelSubtitle)
+                                Text("\(totalSessions) sessions · \(totalSessions * 2) min total")
                                     .font(.caption2)
                                     .foregroundColor(.white.opacity(0.85))
                             }
@@ -83,14 +77,7 @@ struct ParticipantSetupView: View {
                             Spacer()
                         }
                     }
-                    .listRowBackground(Color.teal)
-                } header: {
-                    Text("Personalized Keyboard")
-                } footer: {
-                    Text("Classifies taps with a per-key Gaussian model " +
-                         "(Mahalanobis). The model learns from every session " +
-                         "you run — classic or Gaussian.")
-                        .font(.caption)
+                    .listRowBackground(Color.orange)
                 }
             }
             .navigationTitle("TypingResearch")
@@ -115,13 +102,7 @@ struct ParticipantSetupView: View {
 
     // MARK: - Start
 
-    private var gaussianModelSubtitle: String {
-        let n = GaussianModelStore.shared.totalSampleCount()
-        if n == 0 { return "No taps recorded yet — first session trains the model" }
-        return "Model trained on \(n) taps so far"
-    }
-
-    private func startSession(mode: SessionMode) {
+    private func startStudy() {
         let fn = firstName.trimmingCharacters(in: .whitespaces)
         let ln = lastName.trimmingCharacters(in: .whitespaces)
         let age: Int? = ageText.isEmpty ? nil : Int(ageText)
@@ -139,8 +120,6 @@ struct ParticipantSetupView: View {
         )
         modelContext.insert(participant)
         sessionManager.configure(modelContext: modelContext)
-        sessionManager.startSession(participant: participant,
-                                    durationSeconds: sessionDurationSeconds,
-                                    mode: mode)
+        sessionManager.startStudy(participant: participant, totalSessions: totalSessions)
     }
 }

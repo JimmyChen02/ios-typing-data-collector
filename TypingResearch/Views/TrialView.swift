@@ -170,7 +170,9 @@ struct TrialView: View {
                     .font(.title2).fontWeight(.bold)
                     .foregroundColor(sessionManager.remainingSeconds < 30 ? .red : .primary)
                     .monospacedDigit()
-                Text("words typed: \(typedText.split(separator: " ").count)")
+                let modeLabel = sessionManager.sessionMode == .gaussian ? "Adaptive" : "Classic"
+                let sessionNum = sessionManager.completedStudySessions + 1
+                Text("Session \(sessionNum) of \(sessionManager.totalStudySessions) · \(modeLabel)")
                     .font(.caption).foregroundColor(.secondary)
             }
             Spacer()

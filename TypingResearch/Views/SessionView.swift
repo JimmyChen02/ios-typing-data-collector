@@ -5,8 +5,10 @@ struct SessionView: View {
 
     var body: some View {
         Group {
-            if sessionManager.isSessionComplete {
+            if sessionManager.isStudyComplete {
                 SummaryView(sessionManager: sessionManager)
+            } else if sessionManager.isSessionComplete {
+                BetweenSessionView(sessionManager: sessionManager)
             } else if sessionManager.isTrialActive {
                 TrialView(
                     sessionManager: sessionManager,
@@ -15,7 +17,7 @@ struct SessionView: View {
             } else {
                 VStack(spacing: 16) {
                     ProgressView()
-                    Text("Loading next phrase...")
+                    Text("Loading next session...")
                         .foregroundColor(.secondary)
                 }
             }
@@ -45,7 +47,9 @@ struct SummaryView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 24) {
-                    summaryStats
+                    studyComparison
+                    Divider()
+                    sessionBreakdown
                     Divider()
                     tapPlotSection
                     Divider()
@@ -53,56 +57,159 @@ struct SummaryView: View {
                 }
                 .padding()
             }
-            .navigationTitle("Session Complete")
+            .navigationTitle("Study Complete")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("New Session") { showResetConfirm = true }
+                    Button("New Study") { showResetConfirm = true }
                         .foregroundColor(.orange)
                 }
             }
-            .confirmationDialog("Start a new session?",
+            .confirmationDialog("Start a new study?",
                                 isPresented: $showResetConfirm,
                                 titleVisibility: .visible) {
-                Button("Same participant & duration") { sessionManager.restartSameSession() }
+                Button("Same participant") { sessionManager.restartSameSession() }
                 Button("New participant", role: .destructive) { sessionManager.reset() }
                 Button("Cancel", role: .cancel) {}
             }
         }
     }
 
-    // MARK: - Summary Stats
+    // MARK: - Study Comparison
 
-    private var summaryStats: some View {
-        VStack(spacing: 12) {
-            Text("Session Summary")
+    private var classicSummaries: [StudySessionSummary] {
+        sessionManager.studySessionSummaries.filter { $0.mode == "classic" }
+    }
+    private var gaussianSummaries: [StudySessionSummary] {
+        sessionManager.studySessionSummaries.filter { $0.mode == "gaussian" }
+    }
+    private func mean(_ vals: [Double]) -> Double {
+        vals.isEmpty ? 0 : vals.reduce(0, +) / Double(vals.count)
+    }
+
+    private var studyComparison: some View {
+        let cAcc  = mean(classicSummaries.map(\.meanAccuracy))
+        let gAcc  = mean(gaussianSummaries.map(\.meanAccuracy))
+        let cWPM  = mean(classicSummaries.map(\.meanWPM))
+        let gWPM  = mean(gaussianSummaries.map(\.meanWPM))
+        let cBksp = mean(classicSummaries.map { Double($0.totalBackspaces) })
+        let gBksp = mean(gaussianSummaries.map { Double($0.totalBackspaces) })
+
+        return VStack(spacing: 16) {
+            Text("Classic vs Adaptive")
                 .font(.title2).fontWeight(.bold)
 
-            if let session = sessionManager.currentSession {
-                let meanWPM = sessionManager.completedTrials.isEmpty ? 0.0
-                    : sessionManager.completedTrials.map(\.wpm).reduce(0, +) / Double(sessionManager.completedTrials.count)
+            // Column headers
+            HStack {
+                Text("").frame(maxWidth: .infinity, alignment: .leading)
+                Text("Classic")
+                    .font(.subheadline).fontWeight(.semibold)
+                    .foregroundColor(.orange)
+                    .frame(maxWidth: .infinity)
+                Text("Adaptive")
+                    .font(.subheadline).fontWeight(.semibold)
+                    .foregroundColor(.teal)
+                    .frame(maxWidth: .infinity)
+                Text("Δ")
+                    .font(.subheadline).fontWeight(.semibold)
+                    .foregroundColor(.secondary)
+                    .frame(width: 64)
+            }
 
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                    statCard(title: "Duration",        value: sessionManager.formattedDuration)
-                    statCard(title: "Phrases",          value: "\(session.completedTrials)")
-                    statCard(title: "Mean Accuracy",    value: String(format: "%.1f%%", session.meanAccuracy * 100))
-                    statCard(title: "Mean WPM",         value: String(format: "%.1f", meanWPM))
-                    statCard(title: "Chars / Sec",      value: String(format: "%.2f", session.meanCharsPerSecond))
-                    statCard(title: "Total Backspaces", value: "\(session.totalBackspaces)")
+            compRow(label: "Accuracy",
+                    cVal: String(format: "%.1f%%", cAcc * 100),
+                    gVal: String(format: "%.1f%%", gAcc * 100),
+                    delta: gAcc - cAcc,
+                    deltaFmt: { String(format: "%+.1f%%", $0 * 100) },
+                    higherBetter: true)
+
+            compRow(label: "WPM",
+                    cVal: String(format: "%.1f", cWPM),
+                    gVal: String(format: "%.1f", gWPM),
+                    delta: gWPM - cWPM,
+                    deltaFmt: { String(format: "%+.1f", $0) },
+                    higherBetter: true)
+
+            compRow(label: "Backspaces",
+                    cVal: String(format: "%.1f", cBksp),
+                    gVal: String(format: "%.1f", gBksp),
+                    delta: gBksp - cBksp,
+                    deltaFmt: { String(format: "%+.1f", $0) },
+                    higherBetter: false)
+        }
+        .padding()
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color(.systemGray6)))
+    }
+
+    private func compRow(
+        label: String,
+        cVal: String,
+        gVal: String,
+        delta: Double,
+        deltaFmt: (Double) -> String,
+        higherBetter: Bool
+    ) -> some View {
+        let improved = higherBetter ? delta > 0 : delta < 0
+        let deltaColor: Color = abs(delta) < 0.001 ? .secondary : (improved ? .green : .red)
+        return HStack {
+            Text(label)
+                .font(.subheadline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(cVal)
+                .font(.subheadline).fontWeight(.medium)
+                .frame(maxWidth: .infinity)
+            Text(gVal)
+                .font(.subheadline).fontWeight(.medium)
+                .frame(maxWidth: .infinity)
+            Text(deltaFmt(delta))
+                .font(.subheadline).fontWeight(.semibold)
+                .foregroundColor(deltaColor)
+                .frame(width: 64)
+        }
+    }
+
+    // MARK: - Per-Session Breakdown
+
+    private var sessionBreakdown: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Session by Session")
+                .font(.headline)
+
+            ForEach(sessionManager.studySessionSummaries, id: \.sessionIndex) { s in
+                let isGaussian = s.mode == "gaussian"
+                HStack(spacing: 12) {
+                    // Session label
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("S\(s.sessionIndex + 1)")
+                            .font(.caption).fontWeight(.bold)
+                            .foregroundColor(isGaussian ? .teal : .orange)
+                        Text(isGaussian ? "Adaptive" : "Classic")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(width: 52, alignment: .leading)
+
+                    Spacer()
+
+                    miniStat(label: "Acc", value: String(format: "%.1f%%", s.meanAccuracy * 100))
+                    miniStat(label: "WPM", value: String(format: "%.1f", s.meanWPM))
+                    miniStat(label: "Bksp", value: "\(s.totalBackspaces)")
                 }
+                .padding(.vertical, 8)
+                .padding(.horizontal, 12)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(isGaussian ? Color.teal.opacity(0.08) : Color.orange.opacity(0.08))
+                )
             }
         }
     }
 
-    private func statCard(title: String, value: String) -> some View {
-        VStack(spacing: 4) {
-            Text(value)
-                .font(.title2).fontWeight(.bold).foregroundColor(.orange)
-            Text(title)
-                .font(.caption).foregroundColor(.secondary).multilineTextAlignment(.center)
+    private func miniStat(label: String, value: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value).font(.subheadline).fontWeight(.semibold)
+            Text(label).font(.system(size: 9)).foregroundColor(.secondary)
         }
-        .frame(maxWidth: .infinity)
-        .padding()
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color(.systemGray6)))
+        .frame(minWidth: 48)
     }
 
     // MARK: - Tap Plot Section
@@ -167,7 +274,7 @@ struct SummaryView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Gaussian boundaries")
                 .font(.headline)
-            Text("Per-key ellipses fit from the persistent cross-session model.")
+            Text("Per-key ellipses fit from classic sessions only.")
                 .font(.caption)
                 .foregroundColor(.secondary)
 
@@ -255,8 +362,6 @@ struct SummaryView: View {
         guard let session = sessionManager.currentSession else { return }
         generatingPDF = .gaussian
         Task.detached(priority: .userInitiated) {
-            // Fit from the full cross-session corpus (this session's taps
-            // were merged in finalizeSession before SummaryView appeared).
             let events = GaussianModelStore.shared.loadEvents()
             let exporter = GaussianKeyboardExporter()
             let url = await exporter.exportPDF(
@@ -284,6 +389,113 @@ struct SummaryView: View {
                 events: sessionManager.allEvents,
                 participant: sessionManager.participant)
         if let url { shareItem = ShareItem(url: url) }
+    }
+}
+
+// MARK: - BetweenSessionView
+
+struct BetweenSessionView: View {
+    var sessionManager: SessionManager
+
+    private var completedCount: Int { sessionManager.completedStudySessions }
+    private var totalCount: Int { sessionManager.totalStudySessions }
+    private var switchingToAdaptive: Bool { completedCount == totalCount / 2 }
+    private var nextMode: SessionMode { sessionManager.currentSessionMode }
+
+    var body: some View {
+        VStack(spacing: 32) {
+            Spacer()
+
+            // Session progress
+            VStack(spacing: 8) {
+                Text("Session \(completedCount) of \(totalCount) Complete")
+                    .font(.title2).fontWeight(.bold)
+
+                // Progress dots
+                HStack(spacing: 8) {
+                    ForEach(0..<totalCount, id: \.self) { i in
+                        let isClassic = i < totalCount / 2
+                        let isDone = i < completedCount
+                        Circle()
+                            .fill(isDone
+                                  ? (isClassic ? Color.orange : Color.teal)
+                                  : Color(.systemGray4))
+                            .frame(width: 12, height: 12)
+                    }
+                }
+            }
+
+            // Session stats
+            if let session = sessionManager.currentSession {
+                let meanWPM = sessionManager.completedTrials.isEmpty ? 0.0
+                    : sessionManager.completedTrials.map(\.wpm).reduce(0, +)
+                      / Double(sessionManager.completedTrials.count)
+
+                HStack(spacing: 24) {
+                    statPill(title: "Mean WPM",
+                             value: String(format: "%.0f", meanWPM),
+                             color: .orange)
+                    statPill(title: "Accuracy",
+                             value: String(format: "%.1f%%", session.meanAccuracy * 100),
+                             color: .green)
+                    statPill(title: "Backspaces",
+                             value: "\(session.totalBackspaces)",
+                             color: .secondary)
+                }
+            }
+
+            // Mode transition notice
+            if switchingToAdaptive {
+                VStack(spacing: 6) {
+                    Label("Switching to Adaptive Keyboard",
+                          systemImage: "wand.and.stars")
+                        .font(.headline)
+                        .foregroundColor(.teal)
+                    Text("The Gaussian model trained on your classic sessions will now guide tap classification.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                }
+                .padding()
+                .background(RoundedRectangle(cornerRadius: 12).fill(Color.teal.opacity(0.1)))
+                .padding(.horizontal)
+            } else {
+                let modeLabel = nextMode == .gaussian ? "Adaptive (Gaussian)" : "Classic"
+                Text("Next: Session \(completedCount + 1) · \(modeLabel)")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+
+            // Continue button
+            Button(action: { sessionManager.continueToNextSession() }) {
+                Text("Continue to Session \(completedCount + 1)")
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(nextMode == .gaussian ? Color.teal : Color.orange)
+                    .cornerRadius(14)
+            }
+            .padding(.horizontal, 32)
+
+            Spacer()
+        }
+    }
+
+    private func statPill(title: String, value: String, color: Color) -> some View {
+        VStack(spacing: 4) {
+            Text(value)
+                .font(.title3).fontWeight(.bold)
+                .foregroundColor(color)
+            Text(title)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .frame(minWidth: 72)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color(.systemGray6)))
     }
 }
 

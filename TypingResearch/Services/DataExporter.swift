@@ -44,6 +44,7 @@ final class DataExporter {
     ) -> String {
         var header: [String] = [
             "participant_first", "participant_last", "session_id",
+            "session_mode", "study_session_index",
             "event_type", "key_label",
             "tap_local_x", "tap_local_y",
             "tap_norm_x", "tap_norm_y",
@@ -68,6 +69,8 @@ final class DataExporter {
                 csvEscape(participant?.firstName ?? ""),
                 csvEscape(participant?.lastName  ?? ""),
                 csvEscape(event.sessionId.uuidString),
+                csvEscape(event.sessionMode),
+                String(event.studySessionIndex),
                 csvEscape(event.eventType.rawValue),
                 csvEscape(event.keyLabel),
                 String(format: "%.4f", event.tapLocalX),

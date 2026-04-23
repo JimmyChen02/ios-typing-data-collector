@@ -44,11 +44,11 @@ struct Gaussian2D: Codable {
 
 // MARK: - GaussianKeyModel
 //
-// Fits one Gaussian per key from CORRECT taps and exposes a competitive
-// argmax scorer over a set of keys-with-frames. Only correct taps are fit
-// because a mistap (landed j, meant h) is recorded in the LANDED key's
-// reference frame — it cannot be trusted to describe the expected key's
-// distribution without knowing both keys' positions.
+// Fits one Gaussian per intended key and exposes a competitive argmax scorer
+// over a set of keys-with-frames. Correct landed taps train the landed key.
+// When an expected character is known, mistaps are converted from the landed
+// key's local frame into the expected key's frame and train the intended key.
+// Delete taps are also fitted as their own touch target.
 
 final class GaussianKeyModel {
 
@@ -104,20 +104,26 @@ final class GaussianKeyModel {
 
     // MARK: - Fitting
 
-    /// Fits one Gaussian per key from the CORRECT taps in `events`. A tap
-    /// is correct when the landed keyLabel matches expectedChar (or is
-    /// "space" for a space character). Mistaps are dropped — they live in
-    /// the wrong reference frame to inform the expected key's Gaussian.
+    private struct TrainingSample {
+        let targetKey: String
+        let offsetX: Double
+        let offsetY: Double
+        let keyWidth: Double
+        let keyHeight: Double
+    }
+
+    /// Fits one Gaussian per intended key. In phrase-copying sessions,
+    /// `expectedChar` supplies the intended key even when the tap was
+    /// classified as a neighbor. In freer text, accepted non-deleted taps
+    /// still train the predicted key, while quickly deleted inserts are not
+    /// used as positive evidence.
     static func fit(
         events: [InputEventData],
         keys: [String]
     ) -> GaussianKeyModel {
-        let correct = events.filter {
-            $0.isCorrect &&
-            !$0.keyLabel.isEmpty &&
-            $0.keyWidth > 0 && $0.keyHeight > 0
-        }
-        let byKey: [String: [InputEventData]] = Dictionary(grouping: correct, by: \.keyLabel)
+        let allowed = Set(keys)
+        let samples = trainingSamples(from: events, allowed: allowed)
+        let byKey: [String: [TrainingSample]] = Dictionary(grouping: samples, by: \.targetKey)
 
         var result: [String: Gaussian2D] = [:]
         for key in keys {
@@ -130,7 +136,211 @@ final class GaussianKeyModel {
         return GaussianKeyModel(gaussians: result)
     }
 
-    private static func fitSingle(samples: [InputEventData]) -> Gaussian2D? {
+    private static func trainingSamples(
+        from events: [InputEventData],
+        allowed: Set<String>
+    ) -> [TrainingSample] {
+        let deletedInsertIndices = insertsDeletedByBackspace(in: events)
+        var result: [TrainingSample] = []
+        result.reserveCapacity(events.count)
+
+        for (idx, e) in events.enumerated() {
+            guard !e.keyLabel.isEmpty,
+                  allowed.contains(e.keyLabel),
+                  e.keyWidth > 0,
+                  e.keyHeight > 0 else { continue }
+
+            if e.eventType == .delete {
+                if e.keyLabel == "delete",
+                   let sample = sample(for: e, targetKey: "delete") {
+                    result.append(sample)
+                }
+                continue
+            }
+
+            guard e.eventType == .insert || e.eventType == .replace else { continue }
+            if deletedInsertIndices.contains(idx) { continue }
+
+            if let intended = key(forExpectedChar: e.expectedChar),
+               allowed.contains(intended),
+               let sample = sample(for: e, targetKey: intended) {
+                result.append(sample)
+            } else if e.isCorrect,
+                      let sample = sample(for: e, targetKey: e.keyLabel) {
+                result.append(sample)
+            }
+        }
+
+        return result
+    }
+
+    private static func insertsDeletedByBackspace(in events: [InputEventData]) -> Set<Int> {
+        var stack: [Int] = []
+        var deleted = Set<Int>()
+
+        for (idx, e) in events.enumerated() {
+            switch e.eventType {
+            case .insert, .replace:
+                if !e.actualChar.isEmpty {
+                    stack.append(idx)
+                }
+            case .delete:
+                guard let removedIdx = stack.popLast() else { continue }
+                if e.correctedChar.isEmpty ||
+                    e.correctedChar == events[removedIdx].actualChar {
+                    deleted.insert(removedIdx)
+                }
+            case .paste:
+                continue
+            }
+        }
+
+        return deleted
+    }
+
+    private static func sample(
+        for event: InputEventData,
+        targetKey: String
+    ) -> TrainingSample? {
+        guard let hitFrame = inferredFrame(for: event.keyLabel, letterWidth: event),
+              let targetFrame = inferredFrame(for: targetKey, letterWidth: event) else {
+            return nil
+        }
+
+        let scaleX = hitFrame.width > 0 ? event.keyWidth / hitFrame.width : 0
+        let scaleY = hitFrame.height > 0 ? event.keyHeight / hitFrame.height : 0
+        guard scaleX > 0, scaleY > 0 else { return nil }
+
+        let absoluteX = hitFrame.minX + event.tapLocalX / scaleX
+        let absoluteY = hitFrame.minY + event.tapLocalY / scaleY
+        let targetWidth = targetFrame.width * scaleX
+        let targetHeight = targetFrame.height * scaleY
+
+        return TrainingSample(
+            targetKey: targetKey,
+            offsetX: (absoluteX - targetFrame.midX) * scaleX,
+            offsetY: (absoluteY - targetFrame.midY) * scaleY,
+            keyWidth: targetWidth,
+            keyHeight: targetHeight
+        )
+    }
+
+    private static func key(forExpectedChar raw: String) -> String? {
+        if raw == " " { return "space" }
+        let key = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return keyRects[key] == nil ? nil : key
+    }
+
+    private struct LayoutRect {
+        let minX: Double
+        let minY: Double
+        let width: Double
+        let height: Double
+
+        var midX: Double { minX + width / 2.0 }
+        var midY: Double { minY + height / 2.0 }
+    }
+
+    private static let sidePad: Double = 5.0
+    private static let keyGap: Double = 6.0
+    private static let rowGap: Double = 11.0
+    private static let rowH: Double = 1.35
+
+    private static let keyRects: [String: LayoutRect] = {
+        var rects: [String: LayoutRect] = [:]
+        func row(_ keys: [String], xStart: Double, r: Int) {
+            for (i, k) in keys.enumerated() {
+                rects[k] = LayoutRect(
+                    minX: xStart + Double(i),
+                    minY: Double(r) * rowH,
+                    width: 1.0,
+                    height: rowH
+                )
+            }
+        }
+        row(["q","w","e","r","t","y","u","i","o","p"], xStart: 0.0, r: 0)
+        row(["a","s","d","f","g","h","j","k","l"],     xStart: 0.5, r: 1)
+        row(["z","x","c","v","b","n","m"],             xStart: 1.5, r: 2)
+        rects["delete"] = LayoutRect(minX: 8.5, minY: 2 * rowH, width: 1.5, height: rowH)
+        rects["space"] = LayoutRect(minX: 1.5, minY: 3 * rowH, width: 7.0, height: rowH)
+        return rects
+    }()
+
+    private static let letterKeys = Set("qwertyuiopasdfghjklzxcvbnm".map(String.init))
+
+    private static func inferredFrame(
+        for key: String,
+        letterWidth event: InputEventData
+    ) -> LayoutRect? {
+        guard keyRects[key] != nil else { return nil }
+
+        let kw = inferredLetterWidth(from: event)
+        let keyH = event.keyHeight
+        guard kw > 0, keyH > 0 else { return nil }
+
+        let row0 = ["q","w","e","r","t","y","u","i","o","p"]
+        let row1 = ["a","s","d","f","g","h","j","k","l"]
+        let row2 = ["z","x","c","v","b","n","m"]
+        let keyboardWidth = 10.0 * kw + 2.0 * sidePad + 9.0 * keyGap
+        let sp = (keyboardWidth - 2.0 * sidePad - 7.0 * kw - 8.0 * keyGap) / 2.0
+
+        if let col = row0.firstIndex(of: key) {
+            return LayoutRect(
+                minX: sidePad + Double(col) * (kw + keyGap),
+                minY: 0,
+                width: kw,
+                height: keyH
+            )
+        }
+
+        if let col = row1.firstIndex(of: key) {
+            let rowW = Double(row1.count) * kw + Double(row1.count - 1) * keyGap
+            return LayoutRect(
+                minX: (keyboardWidth - rowW) / 2.0 + Double(col) * (kw + keyGap),
+                minY: keyH + rowGap,
+                width: kw,
+                height: keyH
+            )
+        }
+
+        if let col = row2.firstIndex(of: key) {
+            return LayoutRect(
+                minX: sidePad + sp + keyGap + Double(col) * (kw + keyGap),
+                minY: 2.0 * (keyH + rowGap),
+                width: kw,
+                height: keyH
+            )
+        }
+
+        if key == "delete" {
+            return LayoutRect(
+                minX: keyboardWidth - sidePad - sp,
+                minY: 2.0 * (keyH + rowGap),
+                width: sp,
+                height: keyH
+            )
+        }
+
+        if key == "space" {
+            return LayoutRect(
+                minX: sidePad + sp + keyGap,
+                minY: 3.0 * (keyH + rowGap),
+                width: keyboardWidth - 2.0 * sidePad - 2.0 * sp - 2.0 * keyGap,
+                height: keyH
+            )
+        }
+
+        return nil
+    }
+
+    private static func inferredLetterWidth(from event: InputEventData) -> Double {
+        if letterKeys.contains(event.keyLabel) { return event.keyWidth }
+        if event.keyLabel == "delete" { return max(0, (2.0 * event.keyWidth - keyGap) / 3.0) }
+        if event.keyLabel == "space" { return max(0, (event.keyWidth - 6.0 * keyGap) / 7.0) }
+        return event.keyWidth
+    }
+
+    private static func fitSingle(samples: [TrainingSample]) -> Gaussian2D? {
         let n = Double(samples.count)
         guard n >= Double(minSamples) else { return nil }
 
@@ -139,8 +349,8 @@ final class GaussianKeyModel {
         var oy = [Double](); oy.reserveCapacity(samples.count)
         var meanKw = 0.0
         for e in samples {
-            ox.append(e.tapLocalX - e.keyWidth  / 2.0)
-            oy.append(e.tapLocalY - e.keyHeight / 2.0)
+            ox.append(e.offsetX)
+            oy.append(e.offsetY)
             meanKw += e.keyWidth
         }
         meanKw /= n
