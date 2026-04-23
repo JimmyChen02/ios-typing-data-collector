@@ -7,7 +7,7 @@ Fit and render the same intended-key Gaussian keyboard model used by the app.
 Usage:
     python scripts/gaussian_keyboard_pdf.py <keystrokes.csv> [output.pdf]
 
-If output is omitted, writes <stem>_gaussian.pdf next to the input.
+If output is omitted, writes <stem>_gaussian.pdf next to the input. 
 """
 
 from __future__ import annotations
