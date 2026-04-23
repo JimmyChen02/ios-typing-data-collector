@@ -111,7 +111,7 @@ struct TrialView: View {
             rangeLength = 0
         }
 
-        let eventData = sessionManager.buildKeyboardEventData(
+        let rawEvent = sessionManager.captureRawKeyboardEvent(
             textBefore: textBefore,
             textAfter: textAfter,
             replacementString: replacementString,
@@ -120,7 +120,7 @@ struct TrialView: View {
             eventType: eventType,
             tapInfo: tapInfo
         )
-        sessionManager.logEvent(eventData)
+        sessionManager.captureEvent(rawEvent)
         typedText = textAfter
         lastTapInfo = tapInfo
     }
