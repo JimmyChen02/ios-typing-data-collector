@@ -12,6 +12,12 @@ import UIKit
 // the letter keys so the user can see which region currently maps to each
 // key.
 
+// Reference-type flag: mutating `.dispatched` does NOT change the @State
+// reference, so the gesture guard never triggers a view re-render.
+private final class TouchGuard {
+    var dispatched = false
+}
+
 struct GaussianKeyboardView: View {
     var overlayMode: Bool = false
     @Binding var showNumeric: Bool
@@ -19,7 +25,7 @@ struct GaussianKeyboardView: View {
     var onKeyTap: (String, TapInfo) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
-    @State private var didDispatchCurrentTouch = false
+    @State private var touchGuard = TouchGuard()
 
     // Keys the Gaussian model fits. Matches the alpha layout — special
     // keys (space, delete, shift, …) are routed via strict frame tests,
@@ -72,17 +78,18 @@ struct GaussianKeyboardView: View {
     // MARK: - Gesture
 
     private func unifiedGesture(layout: KeyboardLayout) -> some Gesture {
-        DragGesture(minimumDistance: 0, coordinateSpace: .local)
+        let guard_ = touchGuard
+        return DragGesture(minimumDistance: 0, coordinateSpace: .local)
             .onChanged { value in
-                guard !didDispatchCurrentTouch else { return }
-                didDispatchCurrentTouch = true
+                guard !guard_.dispatched else { return }
+                guard_.dispatched = true
                 dispatchTap(at: value.location, layout: layout)
             }
             .onEnded { value in
-                if !didDispatchCurrentTouch {
+                if !guard_.dispatched {
                     dispatchTap(at: value.location, layout: layout)
                 }
-                didDispatchCurrentTouch = false
+                guard_.dispatched = false
             }
     }
 
