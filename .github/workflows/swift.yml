@@ -19,5 +19,5 @@ jobs:
           xcodebuild build \
             -project TypingResearch.xcodeproj \
             -scheme TypingResearch \
-            -destination 'platform=iOS Simulator,name=iPhone 17 Pro Max,OS=latest' \
+            -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO
