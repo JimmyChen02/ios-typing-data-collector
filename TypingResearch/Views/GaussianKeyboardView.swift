@@ -19,6 +19,7 @@ struct GaussianKeyboardView: View {
     var onKeyTap: (String, TapInfo) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @State private var didDispatchCurrentTouch = false
 
     // Keys the Gaussian model fits. Matches the alpha layout — special
     // keys (space, delete, shift, …) are routed via strict frame tests,
@@ -72,8 +73,16 @@ struct GaussianKeyboardView: View {
 
     private func unifiedGesture(layout: KeyboardLayout) -> some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .local)
-            .onEnded { value in
+            .onChanged { value in
+                guard !didDispatchCurrentTouch else { return }
+                didDispatchCurrentTouch = true
                 dispatchTap(at: value.location, layout: layout)
+            }
+            .onEnded { value in
+                if !didDispatchCurrentTouch {
+                    dispatchTap(at: value.location, layout: layout)
+                }
+                didDispatchCurrentTouch = false
             }
     }
 
