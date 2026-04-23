@@ -51,6 +51,8 @@ struct SummaryView: View {
                     Divider()
                     sessionBreakdown
                     Divider()
+                    cleaningSection
+                    Divider()
                     tapPlotSection
                     Divider()
                     exportButtons
@@ -210,6 +212,110 @@ struct SummaryView: View {
             Text(label).font(.system(size: 9)).foregroundColor(.secondary)
         }
         .frame(minWidth: 48)
+    }
+
+    // MARK: - Cleaning Section
+
+    private var cleaningSection: some View {
+        let summaries = sessionManager.studySessionSummaries
+        let totalInserts    = summaries.map(\.totalInserts).reduce(0, +)
+        let uniqueFlagged   = summaries.map(\.uniqueFlaggedInserts).reduce(0, +)
+        let cleanCount      = totalInserts - uniqueFlagged
+
+        // Aggregate flag counts across all sessions
+        var combined: [String: Int] = [:]
+        for s in summaries {
+            for (flag, count) in s.flagCounts {
+                combined[flag, default: 0] += count
+            }
+        }
+
+        // Display order and labels
+        let flagOrder: [(key: String, label: String)] = [
+            ("spatial",         "Outside key bounds"),
+            ("far_from_target", "Far from expected key"),
+            ("iki_low",         "Too fast  (< 50 ms)"),
+            ("iki_high",        "Too slow  (> 3 s)"),
+            ("trial_start",     "First keystroke of trial"),
+        ]
+
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Data Cleaning")
+                .font(.headline)
+
+            // Top-line numbers
+            HStack(spacing: 0) {
+                cleanPill(value: "\(totalInserts)", label: "Total inserts", color: .primary)
+                Spacer()
+                cleanPill(value: "\(uniqueFlagged)",
+                          label: "Flagged (\(pct(uniqueFlagged, of: totalInserts)))",
+                          color: .red)
+                Spacer()
+                cleanPill(value: "\(cleanCount)",
+                          label: "Clean (\(pct(cleanCount, of: totalInserts)))",
+                          color: .green)
+            }
+            .padding(.vertical, 4)
+
+            Divider()
+
+            // Per-flag breakdown
+            VStack(spacing: 6) {
+                flagHeaderRow()
+                ForEach(flagOrder, id: \.key) { item in
+                    let count = combined[item.key] ?? 0
+                    flagRow(label: item.label, count: count, total: totalInserts)
+                }
+            }
+            .font(.system(size: 13))
+
+            Text("A tap can carry multiple flags. Rates are per insert event.")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .padding()
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color(.systemGray6)))
+    }
+
+    private func pct(_ n: Int, of total: Int) -> String {
+        guard total > 0 else { return "—" }
+        return String(format: "%.1f%%", Double(n) / Double(total) * 100)
+    }
+
+    private func cleanPill(value: String, label: String, color: Color) -> some View {
+        VStack(spacing: 2) {
+            Text(value).font(.title3).fontWeight(.bold).foregroundColor(color)
+            Text(label).font(.system(size: 10)).foregroundColor(.secondary).multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private func flagHeaderRow() -> some View {
+        HStack {
+            Text("Flag").fontWeight(.semibold).frame(maxWidth: .infinity, alignment: .leading)
+            Text("Count").fontWeight(.semibold).frame(width: 48, alignment: .trailing)
+            Text("Rate").fontWeight(.semibold).frame(width: 52, alignment: .trailing)
+        }
+        .foregroundColor(.secondary)
+        .font(.system(size: 11))
+    }
+
+    private func flagRow(label: String, count: Int, total: Int) -> some View {
+        let rate = total > 0 ? Double(count) / Double(total) : 0
+        let barW = min(CGFloat(rate) * 200, 200)
+        return HStack(spacing: 0) {
+            Text(label).frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
+            ZStack(alignment: .trailing) {
+                Capsule().fill(Color(.systemGray4)).frame(width: 80, height: 5)
+                Capsule().fill(rate > 0.1 ? Color.red : Color.orange)
+                    .frame(width: barW * 0.4, height: 5)
+            }
+            .frame(width: 80)
+            Text("\(count)").frame(width: 48, alignment: .trailing).foregroundColor(.secondary)
+            Text(pct(count, of: total)).frame(width: 52, alignment: .trailing)
+                .foregroundColor(rate > 0.1 ? .red : .primary)
+        }
     }
 
     // MARK: - Tap Plot Section
@@ -447,8 +553,7 @@ struct BetweenSessionView: View {
             // Mode transition notice
             if switchingToAdaptive {
                 VStack(spacing: 6) {
-                    Label("Switching to Adaptive Keyboard",
-                          systemImage: "wand.and.stars")
+                    Text("Switching to Adaptive Keyboard")
                         .font(.headline)
                         .foregroundColor(.teal)
                     Text("The Gaussian model trained on your classic sessions will now guide tap classification.")

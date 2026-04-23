@@ -129,15 +129,6 @@ struct GaussianKeyboardView: View {
     @ViewBuilder
     private func keyboardVisual(layout: KeyboardLayout) -> some View {
         ZStack(alignment: .topLeading) {
-            // Gaussian ellipses behind the letter keys
-            ForEach(Array(layout.letterFrames.keys.sorted()), id: \.self) { key in
-                if let rect = layout.letterFrames[key],
-                   let g = model.gaussians[key] {
-                    EllipseOverlay(rect: rect, gaussian: g,
-                                   color: tintColor(for: key))
-                }
-            }
-
             // Special keys (⇧, ⌫, 123/#+=/ABC, return)
             ForEach(layout.specialList) { s in
                 keyCap(label: s.label, rect: s.rect, isSpecial: true)

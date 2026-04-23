@@ -62,6 +62,11 @@ struct StudySessionSummary {
     let meanAccuracy: Double
     let meanWPM: Double
     let totalBackspaces: Int
+    // Cleaning stats (insert events only — deletes excluded from rate)
+    let totalInserts: Int
+    let flagCounts: [String: Int]   // OutlierFlag.rawValue → count of INSERT events carrying that flag
+    var flaggedInserts: Int { flagCounts.values.reduce(0, +) }
+    var uniqueFlaggedInserts: Int   // events with at least one flag
 }
 
 // MARK: - SessionManager
@@ -458,12 +463,28 @@ final class SessionManager {
 
         let sessionWPM = completedTrials.isEmpty ? 0.0
             : completedTrials.map(\.wpm).reduce(0, +) / Double(completedTrials.count)
+
+        var flagCounts: [String: Int] = [:]
+        var totalInserts = 0
+        var uniqueFlagged = 0
+        for e in allEvents where e.eventType != .delete {
+            totalInserts += 1
+            let result = KeystrokeCleaner.flag(e)
+            if result.isOutlier { uniqueFlagged += 1 }
+            for flag in result.flags {
+                flagCounts[flag.rawValue, default: 0] += 1
+            }
+        }
+
         studySessionSummaries.append(StudySessionSummary(
             sessionIndex: completedStudySessions,
             mode: sessionMode == .gaussian ? "gaussian" : "classic",
             meanAccuracy: currentSession?.meanAccuracy ?? 0,
             meanWPM: sessionWPM,
-            totalBackspaces: currentSession?.totalBackspaces ?? 0
+            totalBackspaces: currentSession?.totalBackspaces ?? 0,
+            totalInserts: totalInserts,
+            flagCounts: flagCounts,
+            uniqueFlaggedInserts: uniqueFlagged
         ))
 
         isSessionActive = false
