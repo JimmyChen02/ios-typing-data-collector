@@ -5,10 +5,10 @@ struct TrialView: View {
     var onTrialComplete: () -> Void
 
     @State private var typedText: String = ""
-    @State private var lastTapInfo: TapInfo = .none
     @State private var showNumericKeyboard: Bool = false
     @State private var gaussianModel: GaussianKeyModel = GaussianKeyModel()
     @Environment(\.colorScheme) private var colorScheme
+    private let showsTapDiagnostics = false
 
     // Mirror CustomKeyboardView layout constants so the buffer strip maps taps correctly
     private let kbSidePad: CGFloat = 5
@@ -37,9 +37,11 @@ struct TrialView: View {
             targetTextView
                 .padding(.horizontal, 16)
 
-            tapCoordinateBar
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
+            if showsTapDiagnostics {
+                tapCoordinateBar
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+            }
 
             Spacer()
 
@@ -122,7 +124,6 @@ struct TrialView: View {
         )
         sessionManager.captureEvent(rawEvent)
         typedText = textAfter
-        lastTapInfo = tapInfo
     }
 
     // MARK: - Buffer Strip
@@ -274,11 +275,11 @@ struct TrialView: View {
 
     private var tapCoordinateBar: some View {
         HStack(spacing: 0) {
-            Text(lastTapInfo.keyLabel.isEmpty ? "—" : "[\(lastTapInfo.keyLabel)]")
+            Text("—")
                 .frame(width: 40, alignment: .leading)
             Spacer()
-            coordCell(label: "local x", value: lastTapInfo.tapLocalX)
-            coordCell(label: "local y", value: lastTapInfo.tapLocalY)
+            coordCell(label: "local x", value: 0)
+            coordCell(label: "local y", value: 0)
         }
         .font(.system(size: 11, design: .monospaced))
         .foregroundColor(.secondary)

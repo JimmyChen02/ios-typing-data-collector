@@ -118,8 +118,7 @@ struct GaussianKeyboardView: View {
         let letterFrames = layout.letterFrames
         if letterFrames.isEmpty { return }
 
-        let frameList = letterFrames.map { (key: $0.key, rect: $0.value) }
-        if let winner = model.winner(at: point, frames: frameList),
+        if let winner = model.winner(at: point, frames: layout.letterFrameList),
            let rect = letterFrames[winner] {
             emit(action: winner, at: point, rect: rect)
         }
@@ -313,6 +312,7 @@ struct GaussianKeyboardView: View {
             rect: CGRect(x: size.width - sidePad - sp, y: y3, width: sp, height: keyH)
         ))
 
+        layout.letterFrameList = layout.letterFrames.map { (key: $0.key, rect: $0.value) }
         for s in layout.specialList { layout.specialFrames[s.action] = s.rect }
         return layout
     }
@@ -322,6 +322,7 @@ struct GaussianKeyboardView: View {
 
 private struct KeyboardLayout {
     var letterFrames: [String: CGRect] = [:]
+    var letterFrameList: [(key: String, rect: CGRect)] = []
     var spaceFrame: CGRect? = nil
     var specialList: [SpecialKey] = []
     var specialFrames: [String: CGRect] = [:]   // keyed by action

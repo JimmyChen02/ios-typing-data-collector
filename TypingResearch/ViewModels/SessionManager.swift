@@ -216,12 +216,14 @@ final class SessionManager {
     private var trialStartTime: Date?
     private var lastEventTimestamp: Date?
     private var lastKeyLabel: String = ""
+    private var lastLiveWPMUpdateAt: Date?
     private var modelContext: ModelContext?
     private var sessionTimer: Timer?
     private var timerStarted: Bool = false
 
     // Continuous mode: enough sentences to outlast any session
     private static let initialSentenceCount = 20
+    private static let liveWPMUpdateInterval: TimeInterval = 0.25
 
     // MARK: - Setup
 
@@ -319,6 +321,7 @@ final class SessionManager {
         trialStartTime = Date()
         lastEventTimestamp = nil
         lastKeyLabel = ""
+        lastLiveWPMUpdateAt = nil
         isTrialActive = true
     }
 
@@ -345,7 +348,16 @@ final class SessionManager {
 
         if let start = trialStartTime {
             let elapsed = Date().timeIntervalSince(start) * 1000.0
-            liveWPM = MetricsComputer.wpm(charCount: raw.textAfter.count, durationMs: elapsed)
+            let shouldRefreshWPM: Bool
+            if let last = lastLiveWPMUpdateAt {
+                shouldRefreshWPM = raw.timestamp.timeIntervalSince(last) >= Self.liveWPMUpdateInterval
+            } else {
+                shouldRefreshWPM = true
+            }
+            if shouldRefreshWPM {
+                liveWPM = MetricsComputer.wpm(charCount: raw.textAfter.count, durationMs: elapsed)
+                lastLiveWPMUpdateAt = raw.timestamp
+            }
         }
     }
 
@@ -646,6 +658,7 @@ final class SessionManager {
         trialStartTime = nil
         lastEventTimestamp = nil
         lastKeyLabel = ""
+        lastLiveWPMUpdateAt = nil
         totalStudySessions = 4
         completedStudySessions = 0
         isStudyComplete = false
