@@ -12,12 +12,6 @@ import UIKit
 // the letter keys so the user can see which region currently maps to each
 // key.
 
-// Reference-type flag: mutating `.dispatched` does NOT change the @State
-// reference, so the gesture guard never triggers a view re-render.
-private final class TouchGuard {
-    var dispatched = false
-}
-
 struct GaussianKeyboardView: View {
     var overlayMode: Bool = false
     @Binding var showNumeric: Bool
@@ -25,7 +19,6 @@ struct GaussianKeyboardView: View {
     var onKeyTap: (String, TapInfo) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
-    @State private var touchGuard = TouchGuard()
 
     // Keys the Gaussian model fits. Matches the alpha layout — special
     // keys (space, delete, shift, …) are routed via strict frame tests,
@@ -64,33 +57,15 @@ struct GaussianKeyboardView: View {
                 // Static visual layer
                 keyboardVisual(layout: layout)
 
-                // Unified gesture catcher on top — forwards the tap to the
-                // Gaussian classifier (letters) or strict hit-test (specials).
-                Color.clear
-                    .contentShape(Rectangle())
-                    .gesture(unifiedGesture(layout: layout))
+                // Direct UIKit touch capture reduces the latency from SwiftUI's
+                // gesture state machine on the full keyboard surface.
+                TouchCaptureOverlay { point in
+                    dispatchTap(at: point, layout: layout)
+                }
             }
             .frame(width: geo.size.width, height: geo.size.height)
             .background(kbBg)
         }
-    }
-
-    // MARK: - Gesture
-
-    private func unifiedGesture(layout: KeyboardLayout) -> some Gesture {
-        let guard_ = touchGuard
-        return DragGesture(minimumDistance: 0, coordinateSpace: .local)
-            .onChanged { value in
-                guard !guard_.dispatched else { return }
-                guard_.dispatched = true
-                dispatchTap(at: value.location, layout: layout)
-            }
-            .onEnded { value in
-                if !guard_.dispatched {
-                    dispatchTap(at: value.location, layout: layout)
-                }
-                guard_.dispatched = false
-            }
     }
 
     private func dispatchTap(at point: CGPoint, layout: KeyboardLayout) {
@@ -315,6 +290,55 @@ struct GaussianKeyboardView: View {
         layout.letterFrameList = layout.letterFrames.map { (key: $0.key, rect: $0.value) }
         for s in layout.specialList { layout.specialFrames[s.action] = s.rect }
         return layout
+    }
+}
+
+private struct TouchCaptureOverlay: UIViewRepresentable {
+    let onTouchBegan: (CGPoint) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onTouchBegan: onTouchBegan)
+    }
+
+    func makeUIView(context: Context) -> TouchCaptureView {
+        let view = TouchCaptureView()
+        view.backgroundColor = .clear
+        view.coordinator = context.coordinator
+        return view
+    }
+
+    func updateUIView(_ uiView: TouchCaptureView, context: Context) {
+        context.coordinator.onTouchBegan = onTouchBegan
+        uiView.coordinator = context.coordinator
+    }
+
+    final class Coordinator {
+        var onTouchBegan: (CGPoint) -> Void
+
+        init(onTouchBegan: @escaping (CGPoint) -> Void) {
+            self.onTouchBegan = onTouchBegan
+        }
+    }
+}
+
+private final class TouchCaptureView: UIView {
+    var coordinator: TouchCaptureOverlay.Coordinator?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isMultipleTouchEnabled = false
+        isOpaque = false
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesBegan(touches, with: event)
+        guard let point = touches.first?.location(in: self) else { return }
+        coordinator?.onTouchBegan(point)
     }
 }
 
