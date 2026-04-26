@@ -296,12 +296,14 @@ def training_samples(events: list[Event]) -> list[TrainingSample]:
                     samples.append(sample)
             continue
 
-        if event.event_type not in {"insert", "replace"} or idx in deleted:
+        if event.event_type not in {"insert", "replace"}:
             continue
 
         intended = key_for_expected(event.expected_char)
         if intended:
             sample = sample_for(event, intended)
+        elif idx in deleted:
+            continue
         elif event.is_correct:
             sample = sample_for(event, event.key_label)
         else:
