@@ -1,64 +1,78 @@
-# TypingResearch — iOS Typing Data Collector (V1 Hidden)
+# TypingResearch
 
-An iPhone app for HCI keyboard research. Collects keystroke-level typing data including tap coordinates, timing, and accuracy metrics from participants performing timed typing sessions.
+An iOS research app for studying adaptive mobile text entry. The project compares a fixed-layout keyboard against a personalized Gaussian keyboard that learns from touch coordinates, intended characters, and implicit correction feedback such as backspace.
 
-## Features
+## What The App Does
 
-- Custom QWERTY keyboard that matches the device's native keyboard dimensions
-- Captures per-keypress tap coordinates (local x/y, normalized, screen position, key size)
-- Continuous word stream — no phrase-by-phrase interruption
-- Session timer starts on first keypress
-- Export data as CSV or JSON via iOS share sheet
+- Runs timed typing-study sessions on iPhone with two keyboard modes:
+  - `classic`: fixed rectangular hit regions
+  - `gaussian`: adaptive per-key probabilistic hit regions
+- Captures per-keystroke touch coordinates, key geometry, timing, correctness, and correction behavior
+- Presents a continuous text stream that expands as the participant types
+- Starts the session timer on the first keypress instead of on screen load
+- Exports raw and cleaned keystroke CSVs, plus raw, cleaned, and Gaussian visualization PDFs
 
-## Requirements
+## Current Study Design
 
-- iOS 17.0+
-- Xcode 15+
-- iPhone (tested on iPhone 16)
+The app is organized around a multi-session study:
 
-## Build & Run
+- Sessions are split between `classic` and `gaussian` keyboard modes
+- The current implementation uses the first half of the study as `classic` sessions and the second half as `gaussian` sessions
+- During classic sessions, collected events are appended to the persistent Gaussian training corpus
+- During gaussian sessions, the adaptive keyboard uses a frozen model fit from the earlier classic-session data
 
-```sh
-open TypingResearch.xcodeproj
-```
+### Training logic
 
-Select your device or simulator, then build and run. For a physical device, set your team under **Signing & Capabilities**.
+Each fitted key is represented by a 2D Gaussian over centered touch offsets. The current fitting pipeline:
 
-## Data Collection Flow
+- trains on the `intended` key when an `expectedChar` is available
+- converts mistaps from the landed key's coordinate frame into the intended key's frame
+- still allows deleted mistaps to train the intended key when an `expectedChar` is known
+- includes delete taps as their own touch target
+- falls back to accepted correct taps when intended-character supervision is unavailable, while excluding quickly deleted inserts from that fallback path
 
-1. **Setup** — Enter participant info (name optional), dominant hand, session duration (15s / 30s / 45s / 1min / custom)
-2. **Session** — Participant types a continuous stream of random words using the in-app keyboard
-3. **Summary** — Session stats shown; export data via share sheet
+### Classification logic
 
-## Exports
+At inference time, the Gaussian keyboard:
+
+- evaluates each candidate key with Mahalanobis log-likelihood
+- adds a soft spatial prior outside the key bounds
+- uses anchor protection near key centers to avoid unstable boundary stealing
+- chooses the winning key by a competitive argmax
+
+### After the session
+
+- per-key correctness and timing metrics
+- session summaries
+- CSV export
+- backend export
+- Gaussian corpus persistence
+
+### Available exports
 
 | Export | Contents |
 |--------|----------|
-| **Export CSV** | One row per trial — accuracy, WPM, chars/sec, backspace count |
-| **Export JSON** | Full session + trial data in structured JSON |
-| **Export Keystrokes CSV** | One row per keystroke — timestamp, key, tap coordinates, IKI, correctness |
+| `Raw Keystrokes CSV` | One row per event with participant/session metadata, key geometry, timing, intended/actual/corrected characters |
+| `Cleaned Keystrokes CSV` | Raw CSV plus outlier distance/flag columns from `KeystrokeCleaner` |
+| `Raw PDF` | Keyboard dot plot using raw events |
+| `Cleaned PDF` | Keyboard dot plot after applying keystroke cleaning |
+| `Gaussian PDF` | Adaptive keyboard territory map + Gaussian ellipses + historical taps from the persisted Gaussian corpus |
 
-### Keystrokes CSV columns
+## Offline Analysis Scripts
 
-`trial_id`, `timestamp`, `event_type`, `replacement_string`, `range_start`, `range_length`, `text_before`, `text_after`, `expected_index`, `expected_char`, `actual_char`, `is_correct`, `inter_key_interval_ms`, `tap_local_x`, `tap_local_y`, `tap_norm_x`, `tap_norm_y`, `key_label`, `key_screen_x`, `key_screen_y`, `key_width`, `key_height`
+The `scripts/` folder contains matching analysis utilities:
 
-`tap_norm_x` / `tap_norm_y` are normalized 0–1 within the key, suitable for cross-device heatmap analysis.
+- `scripts/gaussian_keyboard_pdf.py`: mirrors the current intended-key Gaussian fitting logic and exports a Gaussian keyboard PDF from a keystroke CSV
+- `scripts/clean_keystrokes.py`: flags spatial / timing outliers in exported keystroke CSVs
+- `scripts/keystrokes_to_pdf.py`: renders raw/overlay keyboard dot plots from CSV
 
-## Project Structure
+Example:
 
+```sh
+python3 scripts/gaussian_keyboard_pdf.py <keystrokes.csv> [output.pdf]
 ```
-TypingResearch/
-├── Models/
-│   └── Models.swift          # SwiftData models (Participant, Session, Trial, InputEvent)
-├── ViewModels/
-│   └── SessionManager.swift  # @Observable session state machine
-├── Views/
-│   ├── ParticipantSetupView.swift
-│   ├── SessionView.swift
-│   ├── TrialView.swift
-│   └── CustomKeyboardView.swift
-├── Services/
-│   └── DataExporter.swift    # CSV + JSON export
-└── Utilities/
-    └── Utilities.swift       # DeviceInfo, WordGenerator, MetricsComputer
+
+### To open the app:
+```sh
+open TypingResearch.xcodeproj
 ```
