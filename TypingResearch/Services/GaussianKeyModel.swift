@@ -114,9 +114,9 @@ final class GaussianKeyModel {
 
     /// Fits one Gaussian per intended key. In phrase-copying sessions,
     /// `expectedChar` supplies the intended key even when the tap was
-    /// classified as a neighbor. In freer text, accepted non-deleted taps
-    /// still train the predicted key, while quickly deleted inserts are not
-    /// used as positive evidence.
+    /// classified as a neighbor, including mistaps that were later deleted.
+    /// In freer text, accepted non-deleted taps still train the predicted
+    /// key, while quickly deleted inserts are not used as positive evidence.
     static func fit(
         events: [InputEventData],
         keys: [String]
@@ -159,12 +159,13 @@ final class GaussianKeyModel {
             }
 
             guard e.eventType == .insert || e.eventType == .replace else { continue }
-            if deletedInsertIndices.contains(idx) { continue }
 
             if let intended = key(forExpectedChar: e.expectedChar),
                allowed.contains(intended),
                let sample = sample(for: e, targetKey: intended) {
                 result.append(sample)
+            } else if deletedInsertIndices.contains(idx) {
+                continue
             } else if e.isCorrect,
                       let sample = sample(for: e, targetKey: e.keyLabel) {
                 result.append(sample)
