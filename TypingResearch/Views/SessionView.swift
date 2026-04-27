@@ -47,8 +47,10 @@ struct SummaryView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 24) {
-                    studyComparison
-                    Divider()
+                    if sessionManager.studyDesign == .classicAndAdaptive {
+                        studyComparison
+                        Divider()
+                    }
                     sessionBreakdown
                     Divider()
                     cleaningSection
@@ -59,7 +61,7 @@ struct SummaryView: View {
                 }
                 .padding()
             }
-            .navigationTitle("Study Complete")
+            .navigationTitle(sessionManager.studyDesign == .classicOnly ? "Collection Complete" : "Study Complete")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("New Study") { showResetConfirm = true }
@@ -505,12 +507,39 @@ struct BetweenSessionView: View {
 
     private var completedCount: Int { sessionManager.completedStudySessions }
     private var totalCount: Int { sessionManager.totalStudySessions }
-    private var switchingToAdaptive: Bool { completedCount == totalCount / 2 }
+    private var isClassicOnly: Bool { sessionManager.studyDesign == .classicOnly }
+    private var switchingToAdaptive: Bool { !isClassicOnly && completedCount == totalCount / 2 }
     private var nextMode: SessionMode { sessionManager.currentSessionMode }
 
     var body: some View {
-        VStack(spacing: 32) {
-            Spacer()
+        VStack(spacing: 24) {
+            // Buttons at top so they're out of thumb-reach from the keyboard area
+            VStack(spacing: 12) {
+                Button(action: { sessionManager.continueToNextSession() }) {
+                    Text("Continue to Session \(completedCount + 1)")
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(nextMode == .gaussian ? Color.teal : Color.orange)
+                        .cornerRadius(14)
+                }
+                .padding(.horizontal, 32)
+
+                Button(action: { sessionManager.endStudyEarly() }) {
+                    Text("End Study & Export Data")
+                        .fontWeight(.semibold)
+                        .foregroundColor(.red)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color(.systemGray6))
+                        .cornerRadius(14)
+                }
+                .padding(.horizontal, 32)
+            }
+            .padding(.top, 16)
+
+            Divider()
 
             // Session progress
             VStack(spacing: 8) {
@@ -520,7 +549,7 @@ struct BetweenSessionView: View {
                 // Progress dots
                 HStack(spacing: 8) {
                     ForEach(0..<totalCount, id: \.self) { i in
-                        let isClassic = i < totalCount / 2
+                        let isClassic = isClassicOnly || i < totalCount / 2
                         let isDone = i < completedCount
                         Circle()
                             .fill(isDone
@@ -567,33 +596,13 @@ struct BetweenSessionView: View {
                 .padding(.horizontal)
             } else {
                 let modeLabel = nextMode == .gaussian ? "Adaptive (Gaussian)" : "Classic"
-                Text("Next: Session \(completedCount + 1) · \(modeLabel)")
+                let label = isClassicOnly
+                    ? "Next: Session \(completedCount + 1)"
+                    : "Next: Session \(completedCount + 1) · \(modeLabel)"
+                Text(label)
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
-
-            // Continue button
-            Button(action: { sessionManager.continueToNextSession() }) {
-                Text("Continue to Session \(completedCount + 1)")
-                    .fontWeight(.semibold)
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(nextMode == .gaussian ? Color.teal : Color.orange)
-                    .cornerRadius(14)
-            }
-            .padding(.horizontal, 32)
-
-            Button(action: { sessionManager.endStudyEarly() }) {
-                Text("End Study & Export Data")
-                    .fontWeight(.semibold)
-                    .foregroundColor(.red)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color(.systemGray6))
-                    .cornerRadius(14)
-            }
-            .padding(.horizontal, 32)
 
             Spacer()
         }

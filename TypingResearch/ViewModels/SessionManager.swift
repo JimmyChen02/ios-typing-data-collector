@@ -10,6 +10,13 @@ enum SessionMode {
     case gaussian  // per-key Gaussian + Mahalanobis hit classification
 }
 
+// MARK: - StudyDesign
+
+enum StudyDesign {
+    case classicAndAdaptive  // first half classic, second half gaussian
+    case classicOnly         // all sessions use the classic keyboard
+}
+
 // MARK: - TapInfo
 
 struct TapInfo {
@@ -94,9 +101,14 @@ final class SessionManager {
     var completedStudySessions: Int = 0
     var isStudyComplete: Bool = false
     var studySessionSummaries: [StudySessionSummary] = []
+    var studyDesign: StudyDesign = .classicAndAdaptive
 
     var currentSessionMode: SessionMode {
-        completedStudySessions < totalStudySessions / 2 ? .classic : .gaussian
+        switch studyDesign {
+        case .classicOnly: return .classic
+        case .classicAndAdaptive:
+            return completedStudySessions < totalStudySessions / 2 ? .classic : .gaussian
+        }
     }
 
     // Measured system keyboard height and safe area — set by ParticipantSetupView on first keyboard show
@@ -158,11 +170,12 @@ final class SessionManager {
         startNextTrial()
     }
 
-    func startStudy(participant: Participant, totalSessions: Int) {
+    func startStudy(participant: Participant, totalSessions: Int, design: StudyDesign = .classicAndAdaptive) {
         totalStudySessions = totalSessions
+        studyDesign = design
         completedStudySessions = 0
         isStudyComplete = false
-        startSession(participant: participant, durationSeconds: 60, mode: .classic)
+        startSession(participant: participant, durationSeconds: 60, mode: currentSessionMode)
     }
 
     func continueToNextSession() {
@@ -538,6 +551,7 @@ final class SessionManager {
         lastEventTimestamp = nil
         lastKeyLabel = ""
         totalStudySessions = 4
+        studyDesign = .classicAndAdaptive
         completedStudySessions = 0
         isStudyComplete = false
         studySessionSummaries = []
