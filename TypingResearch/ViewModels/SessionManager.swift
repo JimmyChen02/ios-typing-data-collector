@@ -53,6 +53,7 @@ struct InputEventData {
     let interKeyIntervalMs: Double
     let sessionMode: String        // "classic" or "gaussian"
     let studySessionIndex: Int     // 0-based index within the study
+    let trialIndex: Int            // 0-based trial index within the session
 
     // Computed for legacy exporter compatibility (not exported to CSV)
     var tapNormX: Double { keyWidth  > 0 ? tapLocalX / keyWidth  : 0.5 }
@@ -388,7 +389,8 @@ final class SessionManager {
             textAfter: textAfter,
             interKeyIntervalMs: iki,
             sessionMode: sessionMode == .gaussian ? "gaussian" : "classic",
-            studySessionIndex: completedStudySessions
+            studySessionIndex: completedStudySessions,
+            trialIndex: trial.trialIndex
         )
     }
 

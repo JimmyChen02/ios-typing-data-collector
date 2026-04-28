@@ -146,7 +146,8 @@ private extension GaussianModelStore.PersistedTap {
             textAfter: "",
             interKeyIntervalMs: 0,
             sessionMode: "classic",
-            studySessionIndex: 0
+            studySessionIndex: 0,
+            trialIndex: 0
         )
     }
 }
