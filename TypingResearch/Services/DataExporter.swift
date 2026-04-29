@@ -63,16 +63,19 @@ final class DataExporter {
         let sessionStart = session.startedAt
 
         for event in events {
+            let flagged: KeystrokeFlagResult? = cleaned ? KeystrokeCleaner.flag(event) : nil
+            if let flagged, flagged.isOutlier { continue }
+
             let keyColStr   = event.keyCol.map { "\($0)" } ?? ""
             let isCorrectStr = event.eventType == .delete ? "" : (event.isCorrect ? "1" : "0")
             var row: [String] = [
                 csvEscape(participant?.firstName ?? ""),
                 csvEscape(participant?.lastName  ?? ""),
-                csvEscape(event.sessionId.uuidString),
+                csvEscape(event.studyId.uuidString),
                 csvEscape(event.sessionMode),
-                String(event.studySessionIndex),
+                String(event.studySessionIndex + 1),
                 csvEscape(event.trialId.uuidString),
-                String(event.trialIndex + 1),
+                String(event.studySessionIndex + 1),
                 csvEscape(event.eventType.rawValue),
                 csvEscape(event.keyLabel),
                 String(format: "%.4f", event.tapLocalX),
@@ -93,8 +96,7 @@ final class DataExporter {
                 String(format: "%.3f", event.interKeyIntervalMs)
             ]
 
-            if cleaned {
-                let flagged = KeystrokeCleaner.flag(event)
+            if let flagged {
                 let distStr = flagged.distFromTargetKW
                     .map { String(format: "%.3f", $0) } ?? ""
                 row += [

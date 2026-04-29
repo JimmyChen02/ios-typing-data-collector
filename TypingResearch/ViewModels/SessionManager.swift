@@ -34,6 +34,7 @@ struct TapInfo {
 struct InputEventData {
     let trialId: UUID
     let sessionId: UUID
+    let studyId: UUID
     let timestamp: Date
     let eventType: InputEventType
     let keyLabel: String
@@ -98,6 +99,7 @@ final class SessionManager {
     var sessionMode: SessionMode = .classic
 
     // Study-level state: total sessions chosen by researcher, split evenly classic/gaussian.
+    var studyId: UUID = UUID()
     var totalStudySessions: Int = 4
     var completedStudySessions: Int = 0
     var isStudyComplete: Bool = false
@@ -165,7 +167,6 @@ final class SessionManager {
         completedTrials = []
         currentTrialIndex = 0
         timerStarted = false
-        allEvents = []
 
         // Timer starts on first keypress, not here
         startNextTrial()
@@ -176,6 +177,8 @@ final class SessionManager {
         studyDesign = design
         completedStudySessions = 0
         isStudyComplete = false
+        studyId = UUID()
+        allEvents = []
         startSession(participant: participant, durationSeconds: 60, mode: currentSessionMode)
     }
 
@@ -371,6 +374,7 @@ final class SessionManager {
         return InputEventData(
             trialId: trial.id,
             sessionId: session.id,
+            studyId: studyId,
             timestamp: now,
             eventType: eventType,
             keyLabel: tapInfo.keyLabel,
@@ -483,10 +487,12 @@ final class SessionManager {
         let sessionWPM = completedTrials.isEmpty ? 0.0
             : completedTrials.map(\.wpm).reduce(0, +) / Double(completedTrials.count)
 
+        let sessionEvents = allEvents.filter { $0.studySessionIndex == completedStudySessions }
+
         var flagCounts: [String: Int] = [:]
         var totalInserts = 0
         var uniqueFlagged = 0
-        for e in allEvents where e.eventType != .delete {
+        for e in sessionEvents where e.eventType != .delete {
             totalInserts += 1
             let result = KeystrokeCleaner.flag(e)
             if result.isOutlier { uniqueFlagged += 1 }
@@ -515,7 +521,7 @@ final class SessionManager {
         // Only classic sessions train the model — Gaussian sessions run on the
         // frozen snapshot built from the first half of the study.
         if sessionMode == .classic {
-            GaussianModelStore.shared.update(with: allEvents)
+            GaussianModelStore.shared.update(with: sessionEvents)
         }
 
         completedStudySessions += 1
@@ -557,6 +563,7 @@ final class SessionManager {
         completedStudySessions = 0
         isStudyComplete = false
         studySessionSummaries = []
+        studyId = UUID()
     }
 
     // MARK: - Formatted time

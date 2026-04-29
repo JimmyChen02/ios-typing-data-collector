@@ -128,6 +128,7 @@ private extension GaussianModelStore.PersistedTap {
         InputEventData(
             trialId: UUID(),
             sessionId: UUID(),
+            studyId: UUID(),
             timestamp: Date(timeIntervalSince1970: 0),
             eventType: eventType ?? .insert,
             keyLabel: keyLabel,
