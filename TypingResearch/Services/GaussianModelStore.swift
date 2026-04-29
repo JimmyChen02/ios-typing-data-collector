@@ -59,6 +59,7 @@ final class GaussianModelStore {
             guard !e.keyLabel.isEmpty,
                   allowed.contains(e.keyLabel),
                   e.keyWidth > 0, e.keyHeight > 0 else { continue }
+            guard !KeystrokeCleaner.flag(e).isSpatialOutlier else { continue }
             taps.append(PersistedTap(
                 eventType: e.eventType,
                 keyLabel: e.keyLabel,

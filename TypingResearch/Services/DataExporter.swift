@@ -64,7 +64,7 @@ final class DataExporter {
 
         for event in events {
             let flagged: KeystrokeFlagResult? = cleaned ? KeystrokeCleaner.flag(event) : nil
-            if let flagged, flagged.isOutlier { continue }
+            if let flagged, flagged.isSpatialOutlier { continue }
 
             let keyColStr   = event.keyCol.map { "\($0)" } ?? ""
             let isCorrectStr = event.eventType == .delete ? "" : (event.isCorrect ? "1" : "0")
