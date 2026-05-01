@@ -37,6 +37,10 @@ struct InputEventData {
     let studyId: UUID
     let timestamp: Date
     let eventType: InputEventType
+    let replacementString: String
+    let rangeStart: Int
+    let rangeLength: Int
+    let expectedIndex: Int
     let keyLabel: String
     let tapLocalX: Double     // tap x within key, in points from key left edge
     let tapLocalY: Double     // tap y within key, in points from key top edge
@@ -63,6 +67,17 @@ struct InputEventData {
     var keyScreenY: Double { 0 }
 }
 
+struct RawInputEvent {
+    let timestamp: Date
+    let eventType: InputEventType
+    let replacementString: String
+    let rangeStart: Int
+    let rangeLength: Int
+    let textBefore: String
+    let textAfter: String
+    let tapInfo: TapInfo
+}
+
 // MARK: - StudySessionSummary
 
 struct StudySessionSummary {
@@ -78,6 +93,93 @@ struct StudySessionSummary {
     var uniqueFlaggedInserts: Int   // events with at least one flag
 }
 
+private extension RawInputEvent {
+    func materialized(
+        trial: Trial?,
+        session: Session?,
+        studyId: UUID,
+        sessionMode: SessionMode,
+        studySessionIndex: Int,
+        previousKeyLabel: inout String,
+        previousTimestamp: inout Date?
+    ) -> InputEventData {
+        guard let trial, let session else {
+            fatalError("No active trial/session")
+        }
+
+        let iki: Double
+        if let last = previousTimestamp {
+            iki = timestamp.timeIntervalSince(last) * 1000.0
+        } else {
+            iki = 0.0
+        }
+        previousTimestamp = timestamp
+
+        let targetChars = Array(trial.targetText)
+        let expectedIndex = rangeStart
+
+        let expectedChar: String
+        if eventType == .delete {
+            expectedChar = ""
+        } else if expectedIndex >= 0 && expectedIndex < targetChars.count {
+            expectedChar = String(targetChars[expectedIndex])
+        } else {
+            expectedChar = ""
+        }
+
+        let actualChar: String
+        if eventType == .insert || eventType == .replace {
+            actualChar = replacementString.isEmpty ? "" : String(replacementString.prefix(1))
+        } else {
+            actualChar = ""
+        }
+
+        let isCorrect = eventType != .delete && !actualChar.isEmpty && actualChar == expectedChar
+
+        let correctedChar: String
+        if eventType == .delete && !textBefore.isEmpty {
+            correctedChar = String(textBefore.last!)
+        } else {
+            correctedChar = ""
+        }
+
+        let prevKey = previousKeyLabel
+        if !tapInfo.keyLabel.isEmpty {
+            previousKeyLabel = tapInfo.keyLabel
+        }
+
+        return InputEventData(
+            trialId: trial.id,
+            sessionId: session.id,
+            studyId: studyId,
+            timestamp: timestamp,
+            eventType: eventType,
+            replacementString: replacementString,
+            rangeStart: rangeStart,
+            rangeLength: rangeLength,
+            expectedIndex: expectedIndex,
+            keyLabel: tapInfo.keyLabel,
+            tapLocalX: tapInfo.tapLocalX,
+            tapLocalY: tapInfo.tapLocalY,
+            keyWidth: tapInfo.keyWidth,
+            keyHeight: tapInfo.keyHeight,
+            keyRow: SessionManager.keyRow(for: tapInfo.keyLabel),
+            keyCol: SessionManager.keyCol(for: tapInfo.keyLabel),
+            expectedChar: expectedChar,
+            actualChar: actualChar,
+            correctedChar: correctedChar,
+            isCorrect: isCorrect,
+            previousKeyLabel: prevKey,
+            textBefore: textBefore,
+            textAfter: textAfter,
+            interKeyIntervalMs: iki,
+            sessionMode: sessionMode == .gaussian ? "gaussian" : "classic",
+            studySessionIndex: studySessionIndex,
+            trialIndex: trial.trialIndex
+        )
+    }
+}
+
 // MARK: - SessionManager
 
 @Observable
@@ -87,6 +189,7 @@ final class SessionManager {
     var currentSession: Session?
     var currentTrial: Trial?
     var currentTrialIndex: Int = 0
+    var pendingRawEvents: [RawInputEvent] = []
     var pendingEvents: [InputEventData] = []
     // All events across the session, kept for export
     var allEvents: [InputEventData] = []
@@ -131,12 +234,14 @@ final class SessionManager {
     private var trialStartTime: Date?
     private var lastEventTimestamp: Date?
     private var lastKeyLabel: String = ""
+    private var lastLiveWPMUpdateAt: Date?
     private var modelContext: ModelContext?
     private var sessionTimer: Timer?
     private var timerStarted: Bool = false
 
     // Continuous mode: enough sentences to outlast any session
     private static let initialSentenceCount = 20
+    private static let liveWPMUpdateInterval: TimeInterval = 0.25
 
     // MARK: - Setup
 
@@ -229,18 +334,20 @@ final class SessionManager {
         currentTrial = trial
         modelContext?.insert(trial)
 
+        pendingRawEvents = []
         pendingEvents = []
         liveTypedText = ""
         liveWPM = 0.0
         trialStartTime = Date()
         lastEventTimestamp = nil
         lastKeyLabel = ""
+        lastLiveWPMUpdateAt = nil
         isTrialActive = true
     }
 
     // MARK: - Event Logging
 
-    func logEvent(_ data: InputEventData) {
+    func captureEvent(_ raw: RawInputEvent) {
         // Start countdown on first keystroke
         if !timerStarted {
             timerStarted = true
@@ -248,14 +355,12 @@ final class SessionManager {
             startTimer()
         }
 
-        pendingEvents.append(data)
-        allEvents.append(data)
-
-        liveTypedText = data.textAfter
+        pendingRawEvents.append(raw)
+        liveTypedText = raw.textAfter
 
         // Keep target text well ahead of where the user is typing
         if let trial = currentTrial {
-            let remaining = trial.targetText.count - data.textAfter.count
+            let remaining = trial.targetText.count - raw.textAfter.count
             if remaining < 200 {
                 trial.targetText += " " + WordGenerator.randomSentences(count: 8)
             }
@@ -263,38 +368,24 @@ final class SessionManager {
 
         if let start = trialStartTime {
             let elapsed = Date().timeIntervalSince(start) * 1000.0
-            liveWPM = MetricsComputer.wpm(charCount: data.textAfter.count, durationMs: elapsed)
+            let shouldRefreshWPM: Bool
+            if let last = lastLiveWPMUpdateAt {
+                shouldRefreshWPM = raw.timestamp.timeIntervalSince(last) >= Self.liveWPMUpdateInterval
+            } else {
+                shouldRefreshWPM = true
+            }
+            if shouldRefreshWPM {
+                liveWPM = MetricsComputer.wpm(charCount: raw.textAfter.count, durationMs: elapsed)
+                lastLiveWPMUpdateAt = raw.timestamp
+            }
         }
+    }
 
-        let event = InputEvent(
-            trialId: data.trialId,
-            timestamp: data.timestamp,
-            eventType: data.eventType,
-            replacementString: "",
-            rangeStart: 0,
-            rangeLength: 0,
-            textBefore: data.textBefore,
-            textAfter: data.textAfter,
-            expectedIndex: 0,
-            expectedChar: data.expectedChar,
-            actualChar: data.actualChar,
-            isCorrect: data.isCorrect,
-            interKeyIntervalMs: data.interKeyIntervalMs,
-            keyLabel: data.keyLabel,
-            keyScreenX: 0,
-            keyScreenY: 0,
-            keyWidth: data.keyWidth,
-            keyHeight: data.keyHeight
-        )
-        modelContext?.insert(event)
-        // Send to research backend (non-blocking, batched)
-        if let session = currentSession, let participant = participant {
-            BackendClient.shared.enqueue(
-                event: data,
-                sessionId: session.id,
-                participantId: participant.id
-            )
-        }
+    // Compatibility path for callers that still build finalized events eagerly.
+    func logEvent(_ data: InputEventData) {
+        pendingEvents.append(data)
+        allEvents.append(data)
+        liveTypedText = data.textAfter
     }
 
     func buildEventData(
@@ -305,7 +396,7 @@ final class SessionManager {
         rangeLength: Int,
         eventType: InputEventType
     ) -> InputEventData {
-        return buildKeyboardEventData(
+        captureRawKeyboardEvent(
             textBefore: textBefore,
             textAfter: textAfter,
             replacementString: replacementString,
@@ -313,6 +404,36 @@ final class SessionManager {
             rangeLength: rangeLength,
             eventType: eventType,
             tapInfo: .none
+        )
+        .materialized(
+            trial: currentTrial,
+            session: currentSession,
+            studyId: studyId,
+            sessionMode: sessionMode,
+            studySessionIndex: completedStudySessions,
+            previousKeyLabel: &lastKeyLabel,
+            previousTimestamp: &lastEventTimestamp
+        )
+    }
+
+    func captureRawKeyboardEvent(
+        textBefore: String,
+        textAfter: String,
+        replacementString: String,
+        rangeStart: Int,
+        rangeLength: Int,
+        eventType: InputEventType,
+        tapInfo: TapInfo
+    ) -> RawInputEvent {
+        RawInputEvent(
+            timestamp: Date(),
+            eventType: eventType,
+            replacementString: replacementString,
+            rangeStart: rangeStart,
+            rangeLength: rangeLength,
+            textBefore: textBefore,
+            textAfter: textAfter,
+            tapInfo: tapInfo
         )
     }
 
@@ -325,82 +446,29 @@ final class SessionManager {
         eventType: InputEventType,
         tapInfo: TapInfo
     ) -> InputEventData {
-        guard let trial = currentTrial, let session = currentSession else {
-            fatalError("No active trial/session")
-        }
-
-        let now = Date()
-        let iki: Double
-        if let last = lastEventTimestamp {
-            iki = now.timeIntervalSince(last) * 1000.0
-        } else {
-            iki = 0.0
-        }
-        lastEventTimestamp = now
-
-        let targetChars = Array(trial.targetText)
-        let expectedIndex = rangeStart
-
-        let expectedChar: String
-        if eventType == .delete {
-            expectedChar = ""
-        } else if expectedIndex >= 0 && expectedIndex < targetChars.count {
-            expectedChar = String(targetChars[expectedIndex])
-        } else {
-            expectedChar = ""
-        }
-
-        let actualChar: String
-        if eventType == .insert || eventType == .replace {
-            actualChar = replacementString.isEmpty ? "" : String(replacementString.prefix(1))
-        } else {
-            actualChar = ""
-        }
-
-        let isCorrect = eventType != .delete && !actualChar.isEmpty && actualChar == expectedChar
-
-        let correctedChar: String
-        if eventType == .delete && !textBefore.isEmpty {
-            correctedChar = String(textBefore.last!)
-        } else {
-            correctedChar = ""
-        }
-
-        let prevKeyLabel = lastKeyLabel
-        if !tapInfo.keyLabel.isEmpty {
-            lastKeyLabel = tapInfo.keyLabel
-        }
-
-        return InputEventData(
-            trialId: trial.id,
-            sessionId: session.id,
-            studyId: studyId,
-            timestamp: now,
-            eventType: eventType,
-            keyLabel: tapInfo.keyLabel,
-            tapLocalX: tapInfo.tapLocalX,
-            tapLocalY: tapInfo.tapLocalY,
-            keyWidth: tapInfo.keyWidth,
-            keyHeight: tapInfo.keyHeight,
-            keyRow: Self.keyRow(for: tapInfo.keyLabel),
-            keyCol: Self.keyCol(for: tapInfo.keyLabel),
-            expectedChar: expectedChar,
-            actualChar: actualChar,
-            correctedChar: correctedChar,
-            isCorrect: isCorrect,
-            previousKeyLabel: prevKeyLabel,
+        captureRawKeyboardEvent(
             textBefore: textBefore,
             textAfter: textAfter,
-            interKeyIntervalMs: iki,
-            sessionMode: sessionMode == .gaussian ? "gaussian" : "classic",
+            replacementString: replacementString,
+            rangeStart: rangeStart,
+            rangeLength: rangeLength,
+            eventType: eventType,
+            tapInfo: tapInfo
+        )
+        .materialized(
+            trial: currentTrial,
+            session: currentSession,
+            studyId: studyId,
+            sessionMode: sessionMode,
             studySessionIndex: completedStudySessions,
-            trialIndex: trial.trialIndex
+            previousKeyLabel: &lastKeyLabel,
+            previousTimestamp: &lastEventTimestamp
         )
     }
 
     // MARK: - Key Row / Col Lookup
 
-    private static func keyRow(for label: String) -> String {
+    fileprivate static func keyRow(for label: String) -> String {
         let top = Set(["q","w","e","r","t","y","u","i","o","p",
                        "1","2","3","4","5","6","7","8","9","0"])
         let mid = Set(["a","s","d","f","g","h","j","k","l",
@@ -413,7 +481,7 @@ final class SessionManager {
         return "space"   // space, return, and unknown special keys
     }
 
-    private static func keyCol(for label: String) -> Int? {
+    fileprivate static func keyCol(for label: String) -> Int? {
         let rows: [[String]] = [
             ["q","w","e","r","t","y","u","i","o","p"],
             ["a","s","d","f","g","h","j","k","l"],
@@ -432,6 +500,22 @@ final class SessionManager {
 
     func submitTrial(finalText: String) {
         guard let trial = currentTrial, let start = trialStartTime else { return }
+
+        var previousKey = ""
+        var previousTimestamp: Date? = nil
+        let finalizedEvents = pendingRawEvents.map {
+            $0.materialized(
+                trial: currentTrial,
+                session: currentSession,
+                studyId: studyId,
+                sessionMode: sessionMode,
+                studySessionIndex: completedStudySessions,
+                previousKeyLabel: &previousKey,
+                previousTimestamp: &previousTimestamp
+            )
+        }
+        pendingEvents = finalizedEvents
+        allEvents.append(contentsOf: finalizedEvents)
 
         let endTime = Date()
         let durationMs = endTime.timeIntervalSince(start) * 1000.0
@@ -471,6 +555,8 @@ final class SessionManager {
     func finalizeSession() {
         sessionTimer?.invalidate()
         sessionTimer = nil
+
+        persistAndExport(events: allEvents)
 
         if let session = currentSession {
             session.endedAt = Date()
@@ -530,6 +616,44 @@ final class SessionManager {
         }
     }
 
+    private func persistAndExport(events: [InputEventData]) {
+        for data in events {
+            let event = InputEvent(
+                trialId: data.trialId,
+                timestamp: data.timestamp,
+                eventType: data.eventType,
+                replacementString: data.replacementString,
+                rangeStart: data.rangeStart,
+                rangeLength: data.rangeLength,
+                textBefore: data.textBefore,
+                textAfter: data.textAfter,
+                expectedIndex: data.expectedIndex,
+                expectedChar: data.expectedChar,
+                actualChar: data.actualChar,
+                isCorrect: data.isCorrect,
+                interKeyIntervalMs: data.interKeyIntervalMs,
+                tapLocalX: data.tapLocalX,
+                tapLocalY: data.tapLocalY,
+                tapNormX: data.tapNormX,
+                tapNormY: data.tapNormY,
+                keyLabel: data.keyLabel,
+                keyScreenX: data.keyScreenX,
+                keyScreenY: data.keyScreenY,
+                keyWidth: data.keyWidth,
+                keyHeight: data.keyHeight
+            )
+            modelContext?.insert(event)
+
+            if let session = currentSession, let participant = participant {
+                BackendClient.shared.enqueue(
+                    event: data,
+                    sessionId: session.id,
+                    participantId: participant.id
+                )
+            }
+        }
+    }
+
     // MARK: - Reset
 
     // Restart the full study with the same participant.
@@ -547,6 +671,7 @@ final class SessionManager {
         currentSession = nil
         currentTrial = nil
         currentTrialIndex = 0
+        pendingRawEvents = []
         pendingEvents = []
         allEvents = []
         isSessionActive = false
@@ -558,6 +683,7 @@ final class SessionManager {
         trialStartTime = nil
         lastEventTimestamp = nil
         lastKeyLabel = ""
+        lastLiveWPMUpdateAt = nil
         totalStudySessions = 4
         studyDesign = .classicAndAdaptive
         completedStudySessions = 0
