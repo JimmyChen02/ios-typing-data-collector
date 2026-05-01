@@ -10,6 +10,13 @@ enum SessionMode {
     case gaussian  // per-key Gaussian + Mahalanobis hit classification
 }
 
+// MARK: - StudyDesign
+
+enum StudyDesign {
+    case classicAndAdaptive  // first half classic, second half gaussian
+    case classicOnly         // all sessions use the classic keyboard
+}
+
 // MARK: - TapInfo
 
 struct TapInfo {
@@ -27,6 +34,7 @@ struct TapInfo {
 struct InputEventData {
     let trialId: UUID
     let sessionId: UUID
+    let studyId: UUID
     let timestamp: Date
     let eventType: InputEventType
     let replacementString: String
@@ -50,6 +58,7 @@ struct InputEventData {
     let interKeyIntervalMs: Double
     let sessionMode: String        // "classic" or "gaussian"
     let studySessionIndex: Int     // 0-based index within the study
+    let trialIndex: Int            // 0-based trial index within the session
 
     // Computed for legacy exporter compatibility (not exported to CSV)
     var tapNormX: Double { keyWidth  > 0 ? tapLocalX / keyWidth  : 0.5 }
@@ -193,13 +202,19 @@ final class SessionManager {
     var sessionMode: SessionMode = .classic
 
     // Study-level state: total sessions chosen by researcher, split evenly classic/gaussian.
+    var studyId: UUID = UUID()
     var totalStudySessions: Int = 4
     var completedStudySessions: Int = 0
     var isStudyComplete: Bool = false
     var studySessionSummaries: [StudySessionSummary] = []
+    var studyDesign: StudyDesign = .classicAndAdaptive
 
     var currentSessionMode: SessionMode {
-        completedStudySessions < totalStudySessions / 2 ? .classic : .gaussian
+        switch studyDesign {
+        case .classicOnly: return .classic
+        case .classicAndAdaptive:
+            return completedStudySessions < totalStudySessions / 2 ? .classic : .gaussian
+        }
     }
 
     // Measured system keyboard height and safe area — set by ParticipantSetupView on first keyboard show
@@ -257,17 +272,19 @@ final class SessionManager {
         completedTrials = []
         currentTrialIndex = 0
         timerStarted = false
-        allEvents = []
 
         // Timer starts on first keypress, not here
         startNextTrial()
     }
 
-    func startStudy(participant: Participant, totalSessions: Int) {
+    func startStudy(participant: Participant, totalSessions: Int, design: StudyDesign = .classicAndAdaptive) {
         totalStudySessions = totalSessions
+        studyDesign = design
         completedStudySessions = 0
         isStudyComplete = false
-        startSession(participant: participant, durationSeconds: 60, mode: .classic)
+        studyId = UUID()
+        allEvents = []
+        startSession(participant: participant, durationSeconds: 60, mode: currentSessionMode)
     }
 
     func continueToNextSession() {
@@ -556,10 +573,12 @@ final class SessionManager {
         let sessionWPM = completedTrials.isEmpty ? 0.0
             : completedTrials.map(\.wpm).reduce(0, +) / Double(completedTrials.count)
 
+        let sessionEvents = allEvents.filter { $0.studySessionIndex == completedStudySessions }
+
         var flagCounts: [String: Int] = [:]
         var totalInserts = 0
         var uniqueFlagged = 0
-        for e in allEvents where e.eventType != .delete {
+        for e in sessionEvents where e.eventType != .delete {
             totalInserts += 1
             let result = KeystrokeCleaner.flag(e)
             if result.isOutlier { uniqueFlagged += 1 }
@@ -588,7 +607,7 @@ final class SessionManager {
         // Only classic sessions train the model — Gaussian sessions run on the
         // frozen snapshot built from the first half of the study.
         if sessionMode == .classic {
-            GaussianModelStore.shared.update(with: allEvents)
+            GaussianModelStore.shared.update(with: sessionEvents)
         }
 
         completedStudySessions += 1
@@ -666,9 +685,11 @@ final class SessionManager {
         lastKeyLabel = ""
         lastLiveWPMUpdateAt = nil
         totalStudySessions = 4
+        studyDesign = .classicAndAdaptive
         completedStudySessions = 0
         isStudyComplete = false
         studySessionSummaries = []
+        studyId = UUID()
     }
 
     // MARK: - Formatted time

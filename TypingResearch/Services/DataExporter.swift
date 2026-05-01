@@ -44,7 +44,7 @@ final class DataExporter {
     ) -> String {
         var header: [String] = [
             "participant_first", "participant_last", "session_id",
-            "session_mode", "study_session_index",
+            "session_mode", "study_session_index", "trial_id", "trial_index",
             "event_type", "key_label",
             "tap_local_x", "tap_local_y",
             "tap_norm_x", "tap_norm_y",
@@ -63,14 +63,19 @@ final class DataExporter {
         let sessionStart = session.startedAt
 
         for event in events {
+            let flagged: KeystrokeFlagResult? = cleaned ? KeystrokeCleaner.flag(event) : nil
+            if let flagged, flagged.isSpatialOutlier { continue }
+
             let keyColStr   = event.keyCol.map { "\($0)" } ?? ""
             let isCorrectStr = event.eventType == .delete ? "" : (event.isCorrect ? "1" : "0")
             var row: [String] = [
                 csvEscape(participant?.firstName ?? ""),
                 csvEscape(participant?.lastName  ?? ""),
-                csvEscape(event.sessionId.uuidString),
+                csvEscape(event.studyId.uuidString),
                 csvEscape(event.sessionMode),
-                String(event.studySessionIndex),
+                String(event.studySessionIndex + 1),
+                csvEscape(event.trialId.uuidString),
+                String(event.studySessionIndex + 1),
                 csvEscape(event.eventType.rawValue),
                 csvEscape(event.keyLabel),
                 String(format: "%.4f", event.tapLocalX),
@@ -91,8 +96,7 @@ final class DataExporter {
                 String(format: "%.3f", event.interKeyIntervalMs)
             ]
 
-            if cleaned {
-                let flagged = KeystrokeCleaner.flag(event)
+            if let flagged {
                 let distStr = flagged.distFromTargetKW
                     .map { String(format: "%.3f", $0) } ?? ""
                 row += [

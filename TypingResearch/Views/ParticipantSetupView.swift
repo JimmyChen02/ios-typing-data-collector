@@ -14,6 +14,7 @@ struct ParticipantSetupView: View {
     @State private var showError: Bool = false
     @State private var errorMessage: String = ""
     @State private var totalSessions: Int = 4  // min 2, step 2
+    @State private var studyDesign: StudyDesign = .classicAndAdaptive
 
     var body: some View {
         NavigationStack {
@@ -39,7 +40,18 @@ struct ParticipantSetupView: View {
                 }
 
                 Section("Study Setup") {
-                    Stepper(value: $totalSessions, in: 2...20, step: 2) {
+                    Picker("Mode", selection: $studyDesign) {
+                        Text("Classic + Adaptive").tag(StudyDesign.classicAndAdaptive)
+                        Text("Classic Only").tag(StudyDesign.classicOnly)
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: studyDesign) { _, newDesign in
+                        if newDesign == .classicAndAdaptive, totalSessions % 2 != 0 {
+                            totalSessions += 1
+                        }
+                    }
+
+                    Stepper(value: $totalSessions, in: 2...20, step: studyDesign == .classicAndAdaptive ? 2 : 1) {
                         HStack {
                             Text("Sessions")
                             Spacer()
@@ -48,11 +60,17 @@ struct ParticipantSetupView: View {
                                 .monospacedDigit()
                         }
                     }
-                    LabeledContent("Classic sessions", value: "\(totalSessions / 2) × 2 min")
-                    LabeledContent("Adaptive sessions", value: "\(totalSessions / 2) × 2 min")
-                    Text("First \(totalSessions / 2) sessions use the standard keyboard. The Gaussian adaptive keyboard activates for the remaining \(totalSessions / 2).")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+
+                    if studyDesign == .classicAndAdaptive {
+                        LabeledContent("Classic sessions", value: "\(totalSessions / 2) × 1 min")
+                        LabeledContent("Adaptive sessions", value: "\(totalSessions / 2) × 1 min")
+                        Text("First \(totalSessions / 2) sessions use the standard keyboard. Gaussian adaptive keyboard activates for the remaining \(totalSessions / 2).")
+                            .font(.caption).foregroundColor(.secondary)
+                    } else {
+                        LabeledContent("Classic sessions", value: "\(totalSessions) × 1 min")
+                        Text("All sessions use the standard keyboard. No Gaussian adaptive keyboard.")
+                            .font(.caption).foregroundColor(.secondary)
+                    }
                 }
 
                 Section("Device Info") {
@@ -69,7 +87,7 @@ struct ParticipantSetupView: View {
                                 Text("Start Study")
                                     .fontWeight(.semibold)
                                     .foregroundColor(.white)
-                                Text("\(totalSessions) sessions · \(totalSessions * 2) min total")
+                                Text("\(totalSessions) sessions · \(totalSessions) min total")
                                     .font(.caption2)
                                     .foregroundColor(.white.opacity(0.85))
                             }
@@ -120,6 +138,6 @@ struct ParticipantSetupView: View {
         )
         modelContext.insert(participant)
         sessionManager.configure(modelContext: modelContext)
-        sessionManager.startStudy(participant: participant, totalSessions: totalSessions)
+        sessionManager.startStudy(participant: participant, totalSessions: totalSessions, design: studyDesign)
     }
 }

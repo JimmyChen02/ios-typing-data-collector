@@ -59,6 +59,7 @@ final class GaussianModelStore {
             guard !e.keyLabel.isEmpty,
                   allowed.contains(e.keyLabel),
                   e.keyWidth > 0, e.keyHeight > 0 else { continue }
+            guard !KeystrokeCleaner.flag(e).isSpatialOutlier else { continue }
             taps.append(PersistedTap(
                 eventType: e.eventType,
                 keyLabel: e.keyLabel,
@@ -128,6 +129,7 @@ private extension GaussianModelStore.PersistedTap {
         InputEventData(
             trialId: UUID(),
             sessionId: UUID(),
+            studyId: UUID(),
             timestamp: Date(timeIntervalSince1970: 0),
             eventType: eventType ?? .insert,
             replacementString: "",
@@ -150,7 +152,8 @@ private extension GaussianModelStore.PersistedTap {
             textAfter: "",
             interKeyIntervalMs: 0,
             sessionMode: "classic",
-            studySessionIndex: 0
+            studySessionIndex: 0,
+            trialIndex: 0
         )
     }
 }

@@ -20,6 +20,10 @@ xcuserdata/
 # CocoaPods (not used, but just in case)
 Pods/
 
+# Python cache
+__pycache__/
+*.pyc
+
 # Claude / project notes
 CLAUDE.md
 .claude

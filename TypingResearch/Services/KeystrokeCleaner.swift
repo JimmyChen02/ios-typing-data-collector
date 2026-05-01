@@ -24,6 +24,10 @@ struct KeystrokeFlagResult {
     let flags: [OutlierFlag]
 
     var isOutlier: Bool { !flags.isEmpty }
+    // True only for taps that are physically implausible — used to clean CSV and Gaussian corpus.
+    var isSpatialOutlier: Bool {
+        flags.contains(.spatial) || flags.contains(.farFromTarget)
+    }
     var flagsString: String { flags.map(\.rawValue).joined(separator: "|") }
 }
 
