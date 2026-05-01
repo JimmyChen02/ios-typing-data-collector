@@ -88,6 +88,7 @@ private extension RawInputEvent {
     func materialized(
         trial: Trial?,
         session: Session?,
+        studyId: UUID,
         sessionMode: SessionMode,
         studySessionIndex: Int,
         previousKeyLabel: inout String,
@@ -141,6 +142,7 @@ private extension RawInputEvent {
         return InputEventData(
             trialId: trial.id,
             sessionId: session.id,
+            studyId: studyId,
             timestamp: timestamp,
             eventType: eventType,
             replacementString: replacementString,
@@ -163,7 +165,8 @@ private extension RawInputEvent {
             textAfter: textAfter,
             interKeyIntervalMs: iki,
             sessionMode: sessionMode == .gaussian ? "gaussian" : "classic",
-            studySessionIndex: studySessionIndex
+            studySessionIndex: studySessionIndex,
+            trialIndex: trial.trialIndex
         )
     }
 }
@@ -388,6 +391,7 @@ final class SessionManager {
         .materialized(
             trial: currentTrial,
             session: currentSession,
+            studyId: studyId,
             sessionMode: sessionMode,
             studySessionIndex: completedStudySessions,
             previousKeyLabel: &lastKeyLabel,
@@ -437,6 +441,7 @@ final class SessionManager {
         .materialized(
             trial: currentTrial,
             session: currentSession,
+            studyId: studyId,
             sessionMode: sessionMode,
             studySessionIndex: completedStudySessions,
             previousKeyLabel: &lastKeyLabel,
@@ -485,6 +490,7 @@ final class SessionManager {
             $0.materialized(
                 trial: currentTrial,
                 session: currentSession,
+                studyId: studyId,
                 sessionMode: sessionMode,
                 studySessionIndex: completedStudySessions,
                 previousKeyLabel: &previousKey,
