@@ -313,10 +313,9 @@ def make_combination_rows(
     labels: list[str],
     grid_size: int,
     min_taps: int,
-) -> tuple[list[dict], list[dict]]:
+) -> list[dict]:
     ground_truth = trial_ids
     summary_rows: list[dict] = []
-    detail_rows: list[dict] = []
 
     for k in range(1, len(trial_ids) + 1):
         weighted_losses: list[float] = []
@@ -324,7 +323,7 @@ def make_combination_rows(
         weighted_similarities: list[float] = []
         combination_count = 0
 
-        for combination_index, combo in enumerate(combinations(trial_ids, k), start=1):
+        for combo in combinations(trial_ids, k):
             mean_similarity, weighted_similarity, num_keys = compare_groups(
                 grouped=grouped,
                 labels=labels,
@@ -343,20 +342,6 @@ def make_combination_rows(
             if mean_loss is not None:
                 mean_losses.append(mean_loss)
 
-            detail_rows.append(
-                {
-                    "num_trials": k,
-                    "total_trials": len(trial_ids),
-                    "combination_index": combination_index,
-                    "subset": format_group(combo),
-                    "ground_truth": format_group(ground_truth),
-                    "num_keys_compared": num_keys,
-                    "similarity": format_float(weighted_similarity),
-                    "loss": format_float(weighted_loss),
-                    "weighted_mean_loss": format_float(weighted_loss),
-                    "mean_loss": format_float(mean_loss),
-                }
-            )
             combination_count += 1
 
         avg_weighted_similarity = mean(weighted_similarities)
@@ -376,7 +361,7 @@ def make_combination_rows(
             }
         )
 
-    return summary_rows, detail_rows
+    return summary_rows
 
 
 def run_analysis(
@@ -412,7 +397,7 @@ def run_analysis(
         grid_size=grid_size,
         min_taps=min_taps,
     )
-    combination_summary_rows, combination_detail_rows = make_combination_rows(
+    combination_summary_rows = make_combination_rows(
         trial_ids=trial_ids,
         grouped=grouped,
         labels=labels,
@@ -426,9 +411,6 @@ def run_analysis(
     simple_path = output_base.with_name(output_base.name + "_simple_summary.csv")
     combinations_summary_path = output_base.with_name(
         output_base.name + "_all_combinations_summary.csv"
-    )
-    combinations_detail_path = output_base.with_name(
-        output_base.name + "_all_combinations_detail.csv"
     )
 
     write_csv(
@@ -460,27 +442,10 @@ def run_analysis(
         ],
         rows=combination_summary_rows,
     )
-    write_csv(
-        combinations_detail_path,
-        fieldnames=[
-            "num_trials",
-            "total_trials",
-            "combination_index",
-            "subset",
-            "ground_truth",
-            "num_keys_compared",
-            "similarity",
-            "loss",
-            "weighted_mean_loss",
-            "mean_loss",
-        ],
-        rows=combination_detail_rows,
-    )
 
     return {
         "simple_summary": simple_path,
         "all_combinations_summary": combinations_summary_path,
-        "all_combinations_detail": combinations_detail_path,
     }
 
 
