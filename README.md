@@ -64,12 +64,20 @@ The `scripts/` folder contains matching analysis utilities:
 
 - `scripts/gaussian_keyboard_pdf.py`: mirrors the current intended-key Gaussian fitting logic and exports a Gaussian keyboard PDF from a keystroke CSV
 - `scripts/clean_keystrokes.py`: flags spatial / timing outliers in exported keystroke CSVs
+- `scripts/ground_truth_trial_loss.py`: builds an all-trials ground truth, then exports graph-ready loss CSVs for both prefix (`{1}`, `{1,2}`, ...) and all-combinations trial subsets
 - `scripts/keystrokes_to_pdf.py`: renders raw/overlay keyboard dot plots from CSV
 
 Example:
 
 ```sh
 python3 scripts/gaussian_keyboard_pdf.py <keystrokes.csv> [output.pdf]
+```
+
+Ground-truth loss examples:
+
+```sh
+python3 scripts/ground_truth_trial_loss.py <cleaned_keystrokes.csv>
+python3 scripts/manual_test_ground_truth_trial_loss.py --output-dir /tmp/ground-truth-loss-test
 ```
 
 ### To open the app:

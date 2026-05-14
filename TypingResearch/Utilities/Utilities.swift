@@ -336,3 +336,380 @@ struct MetricsComputer {
         return correct
     }
 }
+
+// MARK: - GroundTruthLossAnalyzer
+
+struct GroundTruthSeriesPoint: Identifiable, Sendable {
+    let numTrials: Int
+    let similarity: Double
+    let loss: Double
+    let meanLoss: Double
+    let combinationCount: Int?
+
+    var id: Int { numTrials }
+}
+
+struct GroundTruthLossAnalysis: Sendable {
+    let simpleSummary: [GroundTruthSeriesPoint]
+    let allCombinationsSummary: [GroundTruthSeriesPoint]
+    let totalTrials: Int
+    let usableEventCount: Int
+}
+
+enum GroundTruthLossAnalyzer {
+    private static let letterKeys = Set("abcdefghijklmnopqrstuvwxyz".map(String.init))
+
+    private struct AnalysisRow {
+        let studySessionIndex: Int
+        let trialIndex: Int
+        let timestamp: Date
+        let label: String
+        let tapNormX: Double
+        let tapNormY: Double
+    }
+
+    private struct TrialKey: Hashable {
+        let studySessionIndex: Int
+        let trialIndex: Int
+    }
+
+    private struct GridCell: Hashable {
+        let row: Int
+        let col: Int
+    }
+
+    static func analyze(
+        events: [InputEventData],
+        gridSize: Int = 50,
+        includeSpace: Bool = true,
+        minTaps: Int = 5
+    ) throws -> GroundTruthLossAnalysis {
+        let rows = events.compactMap { event -> AnalysisRow? in
+            guard event.sessionMode == "classic", event.eventType == .insert else {
+                return nil
+            }
+
+            let flags = KeystrokeCleaner.flag(event)
+            guard !flags.isOutlier else { return nil }
+
+            guard let label = canonicalLabel(event.expectedChar, includeSpace: includeSpace) else {
+                return nil
+            }
+
+            return AnalysisRow(
+                studySessionIndex: event.studySessionIndex,
+                trialIndex: event.trialIndex,
+                timestamp: event.timestamp,
+                label: label,
+                tapNormX: event.tapNormX,
+                tapNormY: event.tapNormY
+            )
+        }
+
+        guard !rows.isEmpty else {
+            throw GroundTruthLossError.noUsableRows
+        }
+
+        let trialIDs = buildTrialSequence(rows)
+        guard !trialIDs.isEmpty else {
+            throw GroundTruthLossError.noTrials
+        }
+
+        let labels = Array(Set(rows.map(\.label))).sorted { lhs, rhs in
+            (lhs == "space" ? 1 : 0, lhs) < (rhs == "space" ? 1 : 0, rhs)
+        }
+        let grouped = groupKeyPoints(rows, trialIDs: trialIDs)
+        let simpleSummary = makeSimpleRows(
+            trialIDs: trialIDs,
+            grouped: grouped,
+            labels: labels,
+            gridSize: gridSize,
+            minTaps: minTaps
+        )
+        let allCombinationsSummary = makeCombinationSummaryRows(
+            trialIDs: trialIDs,
+            grouped: grouped,
+            labels: labels,
+            gridSize: gridSize,
+            minTaps: minTaps
+        )
+
+        return GroundTruthLossAnalysis(
+            simpleSummary: simpleSummary,
+            allCombinationsSummary: allCombinationsSummary,
+            totalTrials: trialIDs.count,
+            usableEventCount: rows.count
+        )
+    }
+
+    private static func canonicalLabel(_ raw: String, includeSpace: Bool) -> String? {
+        if raw == " " {
+            return includeSpace ? "space" : nil
+        }
+
+        let key = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if letterKeys.contains(key) {
+            return key
+        }
+        if includeSpace, key == "space" {
+            return "space"
+        }
+        return nil
+    }
+
+    private static func buildTrialSequence(_ rows: [AnalysisRow]) -> [Int] {
+        let grouped = Dictionary(grouping: rows) {
+            TrialKey(studySessionIndex: $0.studySessionIndex, trialIndex: $0.trialIndex)
+        }
+        let orderedTrials = grouped.sorted { lhs, rhs in
+            let leftSession = lhs.key.studySessionIndex
+            let leftTrial = lhs.key.trialIndex
+            let rightSession = rhs.key.studySessionIndex
+            let rightTrial = rhs.key.trialIndex
+            if leftSession != rightSession {
+                return leftSession < rightSession
+            }
+            if leftTrial != rightTrial {
+                return leftTrial < rightTrial
+            }
+            let leftTime = lhs.value.map(\.timestamp).min() ?? .distantFuture
+            let rightTime = rhs.value.map(\.timestamp).min() ?? .distantFuture
+            return leftTime < rightTime
+        }
+
+        return Array(1...orderedTrials.count)
+    }
+
+    private static func groupKeyPoints(
+        _ rows: [AnalysisRow],
+        trialIDs: [Int]
+    ) -> [String: [Int: [(Double, Double)]]] {
+        let groupedByTrial = Dictionary(grouping: rows) {
+            TrialKey(studySessionIndex: $0.studySessionIndex, trialIndex: $0.trialIndex)
+        }
+        let orderedTrialKeys = groupedByTrial.keys.sorted { lhs, rhs in
+            if lhs.studySessionIndex != rhs.studySessionIndex {
+                return lhs.studySessionIndex < rhs.studySessionIndex
+            }
+            return lhs.trialIndex < rhs.trialIndex
+        }
+
+        var unitMap: [TrialKey: Int] = [:]
+        for (index, key) in orderedTrialKeys.enumerated() {
+            unitMap[key] = index + 1
+        }
+
+        var result: [String: [Int: [(Double, Double)]]] = [:]
+        for row in rows {
+            let key = TrialKey(
+                studySessionIndex: row.studySessionIndex,
+                trialIndex: row.trialIndex
+            )
+            guard let unitID = unitMap[key] else { continue }
+            result[row.label, default: [:]][unitID, default: []].append((row.tapNormX, row.tapNormY))
+        }
+        return result
+    }
+
+    private static func makeSimpleRows(
+        trialIDs: [Int],
+        grouped: [String: [Int: [(Double, Double)]]],
+        labels: [String],
+        gridSize: Int,
+        minTaps: Int
+    ) -> [GroundTruthSeriesPoint] {
+        let groundTruth = trialIDs
+        return trialIDs.map { k in
+            let subset = Array(trialIDs.prefix(k))
+            let metrics = compareGroups(
+                grouped: grouped,
+                labels: labels,
+                groupA: subset,
+                groupB: groundTruth,
+                gridSize: gridSize,
+                minTaps: minTaps
+            )
+            return GroundTruthSeriesPoint(
+                numTrials: k,
+                similarity: metrics.weightedSimilarity ?? 0,
+                loss: metrics.weightedSimilarity.map { 1.0 - $0 } ?? 0,
+                meanLoss: metrics.meanSimilarity.map { 1.0 - $0 } ?? 0,
+                combinationCount: 1
+            )
+        }
+    }
+
+    private static func makeCombinationSummaryRows(
+        trialIDs: [Int],
+        grouped: [String: [Int: [(Double, Double)]]],
+        labels: [String],
+        gridSize: Int,
+        minTaps: Int
+    ) -> [GroundTruthSeriesPoint] {
+        let groundTruth = trialIDs
+        var summary: [GroundTruthSeriesPoint] = []
+
+        for k in 1...trialIDs.count {
+            var weightedSimilarities: [Double] = []
+            var weightedLosses: [Double] = []
+            var meanLosses: [Double] = []
+            var combinationCount = 0
+
+            forEachCombination(elements: trialIDs, choose: k) { subset in
+                let metrics = compareGroups(
+                    grouped: grouped,
+                    labels: labels,
+                    groupA: subset,
+                    groupB: groundTruth,
+                    gridSize: gridSize,
+                    minTaps: minTaps
+                )
+
+                if let weightedSimilarity = metrics.weightedSimilarity {
+                    weightedSimilarities.append(weightedSimilarity)
+                    weightedLosses.append(1.0 - weightedSimilarity)
+                }
+                if let meanSimilarity = metrics.meanSimilarity {
+                    meanLosses.append(1.0 - meanSimilarity)
+                }
+                combinationCount += 1
+            }
+
+            summary.append(
+                GroundTruthSeriesPoint(
+                    numTrials: k,
+                    similarity: mean(weightedSimilarities) ?? 0,
+                    loss: mean(weightedLosses) ?? 0,
+                    meanLoss: mean(meanLosses) ?? 0,
+                    combinationCount: combinationCount
+                )
+            )
+        }
+
+        return summary
+    }
+
+    private static func compareGroups(
+        grouped: [String: [Int: [(Double, Double)]]],
+        labels: [String],
+        groupA: [Int],
+        groupB: [Int],
+        gridSize: Int,
+        minTaps: Int
+    ) -> (meanSimilarity: Double?, weightedSimilarity: Double?) {
+        var similarities: [Double] = []
+        var weightedPairs: [(Double, Int)] = []
+
+        for label in labels {
+            let pointsA = groupA.flatMap { grouped[label]?[$0] ?? [] }
+            let pointsB = groupB.flatMap { grouped[label]?[$0] ?? [] }
+
+            let nA = pointsA.count
+            let nB = pointsB.count
+            guard nA >= minTaps, nB >= minTaps else { continue }
+
+            let histogramA = buildHistogram(pointsA, gridSize: gridSize)
+            let histogramB = buildHistogram(pointsB, gridSize: gridSize)
+            guard let similarity = computeWeightedJaccard(histogramA, histogramB) else {
+                continue
+            }
+
+            similarities.append(similarity)
+            weightedPairs.append((similarity, nA + nB))
+        }
+
+        return (mean(similarities), weightedMean(weightedPairs))
+    }
+
+    private static func buildHistogram(
+        _ points: [(Double, Double)],
+        gridSize: Int
+    ) -> [GridCell: Int] {
+        var histogram: [GridCell: Int] = [:]
+        for (x, y) in points {
+            let col = min(max(Int(x * Double(gridSize)), 0), gridSize - 1)
+            let row = min(max(Int(y * Double(gridSize)), 0), gridSize - 1)
+            histogram[GridCell(row: row, col: col), default: 0] += 1
+        }
+        return histogram
+    }
+
+    private static func computeWeightedJaccard(
+        _ histogramA: [GridCell: Int],
+        _ histogramB: [GridCell: Int]
+    ) -> Double? {
+        let totalA = histogramA.values.reduce(0, +)
+        let totalB = histogramB.values.reduce(0, +)
+        guard totalA > 0, totalB > 0 else { return nil }
+
+        let cells = Set(histogramA.keys).union(histogramB.keys)
+        var numerator = 0.0
+        var denominator = 0.0
+
+        for cell in cells {
+            let pA = Double(histogramA[cell] ?? 0) / Double(totalA)
+            let pB = Double(histogramB[cell] ?? 0) / Double(totalB)
+            numerator += min(pA, pB)
+            denominator += max(pA, pB)
+        }
+
+        guard denominator > 0 else { return nil }
+        return numerator / denominator
+    }
+
+    private static func mean(_ values: [Double]) -> Double? {
+        guard !values.isEmpty else { return nil }
+        return values.reduce(0, +) / Double(values.count)
+    }
+
+    private static func weightedMean(_ values: [(Double, Int)]) -> Double? {
+        guard !values.isEmpty else { return nil }
+        let totalWeight = values.reduce(0) { $0 + $1.1 }
+        guard totalWeight > 0 else { return nil }
+        let weightedTotal = values.reduce(0.0) { partial, pair in
+            partial + pair.0 * Double(pair.1)
+        }
+        return weightedTotal / Double(totalWeight)
+    }
+
+    private static func forEachCombination(
+        elements: [Int],
+        choose k: Int,
+        body: ([Int]) -> Void
+    ) {
+        guard k > 0, k <= elements.count else { return }
+        var current: [Int] = []
+
+        func recurse(start: Int) {
+            if current.count == k {
+                body(current)
+                return
+            }
+
+            let needed = k - current.count
+            guard start <= elements.count - needed else { return }
+
+            for index in start...(elements.count - needed) {
+                current.append(elements[index])
+                recurse(start: index + 1)
+                current.removeLast()
+            }
+        }
+
+        recurse(start: 0)
+    }
+}
+
+enum GroundTruthLossError: LocalizedError {
+    case noUsableRows
+    case noTrials
+
+    var errorDescription: String? {
+        switch self {
+        case .noUsableRows:
+            return "No clean classic insert events were available for ground-truth loss analysis."
+        case .noTrials:
+            return "Need at least one usable trial to compute ground-truth loss."
+        }
+    }
+}

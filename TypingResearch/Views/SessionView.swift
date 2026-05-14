@@ -1,3 +1,4 @@
+import Charts
 import SwiftUI
 
 struct SessionView: View {
@@ -40,6 +41,9 @@ struct SummaryView: View {
     @State private var showResetConfirm: Bool = false
     @State private var generatingPDF: PDFKind? = nil
     @State private var plotLayout: TapDotPlotView.LayoutMode = .alpha
+    @State private var groundTruthAnalysis: GroundTruthLossAnalysis? = nil
+    @State private var groundTruthError: String? = nil
+    @State private var isLoadingGroundTruth: Bool = false
 
     private enum PDFKind { case raw, cleaned, gaussian }
 
@@ -55,11 +59,16 @@ struct SummaryView: View {
                     Divider()
                     cleaningSection
                     Divider()
+                    groundTruthLossSection
+                    Divider()
                     tapPlotSection
                     Divider()
                     exportButtons
                 }
                 .padding()
+            }
+            .task {
+                await loadGroundTruthAnalysisIfNeeded()
             }
             .navigationTitle(sessionManager.studyDesign == .classicOnly ? "Collection Complete" : "Study Complete")
             .toolbar {
@@ -322,6 +331,51 @@ struct SummaryView: View {
 
     // MARK: - Tap Plot Section
 
+    private var groundTruthLossSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Ground Truth Loss")
+                .font(.headline)
+
+            Text("Computed automatically from clean classic-session insert taps. Prefix mode shows one specific cumulative path; all-combinations mode averages across every subset of the same size.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            if isLoadingGroundTruth {
+                HStack(spacing: 12) {
+                    ProgressView()
+                    Text("Computing ground-truth loss curves...")
+                        .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 8)
+            } else if let groundTruthError {
+                Text(groundTruthError)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .padding(.vertical, 8)
+            } else if let analysis = groundTruthAnalysis {
+                Text("\(analysis.totalTrials) classic trials, \(analysis.usableEventCount) clean insert events")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                VStack(alignment: .leading, spacing: 20) {
+                    chartSection(
+                        title: "Specific Cumulative Path",
+                        subtitle: "{1}, {1,2}, {1,2,3}, ... compared with all classic trials",
+                        points: analysis.simpleSummary
+                    )
+
+                    chartSection(
+                        title: "Average Across All Combinations",
+                        subtitle: "Mean over every same-size subset before comparing with all classic trials",
+                        points: analysis.allCombinationsSummary
+                    )
+                }
+            }
+        }
+        .padding()
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color(.systemGray6)))
+    }
+
     private var tapPlotSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -342,6 +396,119 @@ struct SummaryView: View {
                 colorMode: .byKey,
                 layoutMode: plotLayout
             )
+        }
+    }
+
+    @ViewBuilder
+    private func chartSection(
+        title: String,
+        subtitle: String,
+        points: [GroundTruthSeriesPoint]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.subheadline)
+                .fontWeight(.semibold)
+
+            Text(subtitle)
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            groundTruthCard(title: "Loss and Mean Loss") {
+                lossChart(points: points)
+            }
+
+            groundTruthCard(title: "Similarity") {
+                similarityChart(points: points)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func groundTruthCard<Content: View>(
+        title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundColor(.secondary)
+
+            content()
+                .frame(height: 220)
+        }
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color(.systemBackground))
+        )
+    }
+
+    private func lossChart(points: [GroundTruthSeriesPoint]) -> some View {
+        Chart {
+            ForEach(points) { point in
+                LineMark(
+                    x: .value("Trials", point.numTrials),
+                    y: .value("Value", point.loss)
+                )
+                .interpolationMethod(.catmullRom)
+                .foregroundStyle(by: .value("Metric", "loss"))
+
+                PointMark(
+                    x: .value("Trials", point.numTrials),
+                    y: .value("Value", point.loss)
+                )
+                .foregroundStyle(by: .value("Metric", "loss"))
+
+                LineMark(
+                    x: .value("Trials", point.numTrials),
+                    y: .value("Value", point.meanLoss)
+                )
+                .interpolationMethod(.catmullRom)
+                .foregroundStyle(by: .value("Metric", "mean_loss"))
+
+                PointMark(
+                    x: .value("Trials", point.numTrials),
+                    y: .value("Value", point.meanLoss)
+                )
+                .foregroundStyle(by: .value("Metric", "mean_loss"))
+            }
+        }
+        .chartForegroundStyleScale([
+            "loss": Color.pink,
+            "mean_loss": Color.purple,
+        ])
+        .chartYScale(domain: 0...1)
+        .chartXAxis {
+            AxisMarks(values: .stride(by: 1))
+        }
+        .chartYAxis {
+            AxisMarks(position: .leading)
+        }
+    }
+
+    private func similarityChart(points: [GroundTruthSeriesPoint]) -> some View {
+        Chart(points) { point in
+            LineMark(
+                x: .value("Trials", point.numTrials),
+                y: .value("Similarity", point.similarity)
+            )
+            .interpolationMethod(.catmullRom)
+            .foregroundStyle(.teal)
+
+            PointMark(
+                x: .value("Trials", point.numTrials),
+                y: .value("Similarity", point.similarity)
+            )
+            .foregroundStyle(.teal)
+        }
+        .chartYScale(domain: 0...1)
+        .chartXAxis {
+            AxisMarks(values: .stride(by: 1))
+        }
+        .chartYAxis {
+            AxisMarks(position: .leading)
         }
     }
 
@@ -497,6 +664,36 @@ struct SummaryView: View {
                 events: sessionManager.allEvents,
                 participant: sessionManager.participant)
         if let url { shareItem = ShareItem(url: url) }
+    }
+
+    @MainActor
+    private func loadGroundTruthAnalysisIfNeeded() async {
+        guard groundTruthAnalysis == nil, !isLoadingGroundTruth else { return }
+
+        let classicInsertCount = sessionManager.allEvents.reduce(into: 0) { count, event in
+            if event.sessionMode == "classic", event.eventType == .insert {
+                count += 1
+            }
+        }
+        guard classicInsertCount > 0 else {
+            groundTruthError = "No classic insert events are available yet."
+            return
+        }
+
+        isLoadingGroundTruth = true
+        groundTruthError = nil
+        let events = sessionManager.allEvents
+
+        do {
+            let analysis = try await Task.detached(priority: .userInitiated) {
+                try GroundTruthLossAnalyzer.analyze(events: events)
+            }.value
+            groundTruthAnalysis = analysis
+        } catch {
+            groundTruthError = error.localizedDescription
+        }
+
+        isLoadingGroundTruth = false
     }
 }
 

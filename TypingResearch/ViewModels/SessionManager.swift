@@ -5,21 +5,21 @@ import CoreGraphics
 
 // MARK: - SessionMode
 
-enum SessionMode {
+enum SessionMode: Sendable {
     case classic   // fixed rectangular hit regions (standard keyboard)
     case gaussian  // per-key Gaussian + Mahalanobis hit classification
 }
 
 // MARK: - StudyDesign
 
-enum StudyDesign {
+enum StudyDesign: Sendable {
     case classicAndAdaptive  // first half classic, second half gaussian
     case classicOnly         // all sessions use the classic keyboard
 }
 
 // MARK: - TapInfo
 
-struct TapInfo {
+struct TapInfo: Sendable {
     let keyLabel: String
     let tapLocalX: Double   // tap x within key, in points from key left edge
     let tapLocalY: Double   // tap y within key, in points from key top edge
@@ -31,7 +31,7 @@ struct TapInfo {
 
 // MARK: - InputEventData (transient, not SwiftData)
 
-struct InputEventData {
+struct InputEventData: Sendable {
     let trialId: UUID
     let sessionId: UUID
     let studyId: UUID
@@ -67,7 +67,7 @@ struct InputEventData {
     var keyScreenY: Double { 0 }
 }
 
-struct RawInputEvent {
+struct RawInputEvent: Sendable {
     let timestamp: Date
     let eventType: InputEventType
     let replacementString: String

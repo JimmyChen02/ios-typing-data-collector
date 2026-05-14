@@ -3,13 +3,13 @@ import SwiftData
 
 // MARK: - Enums
 
-enum DominantHand: String, Codable {
+enum DominantHand: String, Codable, Sendable {
     case right
     case left
     case ambidextrous
 }
 
-enum InputEventType: String, Codable {
+enum InputEventType: String, Codable, Sendable {
     case insert
     case delete
     case replace
