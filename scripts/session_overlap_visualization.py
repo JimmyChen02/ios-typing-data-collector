@@ -538,6 +538,171 @@ def draw_jaccard_cells(
         lines.append("</g>")
 
 
+def gaussian_models_by_key(
+    taps: list[dict],
+    frames: dict[str, tuple[float, float, float, float]],
+) -> dict[str, dict]:
+    return {model["key"]: model for model in grouped_session_gaussians(taps, frames)}
+
+
+def gaussian_overlap_cells(
+    previous_model: dict,
+    latest_model: dict,
+    frame: tuple[float, float, float, float],
+    sample_step: int,
+) -> tuple[float | None, list[dict]]:
+    x, y, w, h = frame
+    raw_cells: list[tuple[float, float, float, float]] = []
+    max_log_density = -math.inf
+
+    sample_y = KEYBOARD_Y + y
+    while sample_y < KEYBOARD_Y + y + h:
+        sample_x = x
+        while sample_x < x + w:
+            center_x = sample_x + sample_step / 2
+            center_y = sample_y + sample_step / 2
+            previous_log_density = gaussian_score(previous_model, center_x, center_y)
+            latest_log_density = gaussian_score(latest_model, center_x, center_y)
+            max_log_density = max(max_log_density, previous_log_density, latest_log_density)
+            raw_cells.append((sample_x, sample_y, previous_log_density, latest_log_density))
+            sample_x += sample_step
+        sample_y += sample_step
+
+    if not raw_cells or not math.isfinite(max_log_density):
+        return None, []
+
+    density_cells: list[dict] = []
+    overlap_sum = 0.0
+    union_sum = 0.0
+    max_union = 0.0
+
+    for sample_x, sample_y, previous_log_density, latest_log_density in raw_cells:
+        previous_density = math.exp(max(previous_log_density - max_log_density, -745.0))
+        latest_density = math.exp(max(latest_log_density - max_log_density, -745.0))
+        overlap_density = min(previous_density, latest_density)
+        union_density = max(previous_density, latest_density)
+        overlap_sum += overlap_density
+        union_sum += union_density
+        max_union = max(max_union, union_density)
+        density_cells.append(
+            {
+                "x": sample_x,
+                "y": sample_y,
+                "previous": previous_density,
+                "latest": latest_density,
+                "overlap": overlap_density,
+                "union": union_density,
+            }
+        )
+
+    if union_sum <= 0 or max_union <= 0:
+        return None, []
+
+    for cell in density_cells:
+        cell["previous"] /= max_union
+        cell["latest"] /= max_union
+        cell["overlap"] /= max_union
+        cell["union"] /= max_union
+
+    return overlap_sum / union_sum, density_cells
+
+
+def gaussian_overlap_analysis(
+    previous_taps: list[dict],
+    latest_taps: list[dict],
+    frames: dict[str, tuple[float, float, float, float]],
+    sample_step: int,
+) -> tuple[float | None, list[dict], dict[str, list[dict]]]:
+    previous_models = gaussian_models_by_key(previous_taps, frames)
+    latest_models = gaussian_models_by_key(latest_taps, frames)
+    weighted: list[tuple[float, int]] = []
+    by_key_rows: list[dict] = []
+    cells_by_key: dict[str, list[dict]] = {}
+
+    for key in ALL_KEYS:
+        previous_model = previous_models.get(key)
+        latest_model = latest_models.get(key)
+        frame = frames.get(key)
+        if previous_model is None or latest_model is None or frame is None:
+            continue
+
+        similarity, cells = gaussian_overlap_cells(previous_model, latest_model, frame, sample_step)
+        if similarity is None:
+            continue
+
+        previous_count = int(previous_model["count"])
+        latest_count = int(latest_model["count"])
+        weight = previous_count + latest_count
+        weighted.append((similarity, weight))
+        cells_by_key[key] = cells
+        by_key_rows.append(
+            {
+                "key": key,
+                "similarity": f"{similarity:.6f}",
+                "loss": f"{1.0 - similarity:.6f}",
+                "latest_taps": latest_count,
+                "previous_taps": previous_count,
+            }
+        )
+
+    if not weighted:
+        return None, by_key_rows, cells_by_key
+
+    total_weight = sum(weight for _, weight in weighted)
+    similarity = sum(value * weight for value, weight in weighted) / total_weight
+    return similarity, by_key_rows, cells_by_key
+
+
+def draw_gaussian_overlap_cells(
+    lines: list[str],
+    cells_by_key: dict[str, list[dict]],
+    frames: dict[str, tuple[float, float, float, float]],
+    sample_step: int,
+) -> None:
+    for key, cells in cells_by_key.items():
+        frame = frames.get(key)
+        if frame is None:
+            continue
+        x, y, w, h = frame
+        clip_id = f"gaussian_overlap_clip_{key}_{sample_step}"
+        lines.append("<defs>")
+        lines.append(
+            f'<clipPath id="{clip_id}"><rect x="{x:.2f}" y="{KEYBOARD_Y + y:.2f}" '
+            f'width="{w:.2f}" height="{h:.2f}" rx="8"/></clipPath>'
+        )
+        lines.append("</defs>")
+        lines.append(f'<g clip-path="url(#{clip_id})">')
+
+        for cell in cells:
+            previous_opacity = min(0.26, 0.24 * math.sqrt(cell["previous"]))
+            if previous_opacity > 0.012:
+                lines.append(
+                    f'<rect x="{cell["x"]:.2f}" y="{cell["y"]:.2f}" '
+                    f'width="{sample_step + 0.8:.2f}" height="{sample_step + 0.8:.2f}" '
+                    f'fill="#6E7F91" fill-opacity="{previous_opacity:.3f}"/>'
+                )
+
+        for cell in cells:
+            latest_opacity = min(0.38, 0.36 * math.sqrt(cell["latest"]))
+            if latest_opacity > 0.014:
+                lines.append(
+                    f'<rect x="{cell["x"]:.2f}" y="{cell["y"]:.2f}" '
+                    f'width="{sample_step + 0.8:.2f}" height="{sample_step + 0.8:.2f}" '
+                    f'fill="{key_color(key)}" fill-opacity="{latest_opacity:.3f}"/>'
+                )
+
+        for cell in cells:
+            overlap_opacity = min(0.70, 0.66 * math.sqrt(cell["overlap"]))
+            if overlap_opacity > 0.018:
+                lines.append(
+                    f'<rect x="{cell["x"]:.2f}" y="{cell["y"]:.2f}" '
+                    f'width="{sample_step + 0.8:.2f}" height="{sample_step + 0.8:.2f}" '
+                    f'fill="#111111" fill-opacity="{overlap_opacity:.3f}"/>'
+                )
+
+        lines.append("</g>")
+
+
 def write_jaccard_overlay_svg(
     path: Path,
     sessions: dict[int, list[dict]],
@@ -611,6 +776,94 @@ def write_jaccard_overlay_svg(
 
     lines.append("</svg>")
     path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def write_gaussian_overlap_svg(
+    path: Path,
+    sessions: dict[int, list[dict]],
+    visible: list[int],
+    sample_step: int,
+) -> tuple[float | None, list[dict]]:
+    frames = keyboard_frames()
+    key_legend_rows = math.ceil(len(ALL_KEYS) / 10)
+    legend_y = KEYBOARD_Y + HEIGHT + 42
+    svg_height = legend_y + 74 + key_legend_rows * 24 + 34
+    latest_session = visible[-1]
+    latest_taps = sessions.get(latest_session, [])
+    previous_taps = [tap for session_id in visible[:-1] for tap in sessions.get(session_id, [])]
+    similarity, by_key_rows, cells_by_key = gaussian_overlap_analysis(
+        previous_taps,
+        latest_taps,
+        frames,
+        sample_step,
+    )
+    metric_text = (
+        "No previous Gaussian models yet, so overlap starts on the next frame."
+        if similarity is None
+        else f"Gaussian overlap similarity: {similarity:.3f}; loss: {1.0 - similarity:.3f}"
+    )
+
+    lines = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{svg_height}" viewBox="0 0 {WIDTH} {svg_height}">',
+        '<rect width="100%" height="100%" fill="#fbfbfd"/>',
+        f'<text x="{SIDE_PAD}" y="30" font-family="Helvetica,Arial,sans-serif" font-size="18" font-weight="700">Gaussian overlap: {" + ".join(f"S{i + 1}" for i in visible)}</text>',
+        f'<text x="{SIDE_PAD}" y="50" font-family="Helvetica,Arial,sans-serif" font-size="12" fill="#5f6368">{svg_escape(metric_text)}</text>',
+    ]
+
+    write_keyboard_base(lines, frames)
+    draw_gaussian_overlap_cells(lines, cells_by_key, frames, sample_step)
+
+    if previous_taps:
+        write_boundaries(lines, previous_taps, frames, previous=True)
+    write_boundaries(lines, latest_taps, frames, previous=False)
+
+    for tap in previous_taps:
+        point = canvas_point(tap, frames)
+        if point is None:
+            continue
+        cx, cy = point
+        lines.append(f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="2.05" fill="#D1D1D6" fill-opacity="0.30" stroke="#77777C" stroke-width="0.5"/>')
+
+    for tap in latest_taps:
+        point = canvas_point(tap, frames)
+        if point is None:
+            continue
+        cx, cy = point
+        fill = key_color(tap["key"])
+        lines.append(f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="2.70" fill="#ffffff" fill-opacity="0.82"/>')
+        lines.append(f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="2.15" fill="{fill}" fill-opacity="0.86" stroke="{fill}" stroke-width="0.8"/>')
+
+    legend_items = [
+        ("previous density", "#6E7F91", "0.24"),
+        ("newest density", key_color("a"), "0.34"),
+        ("shared overlap", "#111111", "0.68"),
+        ("previous Gaussian", "#2c2c2e", "0.45"),
+        (f"newest Gaussian S{latest_session + 1}", "#111111", "1.00"),
+    ]
+    for offset, (label, color, opacity) in enumerate(legend_items):
+        x = SIDE_PAD + offset * 176
+        y = legend_y
+        if "Gaussian" in label:
+            lines.append(
+                f'<ellipse cx="{x}" cy="{y}" rx="11" ry="7" fill="none" '
+                f'stroke="{color}" stroke-opacity="{opacity}" stroke-width="2.2"/>'
+            )
+        else:
+            lines.append(f'<rect x="{x - 8}" y="{y - 8}" width="16" height="16" rx="3" fill="{color}" fill-opacity="{opacity}"/>')
+        lines.append(
+            f'<text x="{x + 14}" y="{y + 5}" font-family="Helvetica,Arial,sans-serif" '
+            f'font-size="11" font-weight="700" fill="#1c1c1e">{svg_escape(label)}</text>'
+        )
+
+    lines.append(
+        f'<text x="{SIDE_PAD}" y="{legend_y + 34}" font-family="Helvetica,Arial,sans-serif" '
+        f'font-size="11" fill="#5f6368">This compares smooth learned Gaussian density, so nearby taps still partially overlap instead of needing the exact same bin.</text>'
+    )
+    append_key_color_legend(lines, legend_y + 72)
+
+    lines.append("</svg>")
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return similarity, by_key_rows
 
 
 def write_overlay_svg(
@@ -691,6 +944,8 @@ def write_outputs(
     session_ids = sorted(sessions)
     summary_rows: list[dict] = []
     by_key_rows: list[dict] = []
+    gaussian_summary_rows: list[dict] = []
+    gaussian_by_key_rows: list[dict] = []
 
     for count in range(1, len(session_ids) + 1):
         visible = session_ids[:count]
@@ -706,6 +961,34 @@ def write_outputs(
             visible,
             grid_size,
         )
+        latest_id = visible[-1]
+        latest = sessions[latest_id]
+        previous = [tap for session_id in visible[:-1] for tap in sessions[session_id]]
+        gaussian_similarity, gaussian_by_key = write_gaussian_overlap_svg(
+            output_dir / f"session_gaussian_overlap_{count:02d}.svg",
+            sessions,
+            visible,
+            territory_step,
+        )
+        gaussian_summary_rows.append(
+            {
+                "visible_sessions": ",".join(str(i + 1) for i in visible),
+                "latest_session": latest_id + 1,
+                "similarity": "" if gaussian_similarity is None else f"{gaussian_similarity:.6f}",
+                "loss": "" if gaussian_similarity is None else f"{1.0 - gaussian_similarity:.6f}",
+                "latest_taps": len(latest),
+                "previous_taps": len(previous),
+                "num_keys_compared": len(gaussian_by_key),
+            }
+        )
+        for row in gaussian_by_key:
+            gaussian_by_key_rows.append(
+                {
+                    "visible_sessions": ",".join(str(i + 1) for i in visible),
+                    "latest_session": latest_id + 1,
+                    **row,
+                }
+            )
 
         if count == 1:
             summary_rows.append(
@@ -721,9 +1004,6 @@ def write_outputs(
             )
             continue
 
-        latest_id = visible[-1]
-        latest = sessions[latest_id]
-        previous = [tap for session_id in visible[:-1] for tap in sessions[session_id]]
         similarity, by_key = session_similarity(latest, previous, grid_size)
         summary_rows.append(
             {
@@ -772,6 +1052,34 @@ def write_outputs(
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(by_key_rows)
+
+    with (output_dir / "session_gaussian_overlap_summary.csv").open("w", newline="", encoding="utf-8") as handle:
+        fieldnames = [
+            "visible_sessions",
+            "latest_session",
+            "similarity",
+            "loss",
+            "latest_taps",
+            "previous_taps",
+            "num_keys_compared",
+        ]
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(gaussian_summary_rows)
+
+    with (output_dir / "session_gaussian_overlap_by_key.csv").open("w", newline="", encoding="utf-8") as handle:
+        fieldnames = [
+            "visible_sessions",
+            "latest_session",
+            "key",
+            "similarity",
+            "loss",
+            "latest_taps",
+            "previous_taps",
+        ]
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(gaussian_by_key_rows)
 
 
 def demo_rows() -> list[dict[str, str]]:
