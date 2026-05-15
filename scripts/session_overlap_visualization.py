@@ -674,17 +674,17 @@ def draw_gaussian_overlap_cells(
         lines.append(f'<g clip-path="url(#{clip_id})">')
 
         for cell in cells:
-            previous_opacity = min(0.26, 0.24 * math.sqrt(cell["previous"]))
-            if previous_opacity > 0.012:
+            previous_opacity = min(0.34, 0.34 * math.sqrt(cell["previous"]))
+            if previous_opacity > 0.010:
                 lines.append(
                     f'<rect x="{cell["x"]:.2f}" y="{cell["y"]:.2f}" '
                     f'width="{sample_step + 0.8:.2f}" height="{sample_step + 0.8:.2f}" '
-                    f'fill="#6E7F91" fill-opacity="{previous_opacity:.3f}"/>'
+                    f'fill="#4B6584" fill-opacity="{previous_opacity:.3f}"/>'
                 )
 
         for cell in cells:
-            latest_opacity = min(0.38, 0.36 * math.sqrt(cell["latest"]))
-            if latest_opacity > 0.014:
+            latest_opacity = min(0.52, 0.50 * math.sqrt(cell["latest"]))
+            if latest_opacity > 0.012:
                 lines.append(
                     f'<rect x="{cell["x"]:.2f}" y="{cell["y"]:.2f}" '
                     f'width="{sample_step + 0.8:.2f}" height="{sample_step + 0.8:.2f}" '
@@ -692,12 +692,13 @@ def draw_gaussian_overlap_cells(
                 )
 
         for cell in cells:
-            overlap_opacity = min(0.70, 0.66 * math.sqrt(cell["overlap"]))
-            if overlap_opacity > 0.018:
+            overlap_opacity = min(0.88, 0.84 * math.sqrt(cell["overlap"]))
+            if overlap_opacity > 0.016:
                 lines.append(
                     f'<rect x="{cell["x"]:.2f}" y="{cell["y"]:.2f}" '
                     f'width="{sample_step + 0.8:.2f}" height="{sample_step + 0.8:.2f}" '
-                    f'fill="#111111" fill-opacity="{overlap_opacity:.3f}"/>'
+                    f'fill="{key_color(key)}" fill-opacity="{overlap_opacity:.3f}" '
+                    f'stroke="#111111" stroke-opacity="0.12" stroke-width="0.25"/>'
                 )
 
         lines.append("</g>")
@@ -822,7 +823,7 @@ def write_gaussian_overlap_svg(
         if point is None:
             continue
         cx, cy = point
-        lines.append(f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="2.05" fill="#D1D1D6" fill-opacity="0.30" stroke="#77777C" stroke-width="0.5"/>')
+        lines.append(f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="1.85" fill="#D1D1D6" fill-opacity="0.22" stroke="#77777C" stroke-opacity="0.55" stroke-width="0.45"/>')
 
     for tap in latest_taps:
         point = canvas_point(tap, frames)
@@ -834,9 +835,9 @@ def write_gaussian_overlap_svg(
         lines.append(f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="2.15" fill="{fill}" fill-opacity="0.86" stroke="{fill}" stroke-width="0.8"/>')
 
     legend_items = [
-        ("previous density", "#6E7F91", "0.24"),
-        ("newest density", key_color("a"), "0.34"),
-        ("shared overlap", "#111111", "0.68"),
+        ("previous density", "#4B6584", "0.34"),
+        ("newest density", key_color("a"), "0.52"),
+        ("shared overlap", key_color("a"), "0.88"),
         ("previous Gaussian", "#2c2c2e", "0.45"),
         (f"newest Gaussian S{latest_session + 1}", "#111111", "1.00"),
     ]
@@ -857,7 +858,7 @@ def write_gaussian_overlap_svg(
 
     lines.append(
         f'<text x="{SIDE_PAD}" y="{legend_y + 34}" font-family="Helvetica,Arial,sans-serif" '
-        f'font-size="11" fill="#5f6368">This compares smooth learned Gaussian density, so nearby taps still partially overlap instead of needing the exact same bin.</text>'
+        f'font-size="11" fill="#5f6368">Blue-grey is previous density; key color is newest density; strongest/saturated key color is the shared Gaussian overlap.</text>'
     )
     append_key_color_legend(lines, legend_y + 72)
 
