@@ -155,17 +155,17 @@ python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --outp
 Example using a local exported file:
 
 ```sh
-python3 scripts/session_overlap_visualization.py /Users/jimmy2/Downloads/keystrokes_cleaned_Tran_.csv --output-dir /Users/jimmy2/Downloads/session_overlap_Tran --territory-step 4
+python3 scripts/session_overlap_visualization.py /Users/jimmy2/Downloads/keystrokes_cleaned_Tran_.csv --output-dir /Users/jimmy2/Downloads/session_overlap_Tran_review
 ```
 
 Useful variants:
 
 ```sh
-# Bigger, less strict Jaccard bins.
-python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --output-dir <output_dir> --grid-size 20
+# Default review configuration: Jaccard grid 20 + prominent Gaussian overlap.
+python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --output-dir <output_dir>
 
-# Smoother Gaussian/territory sampling. Smaller step means larger SVG files.
-python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --output-dir <output_dir> --territory-step 3
+# Override the defaults if needed.
+python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --output-dir <output_dir> --grid-size 20 --gaussian-step 3
 
 # Synthetic sanity-check data.
 python3 scripts/session_overlap_visualization.py --demo --output-dir /tmp/session-overlap-demo
@@ -173,10 +173,9 @@ python3 scripts/session_overlap_visualization.py --demo --output-dir /tmp/sessio
 
 Primary outputs:
 
-- `session_overlap_overlay_XX.svg`: cumulative Gaussian territory view with newest-session dots colored and previous dots grey.
-- `session_jaccard_overlay_XX.svg`: direct binned Jaccard view; grey cells are previous-only, colored cells are newest-only, and overlap cells are shared bins.
+- `session_jaccard_overlay_XX.svg`: direct grid-20 Jaccard view; grey cells are previous-only, colored cells are newest-only, and overlap cells are shared bins.
 - `session_gaussian_overlap_XX.svg`: smooth Gaussian-overlap view; blue-grey is previous density, key color is newest density, and strongest key color is shared Gaussian density.
-- `session_overlap_summary.csv`: weighted Jaccard similarity/loss by cumulative session step.
-- `session_overlap_by_key.csv`: weighted Jaccard similarity/loss per key.
+- `session_jaccard_summary.csv`: weighted Jaccard similarity/loss by cumulative session step.
+- `session_jaccard_by_key.csv`: weighted Jaccard similarity/loss per key.
 - `session_gaussian_overlap_summary.csv`: Gaussian-overlap similarity/loss by cumulative session step.
 - `session_gaussian_overlap_by_key.csv`: Gaussian-overlap similarity/loss per key.
