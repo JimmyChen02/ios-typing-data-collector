@@ -10,6 +10,7 @@
 		87AA804B2F6C999900764884 /* BackendClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87AA80492F6C999900764884 /* BackendClient.swift */; };
 		87AA804C2F6C999900764884 /* KeyReportExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87AA804A2F6C999900764884 /* KeyReportExporter.swift */; };
 		87AA804E2F6C99AA00764884 /* TapDotPlotView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87AA804D2F6C99AA00764884 /* TapDotPlotView.swift */; };
+		87AA80532F6DB9F300764884 /* SessionOverlapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87AA80522F6DB9F300764884 /* SessionOverlapView.swift */; };
 		AA000000000000000000001 /* TypingResearchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000001 /* TypingResearchApp.swift */; };
 		AA000000000000000000002 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000002 /* Models.swift */; };
 		AA000000000000000000003 /* SessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000003 /* SessionManager.swift */; };
@@ -31,6 +32,7 @@
 		87AA80492F6C999900764884 /* BackendClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendClient.swift; sourceTree = "<group>"; };
 		87AA804A2F6C999900764884 /* KeyReportExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyReportExporter.swift; sourceTree = "<group>"; };
 		87AA804D2F6C99AA00764884 /* TapDotPlotView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TapDotPlotView.swift; sourceTree = "<group>"; };
+		87AA80522F6DB9F300764884 /* SessionOverlapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionOverlapView.swift; sourceTree = "<group>"; };
 		87AA80512F6DB50D00764884 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = text; path = Assets.xcassets; sourceTree = "<group>"; };
 		BB000000000000000000001 /* TypingResearchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypingResearchApp.swift; sourceTree = "<group>"; };
 		BB000000000000000000002 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
@@ -111,6 +113,7 @@
 			isa = PBXGroup;
 			children = (
 				87AA804D2F6C99AA00764884 /* TapDotPlotView.swift */,
+				87AA80522F6DB9F300764884 /* SessionOverlapView.swift */,
 				BB000000000000000000004 /* ParticipantSetupView.swift */,
 				BB000000000000000000005 /* SessionView.swift */,
 				BB000000000000000000006 /* TrialView.swift */,
@@ -217,6 +220,7 @@
 				87AA804C2F6C999900764884 /* KeyReportExporter.swift in Sources */,
 				AA000000000000000000003 /* SessionManager.swift in Sources */,
 				87AA804E2F6C99AA00764884 /* TapDotPlotView.swift in Sources */,
+				87AA80532F6DB9F300764884 /* SessionOverlapView.swift in Sources */,
 				AA000000000000000000004 /* ParticipantSetupView.swift in Sources */,
 				AA000000000000000000005 /* SessionView.swift in Sources */,
 				AA000000000000000000006 /* TrialView.swift in Sources */,
