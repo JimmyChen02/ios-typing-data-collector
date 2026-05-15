@@ -396,6 +396,14 @@ struct SummaryView: View {
                 colorMode: .byKey,
                 layoutMode: plotLayout
             )
+
+            NavigationLink {
+                SessionOverlapView(events: sessionManager.allEvents)
+            } label: {
+                Label("Open Session Overlap Viewer", systemImage: "square.stack.3d.up")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
         }
     }
 
