@@ -84,3 +84,98 @@ python3 scripts/manual_test_ground_truth_trial_loss.py --output-dir /tmp/ground-
 ```sh
 open TypingResearch.xcodeproj
 ```
+
+## Python Script Reference
+
+Run these commands from the repository root unless noted otherwise.
+
+### 1. Clean an exported keystroke CSV
+
+Adds normalized tap coordinates plus outlier columns. If no output path is
+given, the script writes `<input_stem>_cleaned.csv` next to the input file.
+
+```sh
+python3 scripts/clean_keystrokes.py <raw_keystrokes.csv>
+python3 scripts/clean_keystrokes.py <raw_keystrokes.csv> <cleaned_keystrokes.csv>
+```
+
+### 2. Render keyboard tap PDFs
+
+Use this for static PDF inspection of tap distributions or the fitted Gaussian
+keyboard.
+
+```sh
+python3 scripts/keystrokes_to_pdf.py <cleaned_keystrokes.csv>
+python3 scripts/keystrokes_to_pdf.py <cleaned_keystrokes.csv> <tap_distribution.pdf>
+
+python3 scripts/gaussian_keyboard_pdf.py <keystrokes.csv>
+python3 scripts/gaussian_keyboard_pdf.py <keystrokes.csv> <gaussian_keyboard.pdf>
+```
+
+### 3. Ground-truth trial loss
+
+Use this to estimate how many trials are enough by comparing trial subsets
+against the all-trials ground truth. It writes graph-ready summary CSVs.
+
+```sh
+python3 scripts/ground_truth_trial_loss.py <cleaned_keystrokes.csv>
+python3 scripts/ground_truth_trial_loss.py <cleaned_keystrokes.csv> --grid-size 50 --label-column expected_char
+python3 scripts/manual_test_ground_truth_trial_loss.py --output-dir /tmp/ground-truth-loss-test
+```
+
+Primary outputs:
+
+- `<input_stem>_ground_truth_trial_loss_simple_summary.csv`
+- `<input_stem>_ground_truth_trial_loss_all_combinations_summary.csv`
+
+### 4. Future-trial loss
+
+Use this when the question is: “If I train on the first N trials, how well does
+that predict the remaining future trials?”
+
+```sh
+python3 scripts/future-trial-loss.py <cleaned_keystrokes.csv>
+python3 scripts/future-trial-loss.py <cleaned_keystrokes.csv> --grid-size 50 --label-column expected_char
+```
+
+Primary output:
+
+- `<input_stem>_future_trial_loss_summary.csv`
+
+### 5. Session overlap visualizations
+
+Use this to visualize how tap behavior changes across study sessions. The
+script writes cumulative SVGs: frame `01` shows session 1, frame `02` shows
+sessions 1 + 2, and so on.
+
+```sh
+python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --output-dir <output_dir>
+```
+
+Example using a local exported file:
+
+```sh
+python3 scripts/session_overlap_visualization.py /Users/jimmy2/Downloads/keystrokes_cleaned_Tran_.csv --output-dir /Users/jimmy2/Downloads/session_overlap_Tran_review
+```
+
+Useful variants:
+
+```sh
+# Default review configuration: Jaccard grid 20 + prominent Gaussian overlap.
+python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --output-dir <output_dir>
+
+# Override the defaults if needed.
+python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --output-dir <output_dir> --grid-size 20 --gaussian-step 3
+
+# Synthetic sanity-check data.
+python3 scripts/session_overlap_visualization.py --demo --output-dir /tmp/session-overlap-demo
+```
+
+Primary outputs:
+
+- `session_jaccard_overlay_XX.svg`: direct grid-20 Jaccard view; grey cells are previous-only, colored cells are newest-only, and overlap cells are shared bins.
+- `session_gaussian_overlap_XX.svg`: smooth Gaussian-overlap view; blue-grey is previous density, key color is newest density, and strongest key color is shared Gaussian density.
+- `session_jaccard_summary.csv`: weighted Jaccard similarity/loss by cumulative session step.
+- `session_jaccard_by_key.csv`: weighted Jaccard similarity/loss per key.
+- `session_gaussian_overlap_summary.csv`: Gaussian-overlap similarity/loss by cumulative session step.
+- `session_gaussian_overlap_by_key.csv`: Gaussian-overlap similarity/loss per key.
