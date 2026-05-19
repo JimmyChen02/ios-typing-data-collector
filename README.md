@@ -1,27 +1,37 @@
 # TypingResearch
 
-An iOS research app for studying adaptive mobile text entry. The project compares a fixed-layout keyboard against a personalized Gaussian keyboard that learns from touch coordinates, intended characters, and implicit correction feedback such as backspace.
+TypingResearch combines two parts: an iPhone data-collection app for mobile text-entry studies, and companion offline Python scripts for post-study analysis.
 
-## What The App Does
+The iOS app runs timed HCI study sessions with instrumented custom keyboards in classic and adaptive Gaussian modes, capturing touch coordinates, timing, correction behavior, and accuracy metrics. The Python scripts operate on exported CSVs to clean data, regenerate keyboard-view PDFs, visualize session overlap, and compute trial-level loss analyses.
+
+## iOS App
+
+### What The App Does
 
 - Runs timed typing-study sessions on iPhone with two keyboard modes:
   - `classic`: fixed rectangular hit regions
   - `gaussian`: adaptive per-key probabilistic hit regions
+- Supports two study designs:
+  - `classic + adaptive`: the first half of sessions use the classic keyboard, and the second half use the Gaussian keyboard
+  - `classic only`: all sessions use the classic keyboard
+- Lets the researcher choose 2-20 one-minute sessions; mixed-mode studies use an even split between classic and adaptive
 - Captures per-keystroke touch coordinates, key geometry, timing, correctness, and correction behavior
-- Presents a continuous text stream that expands as the participant types
+- Presents a continuous text stream drawn from rotating sentence corpora and expands the prompt as the participant types
 - Starts the session timer on the first keypress instead of on screen load
+- Shows in-app summaries for session performance, data cleaning, ground-truth loss, tap distribution, and session overlap
 - Exports raw and cleaned keystroke CSVs, plus raw, cleaned, and Gaussian visualization PDFs
 
-## Current Study Design
+### Current Study Design
 
 The app is organized around a multi-session study:
 
-- Sessions are split between `classic` and `gaussian` keyboard modes
-- The current implementation uses the first half of the study as `classic` sessions and the second half as `gaussian` sessions
-- During classic sessions, collected events are appended to the persistent Gaussian training corpus
-- During gaussian sessions, the adaptive keyboard uses a frozen model fit from the earlier classic-session data
+- In `classic + adaptive` mode, the first half of sessions are `classic` and the second half are `gaussian`
+- In `classic only` mode, every session remains `classic`
+- During classic sessions, valid taps are appended to the persistent Gaussian training corpus
+- During gaussian sessions, the adaptive keyboard uses a frozen model fit from the earlier persisted classic-session data
+- Optional backend export exists, but it is disabled by default unless `BackendClient.isEnabled` is turned on
 
-### Training logic
+### Training Logic
 
 Each fitted key is represented by a 2D Gaussian over centered touch offsets. The current fitting pipeline:
 
@@ -31,7 +41,7 @@ Each fitted key is represented by a 2D Gaussian over centered touch offsets. The
 - includes delete taps as their own touch target
 - falls back to accepted correct taps when intended-character supervision is unavailable, while excluding quickly deleted inserts from that fallback path
 
-### Classification logic
+### Classification Logic
 
 At inference time, the Gaussian keyboard:
 
@@ -40,47 +50,55 @@ At inference time, the Gaussian keyboard:
 - uses anchor protection near key centers to avoid unstable boundary stealing
 - chooses the winning key by a competitive argmax
 
-### After the session
+### In-App Outputs
 
-- per-key correctness and timing metrics
-- session summaries
-- CSV export
-- backend export
-- Gaussian corpus persistence
+After each session or study, the app provides:
 
-### Available exports
+- per-session accuracy, WPM, and backspace summaries
+- data-cleaning summaries and outlier counts
+- ground-truth loss charts computed from clean classic-session insert taps
+- tap distribution views and a session-overlap viewer
+- file export and optional backend upload
+
+### Available Exports
 
 | Export | Contents |
 |--------|----------|
-| `Raw Keystrokes CSV` | One row per event with participant/session metadata, key geometry, timing, intended/actual/corrected characters |
-| `Cleaned Keystrokes CSV` | Raw CSV plus outlier distance/flag columns from `KeystrokeCleaner` |
-| `Raw PDF` | Keyboard dot plot using raw events |
-| `Cleaned PDF` | Keyboard dot plot after applying keystroke cleaning |
-| `Gaussian PDF` | Adaptive keyboard territory map + Gaussian ellipses + historical taps from the persisted Gaussian corpus |
+| `Raw Keystrokes CSV` | One row per recorded event with participant/study metadata, session mode and session index, trial metadata, key geometry, timing, and intended/actual/corrected characters |
+| `Cleaned Keystrokes CSV` | Raw schema plus `dist_from_target_kw`, `is_outlier`, and `outlier_flags`; rows flagged as `spatial` or `far_from_target` are excluded, while other flagged rows remain annotated |
+| `Raw PDF` | Keyboard-view dot plot of recorded taps on the app's standard keyboard layout |
+| `Cleaned PDF` | The same keyboard-view PDF with `spatial` and `far_from_target` taps removed |
+| `Gaussian PDF` | Rasterized Gaussian decision surface with per-key ellipses and correct-tap overlays, fit from the persisted classic-session corpus |
 
-## Offline Analysis Scripts
+The Gaussian PDF is shown from adaptive-session summaries because it visualizes the classic-trained model used by the adaptive keyboard.
 
-The `scripts/` folder contains matching analysis utilities:
+## Offline Python Scripts
 
-- `scripts/gaussian_keyboard_pdf.py`: mirrors the current intended-key Gaussian fitting logic and exports a Gaussian keyboard PDF from a keystroke CSV
-- `scripts/clean_keystrokes.py`: flags spatial / timing outliers in exported keystroke CSVs
-- `scripts/ground_truth_trial_loss.py`: builds an all-trials ground truth, then exports graph-ready loss CSVs for the prefix path (`{1}`, `{1,2}`, ...) and averaged all-combinations trial subsets
-- `scripts/keystrokes_to_pdf.py`: renders raw/overlay keyboard dot plots from CSV
+The `scripts/` folder contains companion analysis and export utilities:
 
-Example:
+- `scripts/clean_keystrokes.py`: flags outliers and produces the cleaned CSV schema used by downstream analyses
+- `scripts/keystrokes_to_pdf.py`: renders the keyboard-view PDF from a cleaned CSV
+- `scripts/gaussian_keyboard_pdf.py`: mirrors the intended-key Gaussian fitting logic and exports a Gaussian keyboard PDF from a CSV
+- `scripts/ground_truth_trial_loss.py`: builds an all-trials ground truth and exports graph-ready loss/similarity CSVs for cumulative-prefix and all-combinations analyses
+- `scripts/future-trial-loss.py`: measures how well cumulative classic-trial data predicts future trials
+- `scripts/session_overlap_visualization.py`: generates cumulative session-overlap SVGs and weighted-Jaccard summaries
+- `scripts/manual_test_ground_truth_trial_loss.py`: produces synthetic/manual test outputs for the ground-truth loss pipeline
+- `scripts/loss-automation.py`: legacy overlap-analysis helper retained in the repo but marked unused
+
+Examples:
 
 ```sh
+python3 scripts/clean_keystrokes.py <keystrokes.csv>
+python3 scripts/keystrokes_to_pdf.py <cleaned_keystrokes.csv> [output.pdf]
 python3 scripts/gaussian_keyboard_pdf.py <keystrokes.csv> [output.pdf]
-```
-
-Ground-truth loss examples:
-
-```sh
 python3 scripts/ground_truth_trial_loss.py <cleaned_keystrokes.csv>
+python3 scripts/future-trial-loss.py <cleaned_keystrokes.csv>
+python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv>
 python3 scripts/manual_test_ground_truth_trial_loss.py --output-dir /tmp/ground-truth-loss-test
 ```
 
-### To open the app:
+### To Open The App
+
 ```sh
 open TypingResearch.xcodeproj
 ```
