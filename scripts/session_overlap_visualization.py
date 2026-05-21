@@ -25,10 +25,12 @@ import base64
 import csv
 import io
 import math
+import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 from PIL import Image
 
 
@@ -107,34 +109,34 @@ class Gaussian2D:
 
 def key_color(key: str) -> str:
     semantic = {
-        "q": "#2F80FF",
-        "w": "#E63AF4",
-        "e": "#FFE34F",
-        "r": "#5E74FF",
-        "t": "#FF8B24",
-        "y": "#FF4DB7",
-        "u": "#9554FF",
-        "i": "#7FFF38",
-        "o": "#2DD4FF",
-        "p": "#49B9FF",
-        "a": "#FF5A5F",
-        "s": "#4952F5",
-        "d": "#FFC857",
-        "f": "#ECFF45",
-        "g": "#CFFF4A",
-        "h": "#A5FF4E",
-        "j": "#5FFF5B",
-        "k": "#62EE8B",
-        "l": "#5EF0B0",
-        "z": "#F553A6",
-        "x": "#E24BFF",
-        "c": "#FFAE5D",
-        "v": "#B255F7",
-        "b": "#FF8A6A",
-        "n": "#58E5E8",
-        "m": "#66E8B9",
-        "space": "#7C8798",
-        "delete": "#111827",
+        "q": "#FF6FB3",
+        "w": "#5DA7FF",
+        "e": "#FFE066",
+        "r": "#7EE46F",
+        "t": "#FFB15E",
+        "y": "#FF6FB3",
+        "u": "#5DA7FF",
+        "i": "#FFE066",
+        "o": "#7EE46F",
+        "p": "#FFB15E",
+        "a": "#FFE066",
+        "s": "#FF6FB3",
+        "d": "#5DA7FF",
+        "f": "#FFB15E",
+        "g": "#5DA7FF",
+        "h": "#FF6FB3",
+        "j": "#7EE46F",
+        "k": "#FFB15E",
+        "l": "#5DE0D1",
+        "z": "#7EE46F",
+        "x": "#FFE066",
+        "c": "#5DE0D1",
+        "v": "#5DA7FF",
+        "b": "#FFB15E",
+        "n": "#7EE46F",
+        "m": "#C78BFF",
+        "space": "#C9D2E6",
+        "delete": "#F2C5D8",
     }
     return semantic.get(key, "#D1D5DB")
 
@@ -563,6 +565,91 @@ def hex_to_rgba(hex_color: str, alpha: int) -> tuple[int, int, int, int]:
     )
 
 
+@dataclass(frozen=True)
+class RasterKeyParams:
+    center_x: float
+    center_y: float
+    width: float
+    height: float
+    anchor_radius: float
+    mu_x: float
+    mu_y: float
+    pxx: float
+    pyy: float
+    pxy: float
+    log_det: float
+
+
+def raster_key_params(
+    frames: dict[str, tuple[float, float, float, float]],
+    model: dict[str, Gaussian2D],
+) -> list[RasterKeyParams]:
+    params: list[RasterKeyParams] = []
+    for key in ALL_KEYS:
+        frame = frames[key]
+        x, y, width, height = frame
+        gaussian = model.get(key) or fallback_gaussian(frame)
+        params.append(
+            RasterKeyParams(
+                center_x=x + width / 2.0,
+                center_y=y + height / 2.0,
+                width=width,
+                height=height,
+                anchor_radius=ANCHOR_FRAC * min(width, height) / 2.0,
+                mu_x=gaussian.mu_x,
+                mu_y=gaussian.mu_y,
+                pxx=gaussian.pxx,
+                pyy=gaussian.pyy,
+                pxy=gaussian.pxy,
+                log_det=gaussian.log_det,
+            )
+        )
+    return params
+
+
+def winner_indices_grid(
+    sample_x: np.ndarray,
+    sample_y: np.ndarray,
+    params: list[RasterKeyParams],
+) -> np.ndarray:
+    x_grid, y_grid = np.meshgrid(sample_x, sample_y)
+    best_score = np.full(x_grid.shape, -np.inf, dtype=np.float32)
+    best_index = np.full(x_grid.shape, -1, dtype=np.int16)
+    anchor_index = np.full(x_grid.shape, -1, dtype=np.int16)
+    unassigned_anchor = np.ones(x_grid.shape, dtype=bool)
+
+    for index, param in enumerate(params):
+        dx = x_grid - param.center_x
+        dy = y_grid - param.center_y
+
+        anchor_mask = unassigned_anchor & ((dx * dx + dy * dy) <= (param.anchor_radius ** 2))
+        if anchor_mask.any():
+            anchor_index[anchor_mask] = index
+            unassigned_anchor &= ~anchor_mask
+
+        ux = dx - param.mu_x
+        uy = dy - param.mu_y
+        ox = np.maximum(0.0, np.abs(dx) - param.width / 2.0)
+        oy = np.maximum(0.0, np.abs(dy) - param.height / 2.0)
+        spatial_x = ox / (SPATIAL_PRIOR_FRAC * param.width)
+        spatial_y = oy / (SPATIAL_PRIOR_FRAC * param.height)
+        score = -0.5 * (
+            param.pxx * ux * ux
+            + 2.0 * param.pxy * ux * uy
+            + param.pyy * uy * uy
+            + param.log_det
+            + spatial_x * spatial_x
+            + spatial_y * spatial_y
+        )
+
+        improve_mask = score > best_score
+        if improve_mask.any():
+            best_score[improve_mask] = score[improve_mask]
+            best_index[improve_mask] = index
+
+    return np.where(anchor_index >= 0, anchor_index, best_index)
+
+
 def raster_background_data_url(
     *,
     frames: dict[str, tuple[float, float, float, float]],
@@ -572,52 +659,43 @@ def raster_background_data_url(
     sample_step = max(1, raster_step)
     coarse_w = max(1, math.ceil(WIDTH / sample_step))
     coarse_h = max(1, math.ceil(HEIGHT / sample_step))
-    image = Image.new("RGBA", (coarse_w, coarse_h), (248, 250, 252, 0))
-    pixels = image.load()
-
-    palette = {
-        key: hex_to_rgba(key_color(key), 255)
-        for key in ALL_KEYS
-    }
     sub_samples = 3 if sample_step >= 4 else 2 if sample_step >= 2 else 1
+    fine_w = coarse_w * sub_samples
+    fine_h = coarse_h * sub_samples
+    fine_step = sample_step / sub_samples
 
-    for py in range(coarse_h):
-        base_y = py * sample_step
-        for px in range(coarse_w):
-            base_x = px * sample_step
-            total_r = 0
-            total_g = 0
-            total_b = 0
-            total_a = 0
-            hits = 0
+    sample_x = np.minimum(
+        WIDTH - 0.5,
+        (np.arange(fine_w, dtype=np.float32) + 0.5) * fine_step,
+    )
+    sample_y = np.minimum(
+        HEIGHT - 0.5,
+        (np.arange(fine_h, dtype=np.float32) + 0.5) * fine_step,
+    )
 
-            for sy in range(sub_samples):
-                center_y = min(
-                    HEIGHT - 0.5,
-                    base_y + (sy + 0.5) * sample_step / sub_samples,
-                )
-                for sx in range(sub_samples):
-                    center_x = min(
-                        WIDTH - 0.5,
-                        base_x + (sx + 0.5) * sample_step / sub_samples,
-                    )
-                    key = winner(center_x, center_y, frames, model)
-                    if key is None:
-                        continue
-                    r, g, b, a = palette[key]
-                    total_r += r
-                    total_g += g
-                    total_b += b
-                    total_a += a
-                    hits += 1
+    key_indices = winner_indices_grid(
+        sample_x=sample_x,
+        sample_y=sample_y,
+        params=raster_key_params(frames, model),
+    )
+    palette = np.array(
+        [hex_to_rgba(key_color(key), 178) for key in ALL_KEYS],
+        dtype=np.uint8,
+    )
+    fine_rgba = palette[key_indices]
 
-            if hits:
-                pixels[px, py] = (
-                    round(total_r / hits),
-                    round(total_g / hits),
-                    round(total_b / hits),
-                    round(total_a / hits),
-                )
+    if sub_samples > 1:
+        coarse_rgba = fine_rgba.reshape(
+            coarse_h,
+            sub_samples,
+            coarse_w,
+            sub_samples,
+            4,
+        ).mean(axis=(1, 3), dtype=np.float32).astype(np.uint8)
+    else:
+        coarse_rgba = fine_rgba
+
+    image = Image.fromarray(coarse_rgba, mode="RGBA")
 
     if sample_step > 1:
         image = image.resize((WIDTH, HEIGHT), resample=Image.Resampling.LANCZOS)
@@ -813,4 +891,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    _start_time = time.perf_counter()
+    try:
+        main()
+    finally:
+        print(f"Ran in {time.perf_counter() - _start_time:.2f} seconds")
