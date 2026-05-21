@@ -81,7 +81,7 @@ The `scripts/` folder contains companion analysis and export utilities:
 - `scripts/gaussian_keyboard_pdf.py`: mirrors the intended-key Gaussian fitting logic and exports a Gaussian keyboard PDF from a CSV
 - `scripts/ground_truth_trial_loss.py`: builds an all-trials ground truth and exports graph-ready loss/similarity CSVs for cumulative-prefix and all-combinations analyses
 - `scripts/future-trial-loss.py`: measures how well cumulative classic-trial data predicts future trials
-- `scripts/session_overlap_visualization.py`: generates cumulative session-overlap SVGs and weighted-Jaccard summaries
+- `scripts/session_overlap_visualization.py`: generates per-session Gaussian boundary SVGs using the session-specific -> prior-model -> geometry-fallback chain
 - `scripts/manual_test_ground_truth_trial_loss.py`: produces synthetic/manual test outputs for the ground-truth loss pipeline
 - `scripts/loss-automation.py`: legacy overlap-analysis helper retained in the repo but marked unused
 
@@ -160,11 +160,17 @@ Primary output:
 
 - `<input_stem>_future_trial_loss_summary.csv`
 
-### 5. Session overlap visualizations
+### 5. Session Gaussian boundary visuals
 
-Use this to visualize how tap behavior changes across study sessions. The
-script writes cumulative SVGs: frame `01` shows session 1, frame `02` shows
-sessions 1 + 2, and so on.
+Use this to render one Gaussian-boundary keyboard image per session. Each
+session image uses the new backoff chain:
+
+- fit the key from the current session if it has enough taps
+- otherwise borrow that key from prior cumulative sessions
+- otherwise fall back to the geometric key area
+
+The output is a full keyboard decision-surface image for each session, similar
+to the in-paper Gaussian keyboard visualizations.
 
 ```sh
 python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --output-dir <output_dir>
@@ -173,27 +179,24 @@ python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --outp
 Example using a local exported file:
 
 ```sh
-python3 scripts/session_overlap_visualization.py /Users/jimmy2/Downloads/keystrokes_cleaned_Tran_.csv --output-dir /Users/jimmy2/Downloads/session_overlap_Tran_review
+python3 scripts/session_overlap_visualization.py /Users/jimmy2/Downloads/keystrokes_cleaned_Tran_.csv --output-dir /Users/jimmy2/Downloads/session_boundary_Tran_review
 ```
 
 Useful variants:
 
 ```sh
-# Default review configuration: Jaccard grid 20 + prominent Gaussian overlap.
+# Default review configuration.
 python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --output-dir <output_dir>
 
-# Override the defaults if needed.
-python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --output-dir <output_dir> --grid-size 20 --gaussian-step 3
+# Override the raster smoothness if needed.
+python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --output-dir <output_dir> --raster-step 3
 
 # Synthetic sanity-check data.
-python3 scripts/session_overlap_visualization.py --demo --output-dir /tmp/session-overlap-demo
+python3 scripts/session_overlap_visualization.py --demo --output-dir /tmp/session-boundary-demo
 ```
 
 Primary outputs:
 
-- `session_jaccard_overlay_XX.svg`: direct grid-20 Jaccard view; grey cells are previous-only, colored cells are newest-only, and overlap cells are shared bins.
-- `session_gaussian_overlap_XX.svg`: smooth Gaussian-overlap view; blue-grey is previous density, key color is newest density, and strongest key color is shared Gaussian density.
-- `session_jaccard_summary.csv`: weighted Jaccard similarity/loss by cumulative session step.
-- `session_jaccard_by_key.csv`: weighted Jaccard similarity/loss per key.
-- `session_gaussian_overlap_summary.csv`: Gaussian-overlap similarity/loss by cumulative session step.
-- `session_gaussian_overlap_by_key.csv`: Gaussian-overlap similarity/loss per key.
+- `session_gaussian_boundaries_XX.svg`: one full decision-surface keyboard image per session
+- `session_gaussian_boundaries_summary.csv`: per-session counts of current-fit, prior-model, and geometry-fallback keys
+- `session_gaussian_boundaries_by_key.csv`: per-session, per-key backoff/source details
