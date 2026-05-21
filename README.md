@@ -40,6 +40,7 @@ Each fitted key is represented by a 2D Gaussian over centered touch offsets. The
 - still allows deleted mistaps to train the intended key when an `expectedChar` is known
 - includes delete taps as their own touch target
 - falls back to accepted correct taps when intended-character supervision is unavailable, while excluding quickly deleted inserts from that fallback path
+- supports a per-key backoff chain: current-trial/session fit -> prior model -> geometric key-area fallback
 
 ### Classification Logic
 
@@ -81,8 +82,10 @@ The `scripts/` folder contains companion analysis and export utilities:
 - `scripts/gaussian_keyboard_pdf.py`: mirrors the intended-key Gaussian fitting logic and exports a Gaussian keyboard PDF from a CSV
 - `scripts/ground_truth_trial_loss.py`: builds an all-trials ground truth and exports graph-ready loss/similarity CSVs for cumulative-prefix and all-combinations analyses
 - `scripts/future-trial-loss.py`: measures how well cumulative classic-trial data predicts future trials
+- `scripts/key_backoff_report.py`: audits per-trial key coverage and reports whether each key is trial-specific, prior-backed, pooled-global, or falling back to raw key geometry
 - `scripts/session_overlap_visualization.py`: generates cumulative session-overlap SVGs and weighted-Jaccard summaries
 - `scripts/manual_test_ground_truth_trial_loss.py`: produces synthetic/manual test outputs for the ground-truth loss pipeline
+- `scripts/manual_test_key_backoff_report.py`: produces and verifies a synthetic dataset for the key-backoff coverage report
 - `scripts/loss-automation.py`: legacy overlap-analysis helper retained in the repo but marked unused
 
 Examples:
@@ -93,8 +96,10 @@ python3 scripts/keystrokes_to_pdf.py <cleaned_keystrokes.csv> [output.pdf]
 python3 scripts/gaussian_keyboard_pdf.py <keystrokes.csv> [output.pdf]
 python3 scripts/ground_truth_trial_loss.py <cleaned_keystrokes.csv>
 python3 scripts/future-trial-loss.py <cleaned_keystrokes.csv>
+python3 scripts/key_backoff_report.py <cleaned_keystrokes.csv>
 python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv>
 python3 scripts/manual_test_ground_truth_trial_loss.py --output-dir /tmp/ground-truth-loss-test
+python3 scripts/manual_test_key_backoff_report.py --output-dir /tmp/key-backoff-test
 ```
 
 ### To Open The App
@@ -160,7 +165,25 @@ Primary output:
 
 - `<input_stem>_future_trial_loss_summary.csv`
 
-### 5. Session overlap visualizations
+### 5. Key backoff coverage
+
+Use this to check whether each trial has enough samples to fit its own
+character-specific Gaussian, or whether it would need to back off to prior
+trials, the pooled dataset, or the raw key area.
+
+```sh
+python3 scripts/key_backoff_report.py <cleaned_keystrokes.csv>
+python3 scripts/key_backoff_report.py <cleaned_keystrokes.csv> --min-samples 5 --label-column expected_char
+python3 scripts/manual_test_key_backoff_report.py --output-dir /tmp/key-backoff-test
+```
+
+Primary outputs:
+
+- `<input_stem>_key_backoff_trial_summary.csv`
+- `<input_stem>_key_backoff_trial_key_detail.csv`
+- `<input_stem>_key_backoff_key_summary.csv`
+
+### 6. Session overlap visualizations
 
 Use this to visualize how tap behavior changes across study sessions. The
 script writes cumulative SVGs: frame `01` shows session 1, frame `02` shows

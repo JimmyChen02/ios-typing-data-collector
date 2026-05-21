@@ -55,6 +55,9 @@ ROW2 = ["z", "x", "c", "v", "b", "n", "m"]
 ALL_KEYS = ROW0 + ROW1 + ROW2 + ["space", "delete"]
 LETTER_KEYS = set(ROW0 + ROW1 + ROW2)
 VALID_KEYS = set(ALL_KEYS)
+SOURCE_FITTED_CURRENT = "fitted_current"
+SOURCE_PRIOR_MODEL = "prior_model"
+SOURCE_GEOMETRY_FALLBACK = "geometry_fallback"
 
 
 @dataclass
@@ -353,15 +356,28 @@ def fit_single(samples: list[TrainingSample]) -> Gaussian2D | None:
     )
 
 
-def fit_model(samples: list[TrainingSample]) -> dict[str, Gaussian2D]:
+def fit_model(
+    samples: list[TrainingSample],
+    prior_model: dict[str, Gaussian2D] | None = None,
+) -> tuple[dict[str, Gaussian2D], dict[str, str], dict[str, int]]:
     grouped: dict[str, list[TrainingSample]] = defaultdict(list)
     for sample in samples:
         grouped[sample.target_key].append(sample)
-    return {
-        key: gaussian
-        for key in ALL_KEYS
-        if (gaussian := fit_single(grouped.get(key, []))) is not None
-    }
+    model: dict[str, Gaussian2D] = {}
+    model_sources: dict[str, str] = {}
+    sample_counts: dict[str, int] = {}
+
+    for key in ALL_KEYS:
+        key_samples = grouped.get(key, [])
+        sample_counts[key] = len(key_samples)
+        if (gaussian := fit_single(key_samples)) is not None:
+            model[key] = gaussian
+            model_sources[key] = SOURCE_FITTED_CURRENT
+        elif prior_model and key in prior_model:
+            model[key] = prior_model[key]
+            model_sources[key] = SOURCE_PRIOR_MODEL
+
+    return model, model_sources, sample_counts
 
 
 def fallback_gaussian(frame: Rect) -> Gaussian2D:
@@ -448,6 +464,7 @@ def render_pdf(
     events: list[Event],
     samples: list[TrainingSample],
     model: dict[str, Gaussian2D],
+    model_sources: dict[str, str],
 ) -> None:
     fig = plt.figure(figsize=(PAGE_W / 72, PAGE_H / 72), dpi=100)
     ax = fig.add_axes([0, 0, 1, 1])
@@ -459,7 +476,11 @@ def render_pdf(
     ax.add_patch(Rectangle((0, 0), PAGE_W, 40, facecolor=(0.0, 0.55, 0.55, 0.9), edgecolor="none"))
     ax.text(MARGIN, 20, "Gaussian Keyboard - Intended-Key Boundaries",
             fontsize=14, fontweight="bold", color="white", va="center")
-    ax.text(PAGE_W - MARGIN, 20, f"{len(samples)} samples  {len(model)}/{len(ALL_KEYS)} fit",
+    fitted_count = sum(1 for source in model_sources.values() if source == SOURCE_FITTED_CURRENT)
+    borrowed_count = sum(1 for source in model_sources.values() if source == SOURCE_PRIOR_MODEL)
+    geometry_count = len(ALL_KEYS) - len(model)
+    ax.text(PAGE_W - MARGIN, 20,
+            f"{len(samples)} samples  fitted={fitted_count}  borrowed={borrowed_count}  geometry={geometry_count}",
             fontsize=10, family="monospace", color="white", ha="right", va="center")
     ax.text(MARGIN, 48,
             f"Participant: {participant or '-'}   min-n={MIN_SAMPLES}  anchor={ANCHOR_FRAC}  spatial={SPATIAL_PRIOR_FRAC}",
@@ -554,15 +575,40 @@ def render_pdf(
     plt.close(fig)
 
 
-def print_summary(events: list[Event], samples: list[TrainingSample], model: dict[str, Gaussian2D]) -> None:
+def print_summary(
+    events: list[Event],
+    samples: list[TrainingSample],
+    model: dict[str, Gaussian2D],
+    model_sources: dict[str, str],
+    sample_counts: dict[str, int],
+) -> None:
     old_counts = Counter(e.key_label for e in events if e.is_correct and e.event_type != "delete")
     new_counts = Counter(sample.target_key for sample in samples)
     print("Old correct-landed counts:")
     print("  " + " ".join(f"{k}={old_counts[k]}" for k in ALL_KEYS if old_counts[k]))
     print("New intended-feedback counts:")
     print("  " + " ".join(f"{k}={new_counts[k]}" for k in ALL_KEYS if new_counts[k]))
-    print("Fitted keys:")
-    print("  " + " ".join(f"{k}(n={model[k].count})" for k in ALL_KEYS if k in model))
+    source_counts = Counter(model_sources.get(key, SOURCE_GEOMETRY_FALLBACK) for key in ALL_KEYS)
+    print("Model sources:")
+    print(
+        "  "
+        + " ".join(
+            [
+                f"{SOURCE_FITTED_CURRENT}={source_counts[SOURCE_FITTED_CURRENT]}",
+                f"{SOURCE_PRIOR_MODEL}={source_counts[SOURCE_PRIOR_MODEL]}",
+                f"{SOURCE_GEOMETRY_FALLBACK}={source_counts[SOURCE_GEOMETRY_FALLBACK]}",
+            ]
+        )
+    )
+    print("Per-key models:")
+    print(
+        "  "
+        + " ".join(
+            f"{k}(trial_n={sample_counts.get(k, 0)}, source={model_sources.get(k, SOURCE_GEOMETRY_FALLBACK)}, model_n={model[k].count if k in model else 0})"
+            for k in ALL_KEYS
+            if sample_counts.get(k, 0) or k in model
+        )
+    )
 
 
 def main() -> int:
@@ -578,14 +624,14 @@ def main() -> int:
         return 1
 
     samples = training_samples(events)
-    model = fit_model(samples)
-    render_pdf(out_path, participant, events, samples, model)
+    model, model_sources, sample_counts = fit_model(samples)
+    render_pdf(out_path, participant, events, samples, model, model_sources)
 
     print(f"Input : {in_path}")
     print(f"Output: {out_path}")
     print(f"Events used: {len(events)}")
     print(f"Training samples: {len(samples)}")
-    print_summary(events, samples, model)
+    print_summary(events, samples, model, model_sources, sample_counts)
     return 0
 
 
