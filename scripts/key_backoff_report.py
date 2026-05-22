@@ -18,14 +18,20 @@ key even when the early trials do not.
 from __future__ import annotations
 
 import argparse
-import csv
-import string
-from collections import Counter, defaultdict
 from pathlib import Path
 from statistics import median
 
+import numpy as np
 
-LETTER_KEYS = set(string.ascii_lowercase)
+from numpy_analysis_utils import (
+    build_count_matrix,
+    build_trial_sequence,
+    load_filtered_rows,
+    sorted_labels,
+    write_csv,
+)
+
+
 SOURCE_TRIAL_SPECIFIC = "trial_specific"
 SOURCE_PRIOR_CUMULATIVE = "prior_cumulative"
 SOURCE_POOLED_GLOBAL = "pooled_global"
@@ -60,105 +66,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def safe_int(value: str | None) -> int | None:
-    try:
-        return int(value) if value not in (None, "") else None
-    except ValueError:
-        return None
-
-
-def safe_float(value: str | None) -> float | None:
-    try:
-        return float(value) if value not in (None, "") else None
-    except ValueError:
-        return None
-
-
-def canonical_label(raw: str, include_space: bool) -> str | None:
-    if raw == " ":
-        return "space" if include_space else None
-    key = raw.strip().lower()
-    if key in LETTER_KEYS:
-        return key
-    if include_space and key == "space":
-        return "space"
-    return None
-
-
-def load_rows(csv_path: Path, label_column: str, include_space: bool) -> list[dict]:
-    rows: list[dict] = []
-    with csv_path.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
-        for row in reader:
-            if row.get("session_mode") != "classic":
-                continue
-            if row.get("event_type") != "insert":
-                continue
-            if row.get("is_outlier") != "0":
-                continue
-
-            session_idx = safe_int(row.get("study_session_index"))
-            trial_index = safe_int(row.get("trial_index"))
-            tap_x = safe_float(row.get("tap_norm_x"))
-            tap_y = safe_float(row.get("tap_norm_y"))
-            timestamp_ms = safe_float(row.get("timestamp_ms"))
-            label = canonical_label(row.get(label_column, ""), include_space)
-
-            if session_idx is None or trial_index is None or tap_x is None or tap_y is None or label is None:
-                continue
-
-            rows.append(
-                {
-                    "study_session_index": session_idx,
-                    "trial_index": trial_index,
-                    "trial_id": (row.get("trial_id") or "").strip(),
-                    "timestamp_ms": timestamp_ms if timestamp_ms is not None else 0.0,
-                    "label": label,
-                    "tap_norm_x": tap_x,
-                    "tap_norm_y": tap_y,
-                }
-            )
-    return rows
-
-
-def build_trial_sequence(rows: list[dict]) -> tuple[list[int], dict[int, dict]]:
-    by_trial: dict[tuple[int, int], list[dict]] = defaultdict(list)
-    for row in rows:
-        key = (row["study_session_index"], row["trial_index"])
-        by_trial[key].append(row)
-
-    ordered_trials = sorted(
-        by_trial.items(),
-        key=lambda item: (
-            item[0][0],
-            item[0][1],
-            min(r["timestamp_ms"] for r in item[1]),
-        ),
-    )
-
-    sequence: list[int] = []
-    metadata: dict[int, dict] = {}
-    for ordinal, (trial_key, trial_rows) in enumerate(ordered_trials, start=1):
-        session_idx, trial_index = trial_key
-        trial_id = next((r["trial_id"] for r in trial_rows if r["trial_id"]), "")
-        sequence.append(ordinal)
-        metadata[ordinal] = {
-            "study_session_index": session_idx,
-            "trial_index": trial_index,
-            "trial_id": trial_id,
-        }
-        for row in trial_rows:
-            row["trial_ordinal"] = ordinal
-
-    return sequence, metadata
-
-
-def mean(values: list[float]) -> float | None:
-    if not values:
-        return None
-    return sum(values) / len(values)
-
-
 def classify_backoff_source(
     trial_taps: int,
     prior_taps: int,
@@ -174,13 +81,6 @@ def classify_backoff_source(
     return SOURCE_KEY_AREA
 
 
-def write_csv(path: Path, fieldnames: list[str], rows: list[dict]) -> None:
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-
-
 def run_report(
     csv_path: Path,
     label_column: str,
@@ -191,36 +91,43 @@ def run_report(
     if not csv_path.exists():
         raise FileNotFoundError(f"Input CSV not found: {csv_path}")
 
-    rows = load_rows(
+    rows = load_filtered_rows(
         csv_path=csv_path,
         label_column=label_column,
         include_space=include_space,
+        require_trial_index=True,
     )
     if not rows:
         raise ValueError("No usable rows after filtering. Check your CSV and options.")
 
-    trial_ids, metadata = build_trial_sequence(rows)
+    trial_ids, metadata = build_trial_sequence(rows, assign_field="trial_ordinal")
     if not trial_ids:
         raise ValueError("Need at least one usable trial to build the backoff report.")
 
-    labels = sorted({row["label"] for row in rows}, key=lambda key: (key == "space", key))
-    global_counts = Counter(row["label"] for row in rows)
-    trial_counters: dict[int, Counter[str]] = defaultdict(Counter)
-    for row in rows:
-        trial_counters[row["trial_ordinal"]][row["label"]] += 1
+    labels = sorted_labels(rows)
+    count_matrix = build_count_matrix(rows, labels, trial_ids, unit_field="trial_ordinal")
+    label_to_index = {label: index for index, label in enumerate(labels)}
+    global_counts = count_matrix.sum(axis=0, dtype=np.int32)
+    cumulative_counts = count_matrix.cumsum(axis=0, dtype=np.int32)
 
     detail_rows: list[dict] = []
     trial_summary_rows: list[dict] = []
-    cumulative_counts: Counter[str] = Counter()
 
-    for trial_ordinal in trial_ids:
-        trial_counts = trial_counters.get(trial_ordinal, Counter())
-        source_counts: Counter[str] = Counter()
+    for row_index, trial_ordinal in enumerate(trial_ids):
+        trial_counts = count_matrix[row_index]
+        prior_counts = cumulative_counts[row_index - 1] if row_index > 0 else np.zeros(len(labels), dtype=np.int32)
+        source_counts: dict[str, int] = {
+            SOURCE_TRIAL_SPECIFIC: 0,
+            SOURCE_PRIOR_CUMULATIVE: 0,
+            SOURCE_POOLED_GLOBAL: 0,
+            SOURCE_KEY_AREA: 0,
+        }
 
         for label in labels:
-            trial_taps = trial_counts.get(label, 0)
-            prior_taps = cumulative_counts.get(label, 0)
-            global_taps = global_counts.get(label, 0)
+            label_index = label_to_index[label]
+            trial_taps = int(trial_counts[label_index])
+            prior_taps = int(prior_counts[label_index])
+            global_taps = int(global_counts[label_index])
             cumulative_taps = prior_taps + trial_taps
             source = classify_backoff_source(
                 trial_taps=trial_taps,
@@ -244,7 +151,8 @@ def run_report(
                 }
             )
 
-        present_counts = [count for count in trial_counts.values() if count > 0]
+        present_counts = trial_counts[trial_counts > 0]
+        labels_present = int((trial_counts > 0).sum())
         trial_summary_rows.append(
             {
                 "trial_ordinal": trial_ordinal,
@@ -252,48 +160,48 @@ def run_report(
                 "trial_index": metadata[trial_ordinal]["trial_index"],
                 "trial_id": metadata[trial_ordinal]["trial_id"],
                 "labels_tracked": len(labels),
-                "labels_present_in_trial": sum(1 for count in trial_counts.values() if count > 0),
-                "labels_missing_in_trial": len(labels) - sum(1 for count in trial_counts.values() if count > 0),
+                "labels_present_in_trial": labels_present,
+                "labels_missing_in_trial": len(labels) - labels_present,
                 "trial_specific_keys": source_counts[SOURCE_TRIAL_SPECIFIC],
                 "prior_cumulative_keys": source_counts[SOURCE_PRIOR_CUMULATIVE],
                 "pooled_global_keys": source_counts[SOURCE_POOLED_GLOBAL],
                 "key_area_keys": source_counts[SOURCE_KEY_AREA],
-                "min_present_key_taps": min(present_counts) if present_counts else 0,
-                "mean_present_key_taps": f"{mean([float(v) for v in present_counts]) or 0.0:.4f}",
-                "max_present_key_taps": max(present_counts) if present_counts else 0,
+                "min_present_key_taps": int(present_counts.min()) if present_counts.size else 0,
+                "mean_present_key_taps": f"{float(present_counts.mean()) if present_counts.size else 0.0:.4f}",
+                "max_present_key_taps": int(present_counts.max()) if present_counts.size else 0,
             }
         )
 
-        cumulative_counts.update(trial_counts)
-
     key_summary_rows: list[dict] = []
     for label in labels:
-        per_trial_counts = [trial_counters[trial_id].get(label, 0) for trial_id in trial_ids]
-        present_pairs = [(trial_id, count) for trial_id, count in zip(trial_ids, per_trial_counts) if count > 0]
-        first_present = present_pairs[0][0] if present_pairs else ""
-        first_single_trial_mature = next((trial_id for trial_id, count in present_pairs if count >= min_samples), "")
+        label_index = label_to_index[label]
+        per_trial_counts = count_matrix[:, label_index]
+        positive_mask = per_trial_counts > 0
+        positive_trial_ids = [trial_ids[index] for index, present in enumerate(positive_mask) if present]
+        positive_counts = per_trial_counts[positive_mask]
 
-        running = 0
-        first_cumulative_mature = ""
-        for trial_id, count in zip(trial_ids, per_trial_counts):
-            running += count
-            if running >= min_samples:
-                first_cumulative_mature = trial_id
-                break
+        first_present = positive_trial_ids[0] if positive_trial_ids else ""
+        first_single_trial_mature = next(
+            (trial_ids[index] for index, count in enumerate(per_trial_counts) if count >= min_samples),
+            "",
+        )
 
-        positive_counts = [count for count in per_trial_counts if count > 0]
+        cumulative_for_label = cumulative_counts[:, label_index]
+        mature_indices = np.flatnonzero(cumulative_for_label >= min_samples)
+        first_cumulative_mature = trial_ids[int(mature_indices[0])] if mature_indices.size else ""
+
         key_summary_rows.append(
             {
                 "label": label,
-                "global_taps": global_counts[label],
-                "trials_present": len(positive_counts),
-                "min_present_trial_taps": min(positive_counts) if positive_counts else 0,
-                "mean_present_trial_taps": f"{mean([float(v) for v in positive_counts]) or 0.0:.4f}",
-                "max_present_trial_taps": max(positive_counts) if positive_counts else 0,
+                "global_taps": int(global_counts[label_index]),
+                "trials_present": int(positive_mask.sum()),
+                "min_present_trial_taps": int(positive_counts.min()) if positive_counts.size else 0,
+                "mean_present_trial_taps": f"{float(positive_counts.mean()) if positive_counts.size else 0.0:.4f}",
+                "max_present_trial_taps": int(positive_counts.max()) if positive_counts.size else 0,
                 "first_trial_present": first_present,
                 "first_trial_single_trial_mature": first_single_trial_mature,
                 "first_trial_cumulative_mature": first_cumulative_mature,
-                "global_status": SOURCE_POOLED_GLOBAL if global_counts[label] >= min_samples else SOURCE_KEY_AREA,
+                "global_status": SOURCE_POOLED_GLOBAL if int(global_counts[label_index]) >= min_samples else SOURCE_KEY_AREA,
             }
         )
 
@@ -356,20 +264,20 @@ def run_report(
         rows=key_summary_rows,
     )
 
-    positive_global_counts = [count for count in global_counts.values() if count > 0]
-    never_global = sorted(label for label in labels if global_counts[label] < min_samples)
+    positive_global_counts = global_counts[global_counts > 0]
+    never_global = sorted(label for label in labels if int(global_counts[label_to_index[label]]) < min_samples)
     trials_with_key_area = sum(1 for row in trial_summary_rows if int(row["key_area_keys"]) > 0)
 
     print(f"Input CSV: {csv_path}")
     print(f"Usable rows: {len(rows)}")
     print(f"Trials found: {len(trial_ids)}")
     print(f"Labels tracked: {len(labels)}")
-    if positive_global_counts:
+    if positive_global_counts.size:
         print(
             "Global per-key taps:"
-            f" min={min(positive_global_counts)}"
-            f" median={median(positive_global_counts)}"
-            f" max={max(positive_global_counts)}"
+            f" min={int(positive_global_counts.min())}"
+            f" median={median(int(value) for value in positive_global_counts.tolist())}"
+            f" max={int(positive_global_counts.max())}"
         )
     print(f"Trials requiring raw key-area fallback: {trials_with_key_area}/{len(trial_ids)}")
     if never_global:

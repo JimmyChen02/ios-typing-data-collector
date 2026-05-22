@@ -190,11 +190,15 @@ python3 scripts/session_overlap_visualization.py /Users/jimmy2/Downloads/keystro
 Useful variants:
 
 ```sh
-# Default review configuration.
+# Default review configuration: writes both SVG and PDF boundary exports.
 python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --output-dir <output_dir>
 
 # Override the raster smoothness if needed.
 python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --output-dir <output_dir> --raster-step 3
+
+# Force one format if needed.
+python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --output-dir <output_dir> --format svg
+python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --output-dir <output_dir> --format pdf
 
 # Synthetic sanity-check data.
 python3 scripts/session_overlap_visualization.py --demo --output-dir /tmp/session-boundary-demo
@@ -203,5 +207,9 @@ python3 scripts/session_overlap_visualization.py --demo --output-dir /tmp/sessio
 Primary outputs:
 
 - `session_gaussian_boundaries_XX.svg`: one full decision-surface keyboard image per session
+- `final_gaussian_ground_truth_boundary.svg`: final classic-only smooth boundary snapshot
+- `session_gaussian_boundaries_XX.pdf`: one PDF per session snapshot
+- `session_gaussian_boundaries_all_sessions.pdf`: all session snapshots combined into one PDF
+- `final_gaussian_ground_truth_boundary.pdf`: final classic-only PDF snapshot
 - `session_gaussian_boundaries_summary.csv`: per-session counts of current-fit, prior-model, and geometry-fallback keys
 - `session_gaussian_boundaries_by_key.csv`: per-session, per-key backoff/source details

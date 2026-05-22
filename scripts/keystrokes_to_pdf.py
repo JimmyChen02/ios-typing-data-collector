@@ -32,7 +32,7 @@ from pathlib import Path
 from datetime import datetime
 
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
+import numpy as np
 from matplotlib.patches import Rectangle, Circle, FancyBboxPatch
 from matplotlib.colors import hsv_to_rgb
 
@@ -67,6 +67,13 @@ def key_color(key: str):
     hue = (idx * 0.618033988749895) % 1.0
     sat = 0.82 if idx % 2 == 0 else 0.65
     return hsv_to_rgb([hue, sat, 0.88])
+
+
+def expected_to_color_key(raw: str, fallback: str) -> str:
+    if raw == " ":
+        return "space"
+    key = raw.strip().lower()
+    return key if key in ALL_KEYS else fallback
 
 
 def load_clean_rows(csv_path: Path):
@@ -194,34 +201,35 @@ def render_pdf(rows, participant: str, session_id: str, out_path: Path):
                 va="bottom", ha="left")
 
     # ── Tap dots (batched via scatter) ──────────────────────────────────
-    halo_x, halo_y = [], []
-    dot_x, dot_y, dot_colors = [], [], []
+    frame_lookup = {key: np.array([frame[0], frame[1], frame[2], frame[3]], dtype=float) for key, frame in frames.items()}
+    valid_rows = [
+        row for row in rows
+        if row.get("key_label", "") in frame_lookup
+        and safe_float(row.get("key_width")) > 0
+        and safe_float(row.get("key_height")) > 0
+    ]
+    if not valid_rows:
+        fig.savefig(out_path, format="pdf")
+        plt.close(fig)
+        return
+
+    key_frames = np.array([frame_lookup[row["key_label"]] for row in valid_rows], dtype=float)
+    tap_x = np.array([safe_float(row.get("tap_local_x")) for row in valid_rows], dtype=float)
+    tap_y = np.array([safe_float(row.get("tap_local_y")) for row in valid_rows], dtype=float)
+    key_width = np.array([safe_float(row.get("key_width")) for row in valid_rows], dtype=float)
+    key_height = np.array([safe_float(row.get("key_height")) for row in valid_rows], dtype=float)
+    norm_x = np.divide(tap_x, key_width, out=np.full(len(valid_rows), 0.5, dtype=float), where=key_width > 0)
+    norm_y = np.divide(tap_y, key_height, out=np.full(len(valid_rows), 0.5, dtype=float), where=key_height > 0)
+    dot_x = key_frames[:, 0] + norm_x * key_frames[:, 2]
+    dot_y = key_frames[:, 1] + norm_y * key_frames[:, 3]
+    color_keys = [expected_to_color_key(row.get("expected_char", ""), row.get("key_label", "")) for row in valid_rows]
+    dot_colors = [key_color(color_key) for color_key in color_keys]
+
+    halo_x = dot_x.tolist()
+    halo_y = dot_y.tolist()
     labels = []
 
-    for r in rows:
-        key = r.get("key_label", "")
-        frame = frames.get(key)
-        if not frame:
-            continue
-        tx = safe_float(r.get("tap_local_x"))
-        ty = safe_float(r.get("tap_local_y"))
-        kw_v = safe_float(r.get("key_width"))
-        kh_v = safe_float(r.get("key_height"))
-        if kw_v <= 0 or kh_v <= 0:
-            continue
-        nx = tx / kw_v
-        ny = ty / kh_v
-        fx, fy, fw, fh = frame
-        px = fx + nx * fw
-        py = fy + ny * fh
-
-        expected = r.get("expected_char", "").strip()
-        color_key = expected if expected in ALL_KEYS else key
-
-        halo_x.append(px); halo_y.append(py)
-        dot_x.append(px);  dot_y.append(py)
-        dot_colors.append(key_color(color_key))
-
+    for px, py, color_key in zip(dot_x.tolist(), dot_y.tolist(), color_keys):
         if len(color_key) == 1:
             labels.append((px, py, color_key))
 
@@ -230,7 +238,7 @@ def render_pdf(rows, participant: str, session_id: str, out_path: Path):
 
     ax.scatter(halo_x, halo_y, s=halo_s, c=[(1, 1, 1, 0.8)],
                edgecolors="none", zorder=3)
-    ax.scatter(dot_x, dot_y, s=dot_s,
+    ax.scatter(dot_x.tolist(), dot_y.tolist(), s=dot_s,
                c=[(*c, 0.95) for c in dot_colors],
                edgecolors="none", zorder=4)
     for px, py, lbl in labels:

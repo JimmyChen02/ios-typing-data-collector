@@ -7,15 +7,20 @@ Fit and render the same intended-key Gaussian keyboard model used by the app.
 Usage:
     python scripts/gaussian_keyboard_pdf.py <keystrokes.csv> [output.pdf]
 
-If output is omitted, writes <stem>_gaussian.pdf next to the input. 
+If output is omitted, writes <stem>_gaussian.pdf next to the input.
+Pass an `.svg` output path to export the old-style smooth SVG boundary view.
 """
 
 from __future__ import annotations
 
+import base64
+import colorsys
 import csv
+import io
 import math
 import os
 import sys
+import tempfile
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -25,13 +30,13 @@ os.environ.setdefault("MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / "matplot
 os.environ.setdefault("XDG_CACHE_HOME", str(Path(tempfile.gettempdir()) / "xdg-cache"))
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from PIL import Image
 from matplotlib.backends.backend_pdf import PdfPages
-from matplotlib.colors import hsv_to_rgb
-from matplotlib.patches import Ellipse, FancyBboxPatch, Rectangle
-from matplotlib.transforms import Affine2D
+from matplotlib.patches import Circle, FancyBboxPatch, Rectangle
 
 
 PAGE_W = 612
@@ -42,11 +47,26 @@ PDF_SIDE_PAD = 3.0
 PDF_KEY_GAP = 6.0
 PDF_ROW_GAP = 13.0
 PDF_TOP_PAD = 11.0
-HEADER_BOTTOM = 56.0
+HEADER_BOTTOM = 84.0
 
 LIVE_SIDE_PAD = 5.0
 LIVE_KEY_GAP = 6.0
 LIVE_ROW_GAP = 11.0
+
+SVG_WIDTH = 980
+SVG_SIDE_PAD = 16.0
+SVG_TOP_PAD = 18.0
+SVG_KEY_GAP = 10.0
+SVG_ROW_GAP = 22.0
+SVG_KEY_H = 76.0
+SVG_BOTTOM_PAD = 18.0
+SVG_PANEL_MARGIN = 10.0
+SVG_PANEL_RADIUS = 20.0
+SVG_INNER_MARGIN_X = 14.0
+SVG_INNER_MARGIN_Y = 14.0
+SVG_HEIGHT = int(
+    SVG_TOP_PAD + 4.0 * SVG_KEY_H + 3.0 * SVG_ROW_GAP + SVG_BOTTOM_PAD + 2.0 * (SVG_PANEL_MARGIN + SVG_INNER_MARGIN_Y)
+)
 
 MIN_SAMPLES = 5
 RIDGE_FRAC = 0.05
@@ -63,6 +83,68 @@ VALID_KEYS = set(ALL_KEYS)
 SOURCE_FITTED_CURRENT = "fitted_current"
 SOURCE_PRIOR_MODEL = "prior_model"
 SOURCE_GEOMETRY_FALLBACK = "geometry_fallback"
+
+def rgb_to_hex(rgb: tuple[float, float, float]) -> str:
+    return "#" + "".join(f"{max(0, min(255, round(channel * 255))):02X}" for channel in rgb)
+
+
+def hex_to_rgb_unit(hex_color: str) -> tuple[float, float, float]:
+    value = hex_color.lstrip("#")
+    return (
+        int(value[0:2], 16) / 255.0,
+        int(value[2:4], 16) / 255.0,
+        int(value[4:6], 16) / 255.0,
+    )
+
+
+def color_distance(a: tuple[float, float, float], b: tuple[float, float, float]) -> float:
+    dr = a[0] - b[0]
+    dg = a[1] - b[1]
+    db = a[2] - b[2]
+    lum_a = 0.2126 * a[0] + 0.7152 * a[1] + 0.0722 * a[2]
+    lum_b = 0.2126 * b[0] + 0.7152 * b[1] + 0.0722 * b[2]
+    return 2.0 * dr * dr + 3.0 * dg * dg + 2.0 * db * db + 0.6 * (lum_a - lum_b) ** 2
+
+
+def build_distinct_semantic_colors() -> dict[str, str]:
+    seed_hex = [
+        "#D60000",
+        "#005FDD",
+        "#00A651",
+        "#FFB000",
+        "#7A00CC",
+        "#00C8C8",
+        "#FF1493",
+        "#7A4A00",
+        "#39FF14",
+        "#111111",
+    ]
+    selected = [hex_to_rgb_unit(value) for value in seed_hex]
+
+    candidates: list[tuple[float, float, float]] = []
+    for hue in range(0, 360, 5):
+        for saturation in (0.98, 0.86, 0.74):
+            for value in (0.98, 0.86, 0.72):
+                rgb = colorsys.hsv_to_rgb(hue / 360.0, saturation, value)
+                if max(rgb) - min(rgb) < 0.28:
+                    continue
+                candidates.append(rgb)
+
+    while len(selected) < len(ALL_KEYS):
+        best_candidate = max(
+            candidates,
+            key=lambda candidate: min(color_distance(candidate, current) for current in selected),
+        )
+        selected.append(best_candidate)
+        candidates = [candidate for candidate in candidates if candidate != best_candidate]
+
+    return {
+        key: rgb_to_hex(color)
+        for key, color in zip(ALL_KEYS, selected[: len(ALL_KEYS)])
+    }
+
+
+SEMANTIC_COLORS = build_distinct_semantic_colors()
 
 
 @dataclass
@@ -140,6 +222,21 @@ class PdfPage:
     model_sources: dict[str, str]
 
 
+@dataclass(frozen=True)
+class RasterKeyParams:
+    center_x: float
+    center_y: float
+    width: float
+    height: float
+    anchor_radius_sq: float
+    mu_x: float
+    mu_y: float
+    pxx: float
+    pyy: float
+    pxy: float
+    log_det: float
+
+
 def safe_float(value: str | None, default: float = 0.0) -> float:
     try:
         return float(value)
@@ -154,12 +251,33 @@ def safe_int(value: str | None, default: int = 0) -> int:
         return default
 
 
+def svg_escape(text: str) -> str:
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def hex_to_rgba(hex_color: str, alpha: int) -> tuple[int, int, int, int]:
+    value = hex_color.lstrip("#")
+    return (
+        int(value[0:2], 16),
+        int(value[2:4], 16),
+        int(value[4:6], 16),
+        alpha,
+    )
+
+
 def key_color(key: str, alpha: float = 1.0) -> tuple[float, float, float, float]:
-    idx = ALL_KEYS.index(key) if key in ALL_KEYS else 0
-    hue = (idx * 0.618033988749895) % 1.0
-    sat = 0.82 if idx % 2 == 0 else 0.65
-    rgb = hsv_to_rgb([hue, sat, 0.88])
-    return (float(rgb[0]), float(rgb[1]), float(rgb[2]), alpha)
+    value = SEMANTIC_COLORS.get(key, "#D1D5DB").lstrip("#")
+    rgb = (
+        int(value[0:2], 16) / 255.0,
+        int(value[2:4], 16) / 255.0,
+        int(value[4:6], 16) / 255.0,
+    )
+    return (rgb[0], rgb[1], rgb[2], alpha)
 
 
 def key_for_expected(raw: str) -> str | None:
@@ -170,12 +288,6 @@ def key_for_expected(raw: str) -> str | None:
 
 
 def event_chars(row: dict[str, str], event_type: str, key_label: str) -> tuple[str, str]:
-    """Mirror the app's event fields, with compatibility for older CSVs.
-
-    Swift records `actualChar` for inserts/replaces and `correctedChar` as
-    the character erased by a delete. The delete key label is the literal
-    string "delete", so it must never be used as `correctedChar`.
-    """
     actual = row.get("actual_char", "")
     corrected = row.get("corrected_char", "")
 
@@ -195,8 +307,8 @@ def event_chars(row: dict[str, str], event_type: str, key_label: str) -> tuple[s
 
 
 def read_events(csv_path: Path) -> tuple[list[Event], str]:
-    with open(csv_path, newline="", encoding="utf-8") as fh:
-        rows = list(csv.DictReader(fh))
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
 
     events: list[Event] = []
     for row in rows:
@@ -216,22 +328,24 @@ def read_events(csv_path: Path) -> tuple[list[Event], str]:
             continue
 
         actual_char, corrected_char = event_chars(row, event_type, key_label)
-        events.append(Event(
-            event_type=event_type,
-            key_label=key_label,
-            expected_char=row.get("expected_char", ""),
-            actual_char=actual_char,
-            corrected_char=corrected_char,
-            is_correct=row.get("is_correct", "") in {"1", "true", "True"},
-            tap_local_x=safe_float(row.get("tap_local_x")),
-            tap_local_y=safe_float(row.get("tap_local_y")),
-            key_width=key_width,
-            key_height=key_height,
-            session_mode=(row.get("session_mode") or "").strip().lower(),
-            study_session_index=max(0, safe_int(row.get("study_session_index"), 1) - 1),
-            trial_index=safe_int(row.get("trial_index"), 0),
-            timestamp_ms=safe_int(row.get("timestamp_ms"), 0),
-        ))
+        events.append(
+            Event(
+                event_type=event_type,
+                key_label=key_label,
+                expected_char=row.get("expected_char", ""),
+                actual_char=actual_char,
+                corrected_char=corrected_char,
+                is_correct=row.get("is_correct", "") in {"1", "true", "True"},
+                tap_local_x=safe_float(row.get("tap_local_x")),
+                tap_local_y=safe_float(row.get("tap_local_y")),
+                key_width=key_width,
+                key_height=key_height,
+                session_mode=(row.get("session_mode") or "").strip().lower(),
+                study_session_index=max(0, safe_int(row.get("study_session_index"), 1) - 1),
+                trial_index=safe_int(row.get("trial_index"), 0),
+                timestamp_ms=safe_int(row.get("timestamp_ms"), 0),
+            )
+        )
 
     participant = ""
     if rows:
@@ -250,47 +364,51 @@ def inferred_letter_width(event: Event) -> float:
 
 
 def live_frame(key: str, event: Event) -> Rect | None:
-    kw = inferred_letter_width(event)
+    key_w = inferred_letter_width(event)
     key_h = event.key_height
-    if kw <= 0 or key_h <= 0:
+    if key_w <= 0 or key_h <= 0:
         return None
 
-    keyboard_w = 10.0 * kw + 2.0 * LIVE_SIDE_PAD + 9.0 * LIVE_KEY_GAP
-    sp = (keyboard_w - 2.0 * LIVE_SIDE_PAD - 7.0 * kw - 8.0 * LIVE_KEY_GAP) / 2.0
+    keyboard_w = 10.0 * key_w + 2.0 * LIVE_SIDE_PAD + 9.0 * LIVE_KEY_GAP
+    special_w = (keyboard_w - 2.0 * LIVE_SIDE_PAD - 7.0 * key_w - 8.0 * LIVE_KEY_GAP) / 2.0
 
     if key in ROW0:
-        col = ROW0.index(key)
-        return Rect(LIVE_SIDE_PAD + col * (kw + LIVE_KEY_GAP), 0.0, kw, key_h)
+        column = ROW0.index(key)
+        return Rect(LIVE_SIDE_PAD + column * (key_w + LIVE_KEY_GAP), 0.0, key_w, key_h)
     if key in ROW1:
-        col = ROW1.index(key)
-        row_w = len(ROW1) * kw + (len(ROW1) - 1) * LIVE_KEY_GAP
-        return Rect((keyboard_w - row_w) / 2.0 + col * (kw + LIVE_KEY_GAP),
-                    key_h + LIVE_ROW_GAP, kw, key_h)
+        column = ROW1.index(key)
+        row_w = len(ROW1) * key_w + (len(ROW1) - 1) * LIVE_KEY_GAP
+        return Rect((keyboard_w - row_w) / 2.0 + column * (key_w + LIVE_KEY_GAP), key_h + LIVE_ROW_GAP, key_w, key_h)
     if key in ROW2:
-        col = ROW2.index(key)
-        return Rect(LIVE_SIDE_PAD + sp + LIVE_KEY_GAP + col * (kw + LIVE_KEY_GAP),
-                    2.0 * (key_h + LIVE_ROW_GAP), kw, key_h)
+        column = ROW2.index(key)
+        return Rect(
+            LIVE_SIDE_PAD + special_w + LIVE_KEY_GAP + column * (key_w + LIVE_KEY_GAP),
+            2.0 * (key_h + LIVE_ROW_GAP),
+            key_w,
+            key_h,
+        )
     if key == "delete":
-        return Rect(keyboard_w - LIVE_SIDE_PAD - sp, 2.0 * (key_h + LIVE_ROW_GAP), sp, key_h)
+        return Rect(keyboard_w - LIVE_SIDE_PAD - special_w, 2.0 * (key_h + LIVE_ROW_GAP), special_w, key_h)
     if key == "space":
-        return Rect(LIVE_SIDE_PAD + sp + LIVE_KEY_GAP, 3.0 * (key_h + LIVE_ROW_GAP),
-                    keyboard_w - 2.0 * LIVE_SIDE_PAD - 2.0 * sp - 2.0 * LIVE_KEY_GAP, key_h)
+        return Rect(
+            LIVE_SIDE_PAD + special_w + LIVE_KEY_GAP,
+            3.0 * (key_h + LIVE_ROW_GAP),
+            keyboard_w - 2.0 * LIVE_SIDE_PAD - 2.0 * special_w - 2.0 * LIVE_KEY_GAP,
+            key_h,
+        )
     return None
 
 
 def deleted_insert_indices(events: list[Event]) -> set[int]:
     stack: list[int] = []
     deleted: set[int] = set()
-    for idx, event in enumerate(events):
+    for index, event in enumerate(events):
         if event.event_type in {"insert", "replace"} and event.actual_char:
-            stack.append(idx)
+            stack.append(index)
         elif event.event_type == "delete" and stack:
-            removed_idx = stack.pop()
-            # Empty corrected_char means an older export did not preserve the
-            # erased character; treat the backspace as feedback for the last
-            # insert. Otherwise require the erased character to match.
-            if not event.corrected_char or event.corrected_char == events[removed_idx].actual_char:
-                deleted.add(removed_idx)
+            removed_index = stack.pop()
+            if not event.corrected_char or event.corrected_char == events[removed_index].actual_char:
+                deleted.add(removed_index)
     return deleted
 
 
@@ -323,7 +441,7 @@ def sample_for(event: Event, target_key: str) -> TrainingSample | None:
 def training_samples(events: list[Event]) -> list[TrainingSample]:
     deleted = deleted_insert_indices(events)
     samples: list[TrainingSample] = []
-    for idx, event in enumerate(events):
+    for index, event in enumerate(events):
         if event.event_type == "delete":
             if event.key_label == "delete":
                 sample = sample_for(event, "delete")
@@ -337,7 +455,7 @@ def training_samples(events: list[Event]) -> list[TrainingSample]:
         intended = key_for_expected(event.expected_char)
         if intended:
             sample = sample_for(event, intended)
-        elif idx in deleted:
+        elif index in deleted:
             continue
         elif event.is_correct:
             sample = sample_for(event, event.key_label)
@@ -350,24 +468,21 @@ def training_samples(events: list[Event]) -> list[TrainingSample]:
 
 
 def fit_single(samples: list[TrainingSample]) -> Gaussian2D | None:
-    n = len(samples)
-    if n < MIN_SAMPLES:
+    count = len(samples)
+    if count < MIN_SAMPLES:
         return None
 
-    ox = [s.offset_x for s in samples]
-    oy = [s.offset_y for s in samples]
-    mean_kw = sum(s.key_width for s in samples) / n
-    mu_x = sum(ox) / n
-    mu_y = sum(oy) / n
+    offsets = np.array([(sample.offset_x, sample.offset_y) for sample in samples], dtype=np.float64)
+    key_widths = np.array([sample.key_width for sample in samples], dtype=np.float64)
+    mu_x, mu_y = offsets.mean(axis=0)
+    centered = offsets - np.array([mu_x, mu_y], dtype=np.float64)
+    denom = max(1, count - 1)
+    cov = (centered.T @ centered) / denom
 
-    denom = max(1, n - 1)
-    sxx = sum((x - mu_x) ** 2 for x in ox) / denom
-    syy = sum((y - mu_y) ** 2 for y in oy) / denom
-    sxy = sum((ox[i] - mu_x) * (oy[i] - mu_y) for i in range(n)) / denom
-
-    ridge = (RIDGE_FRAC * mean_kw) ** 2
-    sxx += ridge
-    syy += ridge
+    ridge = (RIDGE_FRAC * float(key_widths.mean())) ** 2
+    sxx = float(cov[0, 0] + ridge)
+    syy = float(cov[1, 1] + ridge)
+    sxy = float(cov[0, 1])
 
     det = sxx * syy - sxy * sxy
     if det <= 0:
@@ -375,8 +490,8 @@ def fit_single(samples: list[TrainingSample]) -> Gaussian2D | None:
 
     inv = 1.0 / det
     return Gaussian2D(
-        mu_x=mu_x,
-        mu_y=mu_y,
+        mu_x=float(mu_x),
+        mu_y=float(mu_y),
         sxx=sxx,
         syy=syy,
         sxy=sxy,
@@ -384,7 +499,7 @@ def fit_single(samples: list[TrainingSample]) -> Gaussian2D | None:
         pyy=sxx * inv,
         pxy=-sxy * inv,
         log_det=math.log(det),
-        count=n,
+        count=count,
     )
 
 
@@ -395,6 +510,7 @@ def fit_model(
     grouped: dict[str, list[TrainingSample]] = defaultdict(list)
     for sample in samples:
         grouped[sample.target_key].append(sample)
+
     model: dict[str, Gaussian2D] = {}
     model_sources: dict[str, str] = {}
     sample_counts: dict[str, int] = {}
@@ -402,7 +518,8 @@ def fit_model(
     for key in ALL_KEYS:
         key_samples = grouped.get(key, [])
         sample_counts[key] = len(key_samples)
-        if (gaussian := fit_single(key_samples)) is not None:
+        gaussian = fit_single(key_samples)
+        if gaussian is not None:
             model[key] = gaussian
             model_sources[key] = SOURCE_FITTED_CURRENT
         elif prior_model and key in prior_model:
@@ -414,15 +531,15 @@ def fit_model(
 
 def fallback_gaussian(frame: Rect) -> Gaussian2D:
     sigma = min(frame.w, frame.h) / 3.0
-    s = sigma * sigma
-    return Gaussian2D(0.0, 0.0, s, s, 0.0, 1.0 / s, 1.0 / s, 0.0, math.log(s * s), 0)
+    variance = sigma * sigma
+    return Gaussian2D(0.0, 0.0, variance, variance, 0.0, 1.0 / variance, 1.0 / variance, 0.0, math.log(variance * variance), 0)
 
 
-def spatial_prior(dx: float, dy: float, kw: float, kh: float) -> float:
-    ox = max(0.0, abs(dx) - kw / 2.0)
-    oy = max(0.0, abs(dy) - kh / 2.0)
-    sx = SPATIAL_PRIOR_FRAC * kw
-    sy = SPATIAL_PRIOR_FRAC * kh
+def spatial_prior(dx: float, dy: float, key_w: float, key_h: float) -> float:
+    ox = max(0.0, abs(dx) - key_w / 2.0)
+    oy = max(0.0, abs(dy) - key_h / 2.0)
+    sx = SPATIAL_PRIOR_FRAC * key_w
+    sy = SPATIAL_PRIOR_FRAC * key_h
     return -0.5 * ((ox / sx) ** 2 + (oy / sy) ** 2)
 
 
@@ -448,46 +565,347 @@ def winner(px: float, py: float, frames: dict[str, Rect], model: dict[str, Gauss
 
 
 def build_pdf_frames(canvas_left: float, canvas_top: float, canvas_w: float) -> dict[str, Rect]:
-    kw = (canvas_w - 2.0 * PDF_SIDE_PAD - 9.0 * PDF_KEY_GAP) / 10.0
-    sp = (canvas_w - 2.0 * PDF_SIDE_PAD - 7.0 * kw - 8.0 * PDF_KEY_GAP) / 2.0
-    key_h = round(kw * 1.35)
+    key_w = (canvas_w - 2.0 * PDF_SIDE_PAD - 9.0 * PDF_KEY_GAP) / 10.0
+    special_w = (canvas_w - 2.0 * PDF_SIDE_PAD - 7.0 * key_w - 8.0 * PDF_KEY_GAP) / 2.0
+    key_h = round(key_w * 1.35)
     frames: dict[str, Rect] = {}
 
     y0 = canvas_top + PDF_TOP_PAD
-    for i, key in enumerate(ROW0):
-        frames[key] = Rect(canvas_left + PDF_SIDE_PAD + i * (kw + PDF_KEY_GAP), y0, kw, key_h)
+    for index, key in enumerate(ROW0):
+        frames[key] = Rect(canvas_left + PDF_SIDE_PAD + index * (key_w + PDF_KEY_GAP), y0, key_w, key_h)
 
     y1 = y0 + key_h + PDF_ROW_GAP
-    row1_start = canvas_left + (canvas_w - 9.0 * kw - 8.0 * PDF_KEY_GAP) / 2.0
-    for i, key in enumerate(ROW1):
-        frames[key] = Rect(row1_start + i * (kw + PDF_KEY_GAP), y1, kw, key_h)
+    row1_start = canvas_left + (canvas_w - 9.0 * key_w - 8.0 * PDF_KEY_GAP) / 2.0
+    for index, key in enumerate(ROW1):
+        frames[key] = Rect(row1_start + index * (key_w + PDF_KEY_GAP), y1, key_w, key_h)
 
     y2 = y1 + key_h + PDF_ROW_GAP
-    row2_start = canvas_left + PDF_SIDE_PAD + sp + PDF_KEY_GAP
-    for i, key in enumerate(ROW2):
-        frames[key] = Rect(row2_start + i * (kw + PDF_KEY_GAP), y2, kw, key_h)
+    row2_start = canvas_left + PDF_SIDE_PAD + special_w + PDF_KEY_GAP
+    for index, key in enumerate(ROW2):
+        frames[key] = Rect(row2_start + index * (key_w + PDF_KEY_GAP), y2, key_w, key_h)
 
-    frames["delete"] = Rect(canvas_left + canvas_w - PDF_SIDE_PAD - sp, y2, sp, key_h)
+    frames["delete"] = Rect(canvas_left + canvas_w - PDF_SIDE_PAD - special_w, y2, special_w, key_h)
     y3 = y2 + key_h + PDF_ROW_GAP
-    frames["space"] = Rect(canvas_left + PDF_SIDE_PAD + sp + PDF_KEY_GAP, y3,
-                           canvas_w - 2.0 * PDF_SIDE_PAD - 2.0 * sp - 2.0 * PDF_KEY_GAP, key_h)
+    frames["space"] = Rect(
+        canvas_left + PDF_SIDE_PAD + special_w + PDF_KEY_GAP,
+        y3,
+        canvas_w - 2.0 * PDF_SIDE_PAD - 2.0 * special_w - 2.0 * PDF_KEY_GAP,
+        key_h,
+    )
     return frames
 
 
-def ellipse_params(gaussian: Gaussian2D, frame: Rect) -> tuple[float, float, float, float, float]:
-    cx = frame.mid_x + gaussian.mu_x
-    cy = frame.mid_y + gaussian.mu_y
-    tr = gaussian.sxx + gaussian.syy
-    det = gaussian.sxx * gaussian.syy - gaussian.sxy * gaussian.sxy
-    disc = max(0.0, (tr * tr) / 4.0 - det)
-    root = math.sqrt(disc)
-    l1 = tr / 2.0 + root
-    l2 = max(0.0, tr / 2.0 - root)
-    if abs(gaussian.sxy) > 1e-12:
-        angle = math.atan2(l1 - gaussian.sxx, gaussian.sxy)
+def frame_bounds(frames: dict[str, Rect]) -> Rect:
+    min_x = min(frame.x for frame in frames.values())
+    min_y = min(frame.y for frame in frames.values())
+    max_x = max(frame.x + frame.w for frame in frames.values())
+    max_y = max(frame.y + frame.h for frame in frames.values())
+    return Rect(min_x, min_y, max_x - min_x, max_y - min_y)
+
+
+def offset_frames(frames: dict[str, Rect], dx: float, dy: float) -> dict[str, Rect]:
+    return {
+        key: Rect(frame.x + dx, frame.y + dy, frame.w, frame.h)
+        for key, frame in frames.items()
+    }
+
+
+def build_svg_frames() -> tuple[Rect, dict[str, Rect]]:
+    panel_rect = Rect(
+        SVG_PANEL_MARGIN,
+        SVG_PANEL_MARGIN,
+        SVG_WIDTH - 2.0 * SVG_PANEL_MARGIN,
+        SVG_HEIGHT - 2.0 * SVG_PANEL_MARGIN,
+    )
+    inner_rect = Rect(
+        panel_rect.x + SVG_INNER_MARGIN_X,
+        panel_rect.y + SVG_INNER_MARGIN_Y,
+        panel_rect.w - 2.0 * SVG_INNER_MARGIN_X,
+        panel_rect.h - 2.0 * SVG_INNER_MARGIN_Y,
+    )
+    left = inner_rect.x
+    top = inner_rect.y
+    usable_width = inner_rect.w
+    key_w = (usable_width - 2.0 * SVG_SIDE_PAD - 9.0 * SVG_KEY_GAP) / 10.0
+    special_w = (usable_width - 2.0 * SVG_SIDE_PAD - 7.0 * key_w - 8.0 * SVG_KEY_GAP) / 2.0
+    frames: dict[str, Rect] = {}
+
+    y0 = top + SVG_TOP_PAD
+    for index, key in enumerate(ROW0):
+        frames[key] = Rect(left + SVG_SIDE_PAD + index * (key_w + SVG_KEY_GAP), y0, key_w, SVG_KEY_H)
+
+    y1 = y0 + SVG_KEY_H + SVG_ROW_GAP
+    row1_start = left + (usable_width - 9.0 * key_w - 8.0 * SVG_KEY_GAP) / 2.0
+    for index, key in enumerate(ROW1):
+        frames[key] = Rect(row1_start + index * (key_w + SVG_KEY_GAP), y1, key_w, SVG_KEY_H)
+
+    y2 = y1 + SVG_KEY_H + SVG_ROW_GAP
+    row2_start = left + SVG_SIDE_PAD + special_w + SVG_KEY_GAP
+    for index, key in enumerate(ROW2):
+        frames[key] = Rect(row2_start + index * (key_w + SVG_KEY_GAP), y2, key_w, SVG_KEY_H)
+
+    frames["delete"] = Rect(left + usable_width - SVG_SIDE_PAD - special_w, y2, special_w, SVG_KEY_H)
+    y3 = y2 + SVG_KEY_H + SVG_ROW_GAP
+    frames["space"] = Rect(
+        left + SVG_SIDE_PAD + special_w + SVG_KEY_GAP,
+        y3,
+        usable_width - 2.0 * SVG_SIDE_PAD - 2.0 * special_w - 2.0 * SVG_KEY_GAP,
+        SVG_KEY_H,
+    )
+    bounds = frame_bounds(frames)
+    dx = inner_rect.mid_x - bounds.mid_x
+    dy = inner_rect.mid_y - bounds.mid_y
+    return panel_rect, offset_frames(frames, dx, dy)
+
+
+def raster_key_params(frames: dict[str, Rect], model: dict[str, Gaussian2D]) -> list[RasterKeyParams]:
+    params: list[RasterKeyParams] = []
+    for key in ALL_KEYS:
+        frame = frames[key]
+        gaussian = model.get(key) or fallback_gaussian(frame)
+        params.append(
+            RasterKeyParams(
+                center_x=frame.mid_x,
+                center_y=frame.mid_y,
+                width=frame.w,
+                height=frame.h,
+                anchor_radius_sq=(ANCHOR_FRAC * min(frame.w, frame.h) / 2.0) ** 2,
+                mu_x=gaussian.mu_x,
+                mu_y=gaussian.mu_y,
+                pxx=gaussian.pxx,
+                pyy=gaussian.pyy,
+                pxy=gaussian.pxy,
+                log_det=gaussian.log_det,
+            )
+        )
+    return params
+
+
+def winner_indices_grid(
+    sample_x: np.ndarray,
+    sample_y: np.ndarray,
+    params: list[RasterKeyParams],
+) -> np.ndarray:
+    x_grid, y_grid = np.meshgrid(sample_x, sample_y)
+    best_score = np.full(x_grid.shape, -np.inf, dtype=np.float32)
+    best_index = np.full(x_grid.shape, -1, dtype=np.int16)
+    anchor_index = np.full(x_grid.shape, -1, dtype=np.int16)
+    unassigned_anchor = np.ones(x_grid.shape, dtype=bool)
+
+    for index, param in enumerate(params):
+        dx = x_grid - param.center_x
+        dy = y_grid - param.center_y
+
+        anchor_mask = unassigned_anchor & ((dx * dx + dy * dy) <= param.anchor_radius_sq)
+        if anchor_mask.any():
+            anchor_index[anchor_mask] = index
+            unassigned_anchor &= ~anchor_mask
+
+        ux = dx - param.mu_x
+        uy = dy - param.mu_y
+        ox = np.maximum(0.0, np.abs(dx) - param.width / 2.0)
+        oy = np.maximum(0.0, np.abs(dy) - param.height / 2.0)
+        spatial_x = ox / (SPATIAL_PRIOR_FRAC * param.width)
+        spatial_y = oy / (SPATIAL_PRIOR_FRAC * param.height)
+        score = -0.5 * (
+            param.pxx * ux * ux
+            + 2.0 * param.pxy * ux * uy
+            + param.pyy * uy * uy
+            + param.log_det
+            + spatial_x * spatial_x
+            + spatial_y * spatial_y
+        )
+
+        improve_mask = score > best_score
+        if improve_mask.any():
+            best_score[improve_mask] = score[improve_mask]
+            best_index[improve_mask] = index
+
+    return np.where(anchor_index >= 0, anchor_index, best_index)
+
+
+def raster_background_rgba(
+    *,
+    canvas: Rect,
+    frames: dict[str, Rect],
+    model: dict[str, Gaussian2D],
+    raster_step: float,
+    alpha: int = 208,
+) -> np.ndarray:
+    sample_step = max(1.0, float(raster_step))
+    coarse_w = max(1, int(math.ceil(canvas.w / sample_step)))
+    coarse_h = max(1, int(math.ceil(canvas.h / sample_step)))
+    sub_samples = 3 if sample_step >= 4 else 2 if sample_step >= 2 else 1
+    fine_w = coarse_w * sub_samples
+    fine_h = coarse_h * sub_samples
+
+    sample_x = np.linspace(
+        canvas.x + canvas.w / (2.0 * fine_w),
+        canvas.x + canvas.w - canvas.w / (2.0 * fine_w),
+        fine_w,
+        dtype=np.float32,
+    )
+    sample_y = np.linspace(
+        canvas.y + canvas.h / (2.0 * fine_h),
+        canvas.y + canvas.h - canvas.h / (2.0 * fine_h),
+        fine_h,
+        dtype=np.float32,
+    )
+
+    key_indices = winner_indices_grid(sample_x, sample_y, raster_key_params(frames, model))
+    palette = np.array([hex_to_rgba(SEMANTIC_COLORS.get(key, "#D1D5DB"), alpha) for key in ALL_KEYS], dtype=np.uint8)
+    fine_rgba = palette[key_indices]
+
+    if sub_samples > 1:
+        coarse_rgba = fine_rgba.reshape(coarse_h, sub_samples, coarse_w, sub_samples, 4).mean(axis=(1, 3), dtype=np.float32).astype(np.uint8)
     else:
-        angle = 0.0 if gaussian.sxx >= gaussian.syy else math.pi / 2.0
-    return cx, cy, math.sqrt(l1), math.sqrt(l2), angle
+        coarse_rgba = fine_rgba
+
+    target_w = max(1, int(round(canvas.w)))
+    target_h = max(1, int(round(canvas.h)))
+    image = Image.fromarray(coarse_rgba, mode="RGBA")
+    if image.size != (target_w, target_h):
+        image = image.resize((target_w, target_h), resample=Image.Resampling.LANCZOS)
+    return np.asarray(image)
+
+
+def raster_background_data_url(
+    *,
+    canvas: Rect,
+    frames: dict[str, Rect],
+    model: dict[str, Gaussian2D],
+    raster_step: float,
+    alpha: int = 208,
+) -> str:
+    image = Image.fromarray(raster_background_rgba(canvas=canvas, frames=frames, model=model, raster_step=raster_step, alpha=alpha), mode="RGBA")
+    data = io.BytesIO()
+    image.save(data, format="PNG")
+    encoded = base64.b64encode(data.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def draw_keyboard_svg(lines: list[str], frames: dict[str, Rect]) -> None:
+    for key, frame in frames.items():
+        lines.append(
+            f'<rect x="{frame.x:.2f}" y="{frame.y:.2f}" width="{frame.w:.2f}" height="{frame.h:.2f}" '
+            f'fill="#FFFFFF" fill-opacity="0.05" stroke="#111827" stroke-opacity="0.88" stroke-width="2.2"/>'
+        )
+        if key in LETTER_KEYS:
+            lines.append(
+                f'<text x="{frame.mid_x:.2f}" y="{frame.mid_y + 10:.2f}" '
+                f'font-family="Helvetica,Arial,sans-serif" font-size="34" font-weight="700" '
+                f'text-anchor="middle" fill="#111111">{svg_escape(key.upper())}</text>'
+            )
+        elif key == "space":
+            lines.append(
+                f'<text x="{frame.mid_x:.2f}" y="{frame.mid_y + 6:.2f}" '
+                f'font-family="Helvetica,Arial,sans-serif" font-size="18" font-weight="600" '
+                f'text-anchor="middle" fill="#111111" fill-opacity="0.55">SPACE</text>'
+            )
+        elif key == "delete":
+            lines.append(
+                f'<text x="{frame.mid_x:.2f}" y="{frame.mid_y + 6:.2f}" '
+                f'font-family="Helvetica,Arial,sans-serif" font-size="18" font-weight="700" '
+                f'text-anchor="middle" fill="#111111" fill-opacity="0.60">DEL</text>'
+            )
+
+
+def render_boundary_svg(
+    path: Path,
+    *,
+    model: dict[str, Gaussian2D],
+    raster_step: float | None = None,
+) -> None:
+    panel_rect, frames = build_svg_frames()
+    panel_x = panel_rect.x
+    panel_y = panel_rect.y
+    panel_w = panel_rect.w
+    panel_h = panel_rect.h
+    clip_id = "keyboard_panel_clip"
+    lines = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{SVG_WIDTH}" height="{SVG_HEIGHT}" viewBox="0 0 {SVG_WIDTH} {SVG_HEIGHT}">',
+        '<rect width="100%" height="100%" fill="#ffffff"/>',
+        "<defs>",
+        '  <filter id="panel_shadow" x="-10%" y="-10%" width="120%" height="120%">',
+        '    <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#0f172a" flood-opacity="0.14"/>',
+        "  </filter>",
+        f'  <clipPath id="{clip_id}">',
+        f'    <rect x="{panel_x:.2f}" y="{panel_y:.2f}" width="{panel_w:.2f}" height="{panel_h:.2f}" rx="{SVG_PANEL_RADIUS:.2f}"/>',
+        "  </clipPath>",
+        "</defs>",
+        f'<rect x="{panel_x:.2f}" y="{panel_y:.2f}" width="{panel_w:.2f}" height="{panel_h:.2f}" '
+        f'rx="{SVG_PANEL_RADIUS:.2f}" fill="#F8FAFC" stroke="#0F172A" stroke-opacity="0.18" stroke-width="1.4" filter="url(#panel_shadow)"/>',
+        f'<g clip-path="url(#{clip_id})">',
+    ]
+
+    background_data_url = raster_background_data_url(
+        canvas=panel_rect,
+        frames=frames,
+        model=model,
+        raster_step=RASTER_STEP if raster_step is None else raster_step,
+    )
+    lines.append(
+        f'<image x="{panel_x:.2f}" y="{panel_y:.2f}" width="{panel_w:.2f}" height="{panel_h:.2f}" preserveAspectRatio="none" href="{background_data_url}"/>'
+    )
+    lines.append("</g>")
+    lines.append(
+        f'<rect x="{panel_x:.2f}" y="{panel_y:.2f}" width="{panel_w:.2f}" height="{panel_h:.2f}" '
+        f'rx="{SVG_PANEL_RADIUS:.2f}" fill="none" stroke="#111827" stroke-width="2.6"/>'
+    )
+    draw_keyboard_svg(lines, frames)
+    lines.append("</svg>")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def draw_keyboard_pdf(ax, frames: dict[str, Rect]) -> None:
+    for key, frame in frames.items():
+        ax.add_patch(
+            Rectangle(
+                (frame.x, frame.y),
+                frame.w,
+                frame.h,
+                facecolor=(1.0, 1.0, 1.0, 0.06),
+                edgecolor=(17 / 255.0, 24 / 255.0, 39 / 255.0, 0.88),
+                linewidth=1.2,
+                zorder=3,
+            )
+        )
+        if key in LETTER_KEYS:
+            ax.text(
+                frame.mid_x,
+                frame.mid_y + 8,
+                key.upper(),
+                fontsize=max(14, frame.h * 0.40),
+                fontweight="bold",
+                color="#111111",
+                ha="center",
+                va="center",
+                zorder=4,
+            )
+        elif key == "space":
+            ax.text(
+                frame.mid_x,
+                frame.mid_y + 4,
+                "SPACE",
+                fontsize=12,
+                fontweight="semibold",
+                color=(17 / 255.0, 17 / 255.0, 17 / 255.0, 0.55),
+                ha="center",
+                va="center",
+                zorder=4,
+            )
+        elif key == "delete":
+            ax.text(
+                frame.mid_x,
+                frame.mid_y + 4,
+                "DEL",
+                fontsize=12,
+                fontweight="bold",
+                color=(17 / 255.0, 17 / 255.0, 17 / 255.0, 0.60),
+                ha="center",
+                va="center",
+                zorder=4,
+            )
 
 
 def render_pdf(
@@ -499,7 +917,7 @@ def render_pdf(
     model_sources: dict[str, str],
 ) -> None:
     page = PdfPage(
-        title="Gaussian Keyboard - Intended-Key Boundaries",
+        title="Gaussian Keyboard Boundary",
         summary_text="",
         detail_text="",
         samples=samples,
@@ -523,120 +941,86 @@ def render_pdf_pages(
             plt.close(fig)
 
 
-def render_pdf_page(
-    ax,
-    participant: str,
-    page: PdfPage,
-) -> None:
+def render_pdf_page(ax, participant: str, page: PdfPage) -> None:
     ax.set_xlim(0, PAGE_W)
     ax.set_ylim(PAGE_H, 0)
     ax.set_aspect("equal")
     ax.axis("off")
 
-    ax.add_patch(Rectangle((0, 0), PAGE_W, 40, facecolor=(0.0, 0.55, 0.55, 0.9), edgecolor="none"))
-    ax.text(MARGIN, 20, page.title,
-            fontsize=14, fontweight="bold", color="white", va="center")
-    fitted_count = sum(1 for source in page.model_sources.values() if source == SOURCE_FITTED_CURRENT)
-    borrowed_count = sum(1 for source in page.model_sources.values() if source == SOURCE_PRIOR_MODEL)
-    geometry_count = len(ALL_KEYS) - len(page.model)
-    summary_text = page.summary_text or (
-        f"{len(page.samples)} samples  fitted={fitted_count}  borrowed={borrowed_count}  geometry={geometry_count}"
-    )
-    ax.text(PAGE_W - MARGIN, 20,
-            summary_text,
-            fontsize=10, family="monospace", color="white", ha="right", va="center")
-    detail_text = page.detail_text or (
-        f"Participant: {participant or '-'}   min-n={MIN_SAMPLES}  anchor={ANCHOR_FRAC}  spatial={SPATIAL_PRIOR_FRAC}"
-    )
-    ax.text(MARGIN, 48,
-            detail_text,
-            fontsize=8, color="#777777", va="center")
+    ax.add_patch(Rectangle((0, 0), PAGE_W, PAGE_H, facecolor="white", edgecolor="none", zorder=0))
 
-    canvas_left = MARGIN + PDF_SIDE_PAD
-    canvas_right = PAGE_W - MARGIN - PDF_SIDE_PAD
-    canvas_top = HEADER_BOTTOM + 16.0
-    canvas_w = canvas_right - canvas_left
-    frames = build_pdf_frames(canvas_left, canvas_top, canvas_w)
+    show_summary = bool(page.summary_text.strip())
+    show_detail = bool(page.detail_text.strip())
+    title_y = 34.0
+    ax.text(PAGE_W / 2.0, title_y, page.title, fontsize=20, fontweight="bold", color="#0F172A", ha="center", va="center")
+    if show_summary:
+        ax.text(PAGE_W - MARGIN, title_y, page.summary_text, fontsize=9.5, family="monospace", color="#334155", ha="right", va="center")
+    if show_detail:
+        ax.text(MARGIN, 56, page.detail_text, fontsize=8.5, color="#64748B", va="center")
+
+    panel_x = MARGIN - 2.0
+    panel_y = HEADER_BOTTOM if (show_summary or show_detail) else 58.0
+    panel_w = PAGE_W - 2.0 * panel_x
+
+    canvas_left = panel_x + 18.0
+    canvas_w = panel_w - 36.0
+    frames = build_pdf_frames(canvas_left, panel_y + 8.0, canvas_w)
     key_h = next(iter(frames.values())).h
-    canvas_h = PDF_TOP_PAD + 4.0 * key_h + 3.0 * PDF_ROW_GAP + 8.0
-    canvas = Rect(canvas_left, canvas_top, canvas_w, canvas_h)
+    keyboard_h = PDF_TOP_PAD + 4.0 * key_h + 3.0 * PDF_ROW_GAP + 8.0
+    panel_h = keyboard_h + 20.0
+    panel_rect = Rect(panel_x, panel_y, panel_w, panel_h)
 
-    ax.add_patch(Rectangle((canvas.x, canvas.y), canvas.w, canvas.h,
-                           facecolor=(0.07, 0.07, 0.09), edgecolor="none"))
+    shadow = FancyBboxPatch(
+        (panel_rect.x, panel_rect.y + 6.0),
+        panel_rect.w,
+        panel_rect.h,
+        boxstyle="round,pad=0.0,rounding_size=16",
+        facecolor=(15 / 255.0, 23 / 255.0, 42 / 255.0, 0.08),
+        edgecolor="none",
+        zorder=0.5,
+    )
+    ax.add_patch(shadow)
 
-    cols = int(math.ceil(canvas.w / RASTER_STEP))
-    rows = int(math.ceil(canvas.h / RASTER_STEP))
-    raster = np.zeros((rows, cols, 4), dtype=float)
-    for row in range(rows):
-        py = canvas.y + row * RASTER_STEP + RASTER_STEP / 2.0
-        for col in range(cols):
-            px = canvas.x + col * RASTER_STEP + RASTER_STEP / 2.0
-            key = winner(px, py, frames, page.model)
-            if key:
-                raster[row, col] = key_color(key, 0.55)
-    ax.imshow(
-        raster,
-        extent=(canvas.x, canvas.x + canvas.w, canvas.y + canvas.h, canvas.y),
-        interpolation="nearest",
+    panel = FancyBboxPatch(
+        (panel_rect.x, panel_rect.y),
+        panel_rect.w,
+        panel_rect.h,
+        boxstyle="round,pad=0.0,rounding_size=16",
+        facecolor="#F8FAFC",
+        edgecolor=(15 / 255.0, 23 / 255.0, 42 / 255.0, 0.18),
+        linewidth=1.2,
         zorder=1,
     )
+    ax.add_patch(panel)
 
-    for key, frame in frames.items():
-        ax.add_patch(FancyBboxPatch(
-            (frame.x, frame.y), frame.w, frame.h,
-            boxstyle="round,pad=0,rounding_size=5",
-            facecolor=(0, 0, 0, 0),
-            edgecolor=(1, 1, 1, 0.35),
-            linewidth=0.6,
-        ))
-        label = "<" if key == "delete" else ("space" if key == "space" else key)
-        ax.text(frame.x + 3, frame.y + frame.h - 4, label,
-                fontsize=7 if len(key) > 1 else max(6, frame.h * 0.22),
-                color=(1, 1, 1, 0.85), va="bottom", ha="left", fontweight="bold")
+    background = raster_background_rgba(
+        canvas=panel_rect,
+        frames=frames,
+        model=page.model,
+        raster_step=RASTER_STEP,
+        alpha=178,
+    )
+    image = ax.imshow(
+        background,
+        extent=(panel_rect.x, panel_rect.x + panel_rect.w, panel_rect.y + panel_rect.h, panel_rect.y),
+        interpolation="bilinear",
+        zorder=1.5,
+    )
+    image.set_clip_path(panel)
 
-    for key, gaussian in page.model.items():
-        frame = frames.get(key)
-        if not frame:
-            continue
-        cx, cy, semi_a, semi_b, angle = ellipse_params(gaussian, frame)
-        transform = Affine2D().rotate_around(cx, cy, angle) + ax.transData
-        ax.add_patch(Ellipse((cx, cy), semi_a * 4, semi_b * 4,
-                             fill=False, edgecolor=key_color(key, 0.50),
-                             linewidth=0.5, linestyle="--", transform=transform))
-        ax.add_patch(Ellipse((cx, cy), semi_a * 2, semi_b * 2,
-                             fill=False, edgecolor=key_color(key, 0.95),
-                             linewidth=1.0, transform=transform))
-        ax.plot([cx - 3, cx + 3], [cy, cy], color="white", linewidth=0.9)
-        ax.plot([cx, cx], [cy - 3, cy + 3], color="white", linewidth=0.9)
+    draw_keyboard_pdf(ax, frames)
 
-    grouped = defaultdict(list)
-    for sample in page.samples:
-        grouped[sample.target_key].append(sample)
-    for key, key_samples in grouped.items():
-        frame = frames.get(key)
-        if not frame:
-            continue
-        for sample in key_samples:
-            px = frame.mid_x + sample.offset_x
-            py = frame.mid_y + sample.offset_y
-            ax.scatter([px], [py], s=18, c=[(1, 1, 1, 0.35)], edgecolors="none", zorder=4)
-            ax.scatter([px], [py], s=8, c=[key_color(key, 0.95)], edgecolors="none", zorder=5)
-
-    legend_y = canvas.y + canvas.h + 20
-    lx = canvas.x
-    counts = Counter(sample.target_key for sample in page.samples)
-    for key in ALL_KEYS:
-        if counts[key] == 0:
-            continue
-        ax.scatter([lx + 3], [legend_y], s=18, c=[key_color(key, 1.0)], edgecolors="none")
-        label = "del" if key == "delete" else ("sp" if key == "space" else key)
-        ax.text(lx + 9, legend_y, f"{label} ({counts[key]})",
-                fontsize=7, family="monospace", color="#777777", va="center")
-        lx += 44
-        if lx + 44 > canvas_right:
-            break
-
-    return
+    panel_outline = FancyBboxPatch(
+        (panel_rect.x, panel_rect.y),
+        panel_rect.w,
+        panel_rect.h,
+        boxstyle="round,pad=0.0,rounding_size=16",
+        facecolor="none",
+        edgecolor="#111827",
+        linewidth=2.0,
+        zorder=4.5,
+    )
+    ax.add_patch(panel_outline)
 
 
 def print_summary(
@@ -646,12 +1030,12 @@ def print_summary(
     model_sources: dict[str, str],
     sample_counts: dict[str, int],
 ) -> None:
-    old_counts = Counter(e.key_label for e in events if e.is_correct and e.event_type != "delete")
+    old_counts = Counter(event.key_label for event in events if event.is_correct and event.event_type != "delete")
     new_counts = Counter(sample.target_key for sample in samples)
     print("Old correct-landed counts:")
-    print("  " + " ".join(f"{k}={old_counts[k]}" for k in ALL_KEYS if old_counts[k]))
+    print("  " + " ".join(f"{key}={old_counts[key]}" for key in ALL_KEYS if old_counts[key]))
     print("New intended-feedback counts:")
-    print("  " + " ".join(f"{k}={new_counts[k]}" for k in ALL_KEYS if new_counts[k]))
+    print("  " + " ".join(f"{key}={new_counts[key]}" for key in ALL_KEYS if new_counts[key]))
     source_counts = Counter(model_sources.get(key, SOURCE_GEOMETRY_FALLBACK) for key in ALL_KEYS)
     print("Model sources:")
     print(
@@ -668,9 +1052,9 @@ def print_summary(
     print(
         "  "
         + " ".join(
-            f"{k}(trial_n={sample_counts.get(k, 0)}, source={model_sources.get(k, SOURCE_GEOMETRY_FALLBACK)}, model_n={model[k].count if k in model else 0})"
-            for k in ALL_KEYS
-            if sample_counts.get(k, 0) or k in model
+            f"{key}(trial_n={sample_counts.get(key, 0)}, source={model_sources.get(key, SOURCE_GEOMETRY_FALLBACK)}, model_n={model[key].count if key in model else 0})"
+            for key in ALL_KEYS
+            if sample_counts.get(key, 0) or key in model
         )
     )
 
@@ -689,7 +1073,11 @@ def main() -> int:
 
     samples = training_samples(events)
     model, model_sources, sample_counts = fit_model(samples)
-    render_pdf(out_path, participant, events, samples, model, model_sources)
+
+    if out_path.suffix.lower() == ".svg":
+        render_boundary_svg(out_path, model=model)
+    else:
+        render_pdf(out_path, participant, events, samples, model, model_sources)
 
     print(f"Input : {in_path}")
     print(f"Output: {out_path}")
