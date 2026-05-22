@@ -75,12 +75,6 @@ python3 scripts/manual_test_ground_truth_trial_loss.py --output-dir /tmp/ground-
 python3 scripts/manual_test_key_backoff_report.py --output-dir /tmp/key-backoff-test
 ```
 
-## Notes
-
-- `gaussian_keyboard_pdf.py` chooses output format from the file extension you pass in.
-- `session_overlap_visualization.py` now writes both SVG and PDF by default.
-- The manual test scripts use synthetic data; they are not the normal entry points for a real participant CSV.
-
 ## Offline Workflow
 
 Run all commands from the repository root.
