@@ -27,6 +27,7 @@ Usage:
 
 import sys
 import csv
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -283,4 +284,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    _start_time = time.perf_counter()
+    try:
+        main()
+    finally:
+        print(f"Ran in {time.perf_counter() - _start_time:.2f} seconds")

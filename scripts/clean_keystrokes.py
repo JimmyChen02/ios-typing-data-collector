@@ -39,6 +39,7 @@ Thresholds can be overridden at the top of this file.
 import sys
 import csv
 import os
+import time
 from pathlib import Path
 
 # ── Configurable thresholds ──────────────────────────────────────────────
@@ -218,4 +219,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    _start_time = time.perf_counter()
+    try:
+        main()
+    finally:
+        print(f"Ran in {time.perf_counter() - _start_time:.2f} seconds")

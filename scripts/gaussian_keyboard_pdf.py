@@ -16,7 +16,7 @@ import csv
 import math
 import os
 import sys
-import tempfile
+import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -700,4 +700,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    _start_time = time.perf_counter()
+    try:
+        raise SystemExit(main())
+    finally:
+        print(f"Ran in {time.perf_counter() - _start_time:.2f} seconds")

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import time
 from pathlib import Path
 
 from ground_truth_trial_loss import run_analysis
@@ -105,4 +106,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    _start_time = time.perf_counter()
+    try:
+        main()
+    finally:
+        print(f"Ran in {time.perf_counter() - _start_time:.2f} seconds")

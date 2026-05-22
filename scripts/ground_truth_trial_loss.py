@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import csv
 import string
+import time
 from collections import defaultdict
 from itertools import combinations
 from pathlib import Path
@@ -468,4 +469,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    _start_time = time.perf_counter()
+    try:
+        main()
+    finally:
+        print(f"Ran in {time.perf_counter() - _start_time:.2f} seconds")

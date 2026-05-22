@@ -83,8 +83,7 @@ The `scripts/` folder contains companion analysis and export utilities:
 - `scripts/gaussian_keyboard_pdf.py`: mirrors the intended-key Gaussian fitting logic and exports a Gaussian keyboard PDF from a CSV
 - `scripts/ground_truth_trial_loss.py`: builds an all-trials ground truth and exports graph-ready loss/similarity CSVs for cumulative-prefix and all-combinations analyses
 - `scripts/future-trial-loss.py`: measures how well cumulative classic-trial data predicts future trials
-- `scripts/key_backoff_report.py`: audits per-trial key coverage and reports whether each key is trial-specific, prior-backed, pooled-global, or falling back to raw key geometry
-- `scripts/session_overlap_visualization.py`: generates per-session Gaussian-boundary PDFs, a combined all-sessions PDF, a final classic-only ground-truth boundary PDF, and per-session backoff summaries
+- `scripts/session_overlap_visualization.py`: generates per-session Gaussian boundary SVGs using the session-specific -> prior-model -> geometry-fallback chain
 - `scripts/manual_test_ground_truth_trial_loss.py`: produces synthetic/manual test outputs for the ground-truth loss pipeline
 - `scripts/manual_test_key_backoff_report.py`: produces and verifies a synthetic dataset for the key-backoff coverage report
 - `scripts/loss-automation.py`: legacy overlap-analysis helper retained in the repo but marked unused
@@ -166,30 +165,17 @@ Primary output:
 
 - `<input_stem>_future_trial_loss_summary.csv`
 
-### 5. Key backoff coverage
+### 5. Session Gaussian boundary visuals
 
-Use this to check whether each trial has enough samples to fit its own
-character-specific Gaussian, or whether it would need to back off to prior
-trials, the pooled dataset, or the raw key area.
+Use this to render one Gaussian-boundary keyboard image per session. Each
+session image uses the new backoff chain:
 
-```sh
-python3 scripts/key_backoff_report.py <cleaned_keystrokes.csv>
-python3 scripts/key_backoff_report.py <cleaned_keystrokes.csv> --min-samples 5 --label-column expected_char
-python3 scripts/manual_test_key_backoff_report.py --output-dir /tmp/key-backoff-test
-```
+- fit the key from the current session if it has enough taps
+- otherwise borrow that key from prior cumulative sessions
+- otherwise fall back to the geometric key area
 
-Primary outputs:
-
-- `<input_stem>_key_backoff_trial_summary.csv`
-- `<input_stem>_key_backoff_trial_key_detail.csv`
-- `<input_stem>_key_backoff_key_summary.csv`
-
-### 6. Session Gaussian boundary PDFs
-
-Use this to generate the same per-session Gaussian-boundary progression used
-by the in-app Gaussian session viewer. Each session PDF is fit from that
-session first, then backs off to the cumulative prior-session model for sparse
-keys.
+The output is a full keyboard decision-surface image for each session, similar
+to the in-paper Gaussian keyboard visualizations.
 
 ```sh
 python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --output-dir <output_dir>
@@ -207,8 +193,8 @@ Useful variants:
 # Default review configuration.
 python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --output-dir <output_dir>
 
-# Higher-fidelity boundary surface.
-python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --output-dir <output_dir> --raster-step 1
+# Override the raster smoothness if needed.
+python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --output-dir <output_dir> --raster-step 3
 
 # Synthetic sanity-check data.
 python3 scripts/session_overlap_visualization.py --demo --output-dir /tmp/session-boundary-demo
@@ -216,8 +202,6 @@ python3 scripts/session_overlap_visualization.py --demo --output-dir /tmp/sessio
 
 Primary outputs:
 
-- `session_gaussian_boundaries_XX.pdf`: one Gaussian-boundary PDF per session snapshot
-- `session_gaussian_boundaries_all_sessions.pdf`: all session snapshots in one PDF
-- `final_gaussian_ground_truth_boundary.pdf`: final classic-only ground-truth boundary PDF
-- `session_gaussian_boundaries_summary.csv`: per-session backoff/source summary
-- `session_gaussian_boundaries_by_key.csv`: per-session per-key source summary
+- `session_gaussian_boundaries_XX.svg`: one full decision-surface keyboard image per session
+- `session_gaussian_boundaries_summary.csv`: per-session counts of current-fit, prior-model, and geometry-fallback keys
+- `session_gaussian_boundaries_by_key.csv`: per-session, per-key backoff/source details
