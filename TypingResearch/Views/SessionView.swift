@@ -45,7 +45,11 @@ struct SummaryView: View {
     @State private var groundTruthError: String? = nil
     @State private var isLoadingGroundTruth: Bool = false
 
-    private enum PDFKind { case raw, cleaned, gaussian }
+    private enum PDFKind { case raw, cleaned, gaussianFinal, groundTruth }
+
+    private var hasClassicBoundaryData: Bool {
+        !GaussianBoundaryTimeline.finalGroundTruthEvents(from: sessionManager.allEvents).isEmpty
+    }
 
     var body: some View {
         NavigationStack {
@@ -370,6 +374,23 @@ struct SummaryView: View {
                         points: analysis.allCombinationsSummary
                     )
                 }
+
+                Button(action: { exportGroundTruthPDF() }) {
+                    HStack {
+                        if generatingPDF == .groundTruth {
+                            ProgressView().tint(.white).padding(.trailing, 4)
+                        } else {
+                            Image(systemName: "chart.line.text.clipboard")
+                        }
+                        Text(generatingPDF == .groundTruth ? "Generating…" : "Ground Truth Loss PDF")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+                }
+                .disabled(generatingPDF != nil)
             }
         }
         .padding()
@@ -404,6 +425,18 @@ struct SummaryView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
+
+            NavigationLink {
+                GaussianBoundarySessionView(
+                    events: sessionManager.allEvents,
+                    participant: sessionManager.participant,
+                    session: sessionManager.currentSession
+                )
+            } label: {
+                Label("Open Gaussian Boundary Session Viewer", systemImage: "square.stack.3d.down.right")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
         }
     }
 
@@ -544,7 +577,7 @@ struct SummaryView: View {
                 pdfKind: .cleaned
             )
 
-            if sessionManager.sessionMode == .gaussian {
+            if hasClassicBoundaryData {
                 gaussianExportGroup
             }
         }
@@ -557,19 +590,19 @@ struct SummaryView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Gaussian boundaries")
                 .font(.headline)
-            Text("Per-key ellipses fit from classic sessions only.")
+            Text("Final cumulative boundary fit from all classic sessions only.")
                 .font(.caption)
                 .foregroundColor(.secondary)
 
             Button(action: { exportGaussianPDF() }) {
                 HStack {
-                    if generatingPDF == .gaussian {
+                    if generatingPDF == .gaussianFinal {
                         ProgressView().tint(.white).padding(.trailing, 4)
                     } else {
                         Image(systemName: "scope")
                     }
-                    Text(generatingPDF == .gaussian ? "Generating\u{2026}"
-                         : "Gaussian Boundaries PDF")
+                    Text(generatingPDF == .gaussianFinal ? "Generating\u{2026}"
+                         : "Final Gaussian Boundary PDF")
                 }
                 .frame(maxWidth: .infinity).padding()
                 .background(Color.teal)
@@ -626,12 +659,14 @@ struct SummaryView: View {
         guard let session = sessionManager.currentSession else { return }
         generatingPDF = kind
         let mode: KeyboardViewPDFExporter.Mode = kind == .cleaned ? .cleaned : .raw
+        let events = sessionManager.allEvents
+        let participant = sessionManager.participant
         Task.detached(priority: .userInitiated) {
             let exporter = KeyboardViewPDFExporter()
             let url = await exporter.exportPDF(
-                events: sessionManager.allEvents,
+                events: events,
                 session: session,
-                participant: sessionManager.participant,
+                participant: participant,
                 mode: mode
             )
             await MainActor.run {
@@ -643,19 +678,36 @@ struct SummaryView: View {
 
     private func exportGaussianPDF() {
         guard let session = sessionManager.currentSession else { return }
-        generatingPDF = .gaussian
+        generatingPDF = .gaussianFinal
+        let events = sessionManager.allEvents
+        let participant = sessionManager.participant
         Task.detached(priority: .userInitiated) {
-            let events = GaussianModelStore.shared.loadEvents()
             let exporter = GaussianKeyboardExporter()
             let url = await exporter.exportPDF(
                 events: events,
                 session: session,
-                participant: sessionManager.participant
+                participant: participant
             )
             await MainActor.run {
                 generatingPDF = nil
                 if let url { shareItem = ShareItem(url: url) }
             }
+        }
+    }
+
+    private func exportGroundTruthPDF() {
+        guard let session = sessionManager.currentSession,
+              let analysis = groundTruthAnalysis else { return }
+        generatingPDF = .groundTruth
+        Task { @MainActor in
+            let exporter = GroundTruthLossPDFExporter()
+            let url = exporter.exportPDF(
+                analysis: analysis,
+                session: session,
+                participant: sessionManager.participant
+            )
+            generatingPDF = nil
+            if let url { shareItem = ShareItem(url: url) }
         }
     }
 
@@ -1144,5 +1196,201 @@ final class KeyboardViewPDFExporter {
                               width: rect.width,
                               height: size.height)
         text.draw(in: textRect, withAttributes: attrs)
+    }
+}
+
+// MARK: - GroundTruthLossPDFExporter
+
+@MainActor
+final class GroundTruthLossPDFExporter {
+    private let pageRect = CGRect(x: 0, y: 0, width: 612, height: 792)
+
+    func exportPDF(
+        analysis: GroundTruthLossAnalysis,
+        session: Session,
+        participant: Participant?
+    ) -> URL? {
+        let first = participant?.firstName ?? "unknown"
+        let last = participant?.lastName ?? "unknown"
+        let url = FileManager.default
+            .temporaryDirectory
+            .appendingPathComponent("ground_truth_loss_\(first)_\(last).pdf")
+
+        let renderer = UIGraphicsPDFRenderer(bounds: pageRect)
+        let pages: [(String, String, [GroundTruthSeriesPoint])] = [
+            (
+                "Specific Cumulative Path",
+                "{1}, {1,2}, {1,2,3}, … compared with all classic trials",
+                analysis.simpleSummary
+            ),
+            (
+                "Average Across All Combinations",
+                "Mean over every same-size subset before comparing with all classic trials",
+                analysis.allCombinationsSummary
+            ),
+        ]
+
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withFullDate]
+        let participantName = participant.map {
+            "\($0.firstName) \($0.lastName)".trimmingCharacters(in: .whitespaces)
+        } ?? "—"
+
+        let data = renderer.pdfData { context in
+            for (title, subtitle, points) in pages {
+                context.beginPage()
+                let view = GroundTruthLossExportPage(
+                    sectionTitle: title,
+                    sectionSubtitle: subtitle,
+                    points: points,
+                    participantName: participantName,
+                    dateText: iso.string(from: session.startedAt),
+                    totalTrials: analysis.totalTrials,
+                    usableEventCount: analysis.usableEventCount
+                )
+                .frame(width: pageRect.width, height: pageRect.height)
+                .background(Color.white)
+
+                let imageRenderer = ImageRenderer(content: view)
+                imageRenderer.scale = UIScreen.main.scale
+                imageRenderer.render { _, renderInContext in
+                    renderInContext(context.cgContext)
+                }
+            }
+        }
+
+        do {
+            try data.write(to: url)
+            return url
+        } catch {
+            return nil
+        }
+    }
+}
+
+private struct GroundTruthLossExportPage: View {
+    let sectionTitle: String
+    let sectionSubtitle: String
+    let points: [GroundTruthSeriesPoint]
+    let participantName: String
+    let dateText: String
+    let totalTrials: Int
+    let usableEventCount: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Ground Truth Loss")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                Text("Participant: \(participantName)   Date: \(dateText)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Text("\(totalTrials) classic trials, \(usableEventCount) clean insert events")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(sectionTitle)
+                    .font(.headline)
+                Text(sectionSubtitle)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            GroundTruthLossExportCard(title: "Loss and Mean Loss") {
+                Chart {
+                    ForEach(points) { point in
+                        LineMark(
+                            x: .value("Trials", point.numTrials),
+                            y: .value("Value", point.loss)
+                        )
+                        .interpolationMethod(.catmullRom)
+                        .foregroundStyle(by: .value("Metric", "loss"))
+
+                        PointMark(
+                            x: .value("Trials", point.numTrials),
+                            y: .value("Value", point.loss)
+                        )
+                        .foregroundStyle(by: .value("Metric", "loss"))
+
+                        LineMark(
+                            x: .value("Trials", point.numTrials),
+                            y: .value("Value", point.meanLoss)
+                        )
+                        .interpolationMethod(.catmullRom)
+                        .foregroundStyle(by: .value("Metric", "mean_loss"))
+
+                        PointMark(
+                            x: .value("Trials", point.numTrials),
+                            y: .value("Value", point.meanLoss)
+                        )
+                        .foregroundStyle(by: .value("Metric", "mean_loss"))
+                    }
+                }
+                .chartForegroundStyleScale([
+                    "loss": Color.pink,
+                    "mean_loss": Color.purple,
+                ])
+                .chartYScale(domain: 0...1)
+                .chartXAxis {
+                    AxisMarks(values: .stride(by: 1))
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading)
+                }
+            }
+
+            GroundTruthLossExportCard(title: "Similarity") {
+                Chart(points) { point in
+                    LineMark(
+                        x: .value("Trials", point.numTrials),
+                        y: .value("Similarity", point.similarity)
+                    )
+                    .interpolationMethod(.catmullRom)
+                    .foregroundStyle(.teal)
+
+                    PointMark(
+                        x: .value("Trials", point.numTrials),
+                        y: .value("Similarity", point.similarity)
+                    )
+                    .foregroundStyle(.teal)
+                }
+                .chartYScale(domain: 0...1)
+                .chartXAxis {
+                    AxisMarks(values: .stride(by: 1))
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color.white)
+    }
+}
+
+private struct GroundTruthLossExportCard<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundColor(.secondary)
+            content
+                .frame(height: 250)
+        }
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color(.systemGray6))
+        )
     }
 }

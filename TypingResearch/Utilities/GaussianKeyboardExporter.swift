@@ -1,5 +1,106 @@
 import UIKit
 
+struct GaussianBoundarySessionSnapshot: Identifiable {
+    let studySessionIndex: Int
+    let sessionOrdinal: Int
+    let cleanEvents: [InputEventData]
+    let priorEventCount: Int
+    let model: GaussianKeyModel
+
+    var id: Int { studySessionIndex }
+    var displayIndex: Int { studySessionIndex + 1 }
+
+    var fittedCurrentKeys: Int {
+        GaussianBoundaryTimeline.allKeys.filter { model.source(for: $0) == .fittedCurrent }.count
+    }
+
+    var priorModelKeys: Int {
+        GaussianBoundaryTimeline.allKeys.filter { model.source(for: $0) == .priorModel }.count
+    }
+
+    var geometryFallbackKeys: Int {
+        GaussianBoundaryTimeline.allKeys.count - fittedCurrentKeys - priorModelKeys
+    }
+}
+
+enum GaussianBoundaryTimeline {
+    static let allKeys = [
+        "q","w","e","r","t","y","u","i","o","p",
+        "a","s","d","f","g","h","j","k","l",
+        "z","x","c","v","b","n","m","space","delete"
+    ]
+
+    static func filteredBoundaryEvents(
+        from events: [InputEventData],
+        onlyClassic: Bool = false
+    ) -> [InputEventData] {
+        let allowed = Set(allKeys)
+        return events
+            .filter { event in
+                guard !onlyClassic || event.sessionMode == "classic" else { return false }
+                guard allowed.contains(event.keyLabel),
+                      event.keyWidth > 0,
+                      event.keyHeight > 0 else {
+                    return false
+                }
+                return !KeystrokeCleaner.flag(event).isSpatialOutlier
+            }
+            .sorted { lhs, rhs in
+                if lhs.studySessionIndex != rhs.studySessionIndex {
+                    return lhs.studySessionIndex < rhs.studySessionIndex
+                }
+                if lhs.trialIndex != rhs.trialIndex {
+                    return lhs.trialIndex < rhs.trialIndex
+                }
+                return lhs.timestamp < rhs.timestamp
+            }
+    }
+
+    static func sessionSnapshots(from events: [InputEventData]) -> [GaussianBoundarySessionSnapshot] {
+        let filtered = filteredBoundaryEvents(from: events)
+        let grouped = Dictionary(grouping: filtered, by: \.studySessionIndex)
+        let orderedSessionIDs = grouped.keys.sorted()
+
+        var cumulativePriorEvents: [InputEventData] = []
+        var snapshots: [GaussianBoundarySessionSnapshot] = []
+        snapshots.reserveCapacity(orderedSessionIDs.count)
+
+        for (ordinal, sessionID) in orderedSessionIDs.enumerated() {
+            let currentEvents = (grouped[sessionID] ?? []).sorted { lhs, rhs in
+                if lhs.trialIndex != rhs.trialIndex {
+                    return lhs.trialIndex < rhs.trialIndex
+                }
+                return lhs.timestamp < rhs.timestamp
+            }
+            let priorModel = GaussianKeyModel.fit(
+                events: cumulativePriorEvents,
+                keys: allKeys
+            )
+            let model = GaussianKeyModel.fit(
+                events: currentEvents,
+                keys: allKeys,
+                priorModel: priorModel
+            )
+            snapshots.append(
+                GaussianBoundarySessionSnapshot(
+                    studySessionIndex: sessionID,
+                    sessionOrdinal: ordinal + 1,
+                    cleanEvents: currentEvents,
+                    priorEventCount: cumulativePriorEvents.count,
+                    model: model
+                )
+            )
+            cumulativePriorEvents.append(contentsOf: currentEvents)
+        }
+
+        return snapshots
+    }
+
+    static func finalGroundTruthEvents(from events: [InputEventData]) -> [InputEventData] {
+        filteredBoundaryEvents(from: events, onlyClassic: true)
+    }
+}
+
 // MARK: - GaussianKeyboardExporter
 //
 // Renders a learned per-key Gaussian keyboard as a PDF:
@@ -17,6 +118,13 @@ import UIKit
 // boundary equation is solved; we just paint the decision surface.
 
 final class GaussianKeyboardExporter {
+    private struct BoundaryDocumentPage {
+        let title: String
+        let trailingText: String
+        let detailText: String
+        let model: GaussianKeyModel
+        let overlayEvents: [InputEventData]
+    }
 
     // MARK: - Config
     private let pageW:  CGFloat = 612
@@ -49,113 +157,91 @@ final class GaussianKeyboardExporter {
         session: Session,
         participant: Participant?
     ) async -> URL? {
+        let finalEvents = GaussianBoundaryTimeline.finalGroundTruthEvents(from: events)
+        guard !finalEvents.isEmpty else { return nil }
 
-        let allowed = Set(allKeys)
-        let validEvents = events.filter {
-            !$0.keyLabel.isEmpty &&
-            allowed.contains($0.keyLabel) &&
-            $0.keyWidth > 0 && $0.keyHeight > 0
-        }
-        guard !validEvents.isEmpty else { return nil }
-
-        let model = GaussianKeyModel.fit(events: validEvents, keys: allKeys)
-        let fittedCount = model.gaussians.count
-
-        let first = participant?.firstName ?? "unknown"
-        let last  = participant?.lastName  ?? "unknown"
-        let url = FileManager.default
-            .temporaryDirectory
-            .appendingPathComponent("gaussian_keyboard_\(first)_\(last).pdf")
-
-        let renderer = UIGraphicsPDFRenderer(
-            bounds: CGRect(x: 0, y: 0, width: pageW, height: pageH)
-        )
-
-        let data = renderer.pdfData { ctx in
-            ctx.beginPage()
-            let headerBottom = drawHeader(
-                ctx: ctx,
+        let model = GaussianKeyModel.fit(events: finalEvents, keys: allKeys)
+        let page = BoundaryDocumentPage(
+            title: "Final Gaussian Boundary",
+            trailingText: "\(finalEvents.count) taps  \(model.gaussians.count)/\(allKeys.count) fit",
+            detailText: detailLine(
                 session: session,
                 participant: participant,
-                tapCount: validEvents.count,
-                fittedKeys: fittedCount,
-                totalKeys: allKeys.count
+                extra: "all classic sessions combined  min-n=\(GaussianKeyModel.minSamples)  anchor=\(GaussianKeyModel.anchorFrac)  spatial=\(GaussianKeyModel.spatialPriorFrac)"
+            ),
+            model: model,
+            overlayEvents: finalEvents
+        )
+        return writeDocument(
+            pages: [page],
+            fileStem: "gaussian_ground_truth_boundary",
+            session: session,
+            participant: participant
+        )
+    }
+
+    func exportSessionPDF(
+        snapshots: [GaussianBoundarySessionSnapshot],
+        session: Session,
+        participant: Participant?,
+        visibleSessionCount: Int? = nil
+    ) async -> URL? {
+        let selectedSnapshots: [GaussianBoundarySessionSnapshot]
+        if let visibleSessionCount {
+            selectedSnapshots = snapshots.filter { $0.sessionOrdinal == visibleSessionCount }
+        } else {
+            selectedSnapshots = snapshots
+        }
+        guard !selectedSnapshots.isEmpty else { return nil }
+
+        let pages = selectedSnapshots.map { snapshot in
+            BoundaryDocumentPage(
+                title: "Gaussian Boundary Session \(snapshot.displayIndex)",
+                trailingText: "\(snapshot.cleanEvents.count) clean events  \(snapshot.model.gaussians.count)/\(allKeys.count) fit",
+                detailText: detailLine(
+                    session: session,
+                    participant: participant,
+                    extra: "fitted=\(snapshot.fittedCurrentKeys)  prior=\(snapshot.priorModelKeys)  geometry=\(snapshot.geometryFallbackKeys)  prior events=\(snapshot.priorEventCount)"
+                ),
+                model: snapshot.model,
+                overlayEvents: snapshot.cleanEvents
             )
-            let cgCtx = ctx.cgContext
+        }
+        let fileStem = visibleSessionCount == nil
+            ? "gaussian_boundary_sessions"
+            : "gaussian_boundary_session_\(selectedSnapshots[0].displayIndex)"
+        return writeDocument(
+            pages: pages,
+            fileStem: fileStem,
+            session: session,
+            participant: participant
+        )
+    }
 
-            // Canvas geometry
-            let canvasLeft  = margin + sidePad
-            let canvasRight = pageW - margin - sidePad
-            let canvasTop   = headerBottom + 16
-            let canvasW     = canvasRight - canvasLeft
-            let kw   = (canvasW - 2 * sidePad - 9 * keyGap) / 10
-            let sp   = (canvasW - 2 * sidePad - 7 * kw - 8 * keyGap) / 2
-            let keyH = (kw * 1.35).rounded()
-            let canvasH = topPad + 4 * keyH + 3 * rowGap + 8
-            let canvasRect = CGRect(x: canvasLeft, y: canvasTop, width: canvasW, height: canvasH)
-
-            let frames = buildFrames(ox: canvasLeft, plotTop: canvasTop,
-                                     kw: kw, sp: sp, keyH: keyH, plotW: canvasW)
-            let framesList: [(key: String, rect: CGRect)] = allKeys.compactMap { k in
-                frames[k].map { (k, $0) }
-            }
-
-            // 1. Dark canvas background
+    @MainActor
+    func previewImage(
+        snapshot: GaussianBoundarySessionSnapshot,
+        size: CGSize
+    ) -> UIImage {
+        let format = UIGraphicsImageRendererFormat()
+        format.opaque = true
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+        return renderer.image { context in
+            let cgCtx = context.cgContext
+            let canvasRect = CGRect(origin: .zero, size: size)
             cgCtx.setFillColor(UIColor(red: 0.07, green: 0.07, blue: 0.09, alpha: 1).cgColor)
             cgCtx.fill(canvasRect)
-
-            // 2. Winner raster — the decision surface
-            drawWinnerRaster(
+            let kw = (size.width - 2 * sidePad - 9 * keyGap) / 10
+            let sp = (size.width - 2 * sidePad - 7 * kw - 8 * keyGap) / 2
+            let keyH = (kw * 1.35).rounded()
+            let frames = buildFrames(ox: 0, plotTop: 0, kw: kw, sp: sp, keyH: keyH, plotW: size.width)
+            drawBoundaryCanvas(
                 cgCtx: cgCtx,
-                canvas: canvasRect,
-                model: model,
-                frames: framesList
+                canvasRect: canvasRect,
+                frames: frames,
+                model: snapshot.model,
+                overlayEvents: snapshot.cleanEvents
             )
-
-            // 3. Key outlines (thin, white-ish so painted territories read through)
-            for (_, rect) in frames {
-                let path = UIBezierPath(roundedRect: rect, cornerRadius: 5)
-                cgCtx.setStrokeColor(UIColor(white: 1, alpha: 0.35).cgColor)
-                cgCtx.setLineWidth(0.6)
-                cgCtx.addPath(path.cgPath)
-                cgCtx.strokePath()
-            }
-
-            // 4. Gaussian ellipses (1 sigma solid, 2 sigma dashed) + mean cross
-            for (key, rect) in frames {
-                guard let g = model.gaussians[key] else { continue }
-                drawEllipses(cgCtx: cgCtx, gaussian: g, frame: rect, key: key)
-            }
-
-            // 5. Correct tap dots (same per-key colour as the territory)
-            drawTapDots(cgCtx: cgCtx, events: validEvents, frames: frames)
-
-            // 6. Key labels on top — drawn last so they sit above raster,
-            //    ellipses, and tap dots. Keeps focus on the boundaries.
-            for (key, rect) in frames {
-                let display = key == "delete" ? "\u{232B}"
-                            : key == "space"  ? "\u{23B5}" : key
-                let fontSize: CGFloat = key.count > 1 ? 7 : max(6, keyH * 0.22)
-                drawText(display,
-                         at: CGPoint(x: rect.minX + 3, y: rect.maxY - fontSize - 3),
-                         font: .systemFont(ofSize: fontSize, weight: .bold),
-                         color: .white)
-            }
-
-            // 7. Legend
-            drawLegend(cgCtx: cgCtx,
-                       y: canvasTop + canvasH + 18,
-                       left: canvasLeft,
-                       right: canvasRight,
-                       model: model)
-        }
-
-        do {
-            try data.write(to: url)
-            return url
-        } catch {
-            print("GaussianKeyboardExporter: \(error)")
-            return nil
         }
     }
 
@@ -258,6 +344,52 @@ final class GaussianKeyboardExporter {
         }
     }
 
+    private func drawBoundaryCanvas(
+        cgCtx: CGContext,
+        canvasRect: CGRect,
+        frames: [String: CGRect],
+        model: GaussianKeyModel,
+        overlayEvents: [InputEventData]
+    ) {
+        let framesList: [(key: String, rect: CGRect)] = allKeys.compactMap { key in
+            frames[key].map { (key, $0) }
+        }
+
+        drawWinnerRaster(
+            cgCtx: cgCtx,
+            canvas: canvasRect,
+            model: model,
+            frames: framesList
+        )
+
+        for (_, rect) in frames {
+            let path = UIBezierPath(roundedRect: rect, cornerRadius: 5)
+            cgCtx.setStrokeColor(UIColor(white: 1, alpha: 0.35).cgColor)
+            cgCtx.setLineWidth(0.6)
+            cgCtx.addPath(path.cgPath)
+            cgCtx.strokePath()
+        }
+
+        for (key, rect) in frames {
+            guard let gaussian = model.gaussians[key] else { continue }
+            drawEllipses(cgCtx: cgCtx, gaussian: gaussian, frame: rect, key: key)
+        }
+
+        drawTapDots(cgCtx: cgCtx, events: overlayEvents, frames: frames)
+
+        for (key, rect) in frames {
+            let display = key == "delete" ? "\u{232B}"
+                        : key == "space"  ? "\u{23B5}" : key
+            let fontSize: CGFloat = key.count > 1 ? 7 : max(6, rect.height * 0.22)
+            drawText(
+                display,
+                at: CGPoint(x: rect.minX + 3, y: rect.maxY - fontSize - 3),
+                font: .systemFont(ofSize: fontSize, weight: .bold),
+                color: .white
+            )
+        }
+    }
+
     // MARK: - Legend
 
     private func drawLegend(
@@ -288,31 +420,23 @@ final class GaussianKeyboardExporter {
     @discardableResult
     private func drawHeader(
         ctx: UIGraphicsPDFRendererContext,
-        session: Session,
-        participant: Participant?,
-        tapCount: Int,
-        fittedKeys: Int,
-        totalKeys: Int
+        title: String,
+        trailingText: String,
+        detailText: String
     ) -> CGFloat {
         let cgCtx = ctx.cgContext
         cgCtx.setFillColor(UIColor.systemTeal.withAlphaComponent(0.90).cgColor)
         cgCtx.fill(CGRect(x: 0, y: 0, width: pageW, height: 40))
 
-        drawText("Gaussian Keyboard \u{2014} Learned Decision Boundaries",
+        drawText(title,
                  at: CGPoint(x: margin, y: 10),
                  font: .systemFont(ofSize: 14, weight: .bold), color: .white, width: 400)
-        drawText("\(tapCount) taps  \(fittedKeys)/\(totalKeys) fit",
+        drawText(trailingText,
                  at: CGPoint(x: pageW - margin - 140, y: 12),
                  font: .monospacedSystemFont(ofSize: 11, weight: .medium),
                  color: .white, width: 140)
 
-        let iso = ISO8601DateFormatter(); iso.formatOptions = [.withFullDate]
-        let name = participant.map {
-            "\($0.firstName) \($0.lastName)".trimmingCharacters(in: .whitespaces)
-        } ?? "\u{2014}"
-        drawText("Participant: \(name)   Date: \(iso.string(from: session.startedAt))   " +
-                 "min-n=\(GaussianKeyModel.minSamples)  anchor=\(GaussianKeyModel.anchorFrac)  " +
-                 "spatial=\(GaussianKeyModel.spatialPriorFrac)",
+        drawText(detailText,
                  at: CGPoint(x: margin, y: 44),
                  font: .systemFont(ofSize: 8), color: .secondaryLabel, width: 540)
         return 56
@@ -361,5 +485,90 @@ final class GaussianKeyboardExporter {
     ) {
         text.draw(in: CGRect(x: point.x, y: point.y, width: width, height: 20),
                   withAttributes: [.font: font, .foregroundColor: color])
+    }
+
+    private func detailLine(
+        session: Session,
+        participant: Participant?,
+        extra: String
+    ) -> String {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withFullDate]
+        let name = participant.map {
+            "\($0.firstName) \($0.lastName)".trimmingCharacters(in: .whitespaces)
+        } ?? "\u{2014}"
+        return "Participant: \(name)   Date: \(iso.string(from: session.startedAt))   \(extra)"
+    }
+
+    private func writeDocument(
+        pages: [BoundaryDocumentPage],
+        fileStem: String,
+        session: Session,
+        participant: Participant?
+    ) -> URL? {
+        let first = participant?.firstName ?? "unknown"
+        let last = participant?.lastName ?? "unknown"
+        let url = FileManager.default
+            .temporaryDirectory
+            .appendingPathComponent("\(fileStem)_\(first)_\(last).pdf")
+
+        let renderer = UIGraphicsPDFRenderer(
+            bounds: CGRect(x: 0, y: 0, width: pageW, height: pageH)
+        )
+
+        let data = renderer.pdfData { ctx in
+            for page in pages {
+                ctx.beginPage()
+                let headerBottom = drawHeader(
+                    ctx: ctx,
+                    title: page.title,
+                    trailingText: page.trailingText,
+                    detailText: page.detailText
+                )
+                let cgCtx = ctx.cgContext
+                let canvasLeft = margin + sidePad
+                let canvasRight = pageW - margin - sidePad
+                let canvasTop = headerBottom + 16
+                let canvasW = canvasRight - canvasLeft
+                let kw = (canvasW - 2 * sidePad - 9 * keyGap) / 10
+                let sp = (canvasW - 2 * sidePad - 7 * kw - 8 * keyGap) / 2
+                let keyH = (kw * 1.35).rounded()
+                let canvasH = topPad + 4 * keyH + 3 * rowGap + 8
+                let canvasRect = CGRect(x: canvasLeft, y: canvasTop, width: canvasW, height: canvasH)
+                let frames = buildFrames(
+                    ox: canvasLeft,
+                    plotTop: canvasTop,
+                    kw: kw,
+                    sp: sp,
+                    keyH: keyH,
+                    plotW: canvasW
+                )
+
+                cgCtx.setFillColor(UIColor(red: 0.07, green: 0.07, blue: 0.09, alpha: 1).cgColor)
+                cgCtx.fill(canvasRect)
+                drawBoundaryCanvas(
+                    cgCtx: cgCtx,
+                    canvasRect: canvasRect,
+                    frames: frames,
+                    model: page.model,
+                    overlayEvents: page.overlayEvents
+                )
+                drawLegend(
+                    cgCtx: cgCtx,
+                    y: canvasTop + canvasH + 18,
+                    left: canvasLeft,
+                    right: canvasRight,
+                    model: page.model
+                )
+            }
+        }
+
+        do {
+            try data.write(to: url)
+            return url
+        } catch {
+            print("GaussianKeyboardExporter: \(error)")
+            return nil
+        }
     }
 }

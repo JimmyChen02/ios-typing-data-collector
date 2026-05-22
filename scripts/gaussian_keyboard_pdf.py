@@ -14,10 +14,15 @@ from __future__ import annotations
 
 import csv
 import math
+import os
 import sys
+import tempfile
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+
+os.environ.setdefault("MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / "matplotlib"))
+os.environ.setdefault("XDG_CACHE_HOME", str(Path(tempfile.gettempdir()) / "xdg-cache"))
 
 import matplotlib
 matplotlib.use("Agg")
@@ -72,6 +77,10 @@ class Event:
     tap_local_y: float
     key_width: float
     key_height: float
+    session_mode: str
+    study_session_index: int
+    trial_index: int
+    timestamp_ms: int
 
 
 @dataclass
@@ -121,9 +130,26 @@ class Gaussian2D:
         return -0.5 * (m2 + self.log_det)
 
 
+@dataclass
+class PdfPage:
+    title: str
+    summary_text: str
+    detail_text: str
+    samples: list[TrainingSample]
+    model: dict[str, Gaussian2D]
+    model_sources: dict[str, str]
+
+
 def safe_float(value: str | None, default: float = 0.0) -> float:
     try:
         return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def safe_int(value: str | None, default: int = 0) -> int:
+    try:
+        return int(value)
     except (TypeError, ValueError):
         return default
 
@@ -183,6 +209,8 @@ def read_events(csv_path: Path) -> tuple[list[Event], str]:
         if key_width <= 0 or key_height <= 0:
             continue
 
+        if row.get("is_outlier", "0") not in {"", "0", "false", "False"}:
+            continue
         flags = row.get("outlier_flags", "")
         if "spatial" in flags or "far_from_target" in flags:
             continue
@@ -199,6 +227,10 @@ def read_events(csv_path: Path) -> tuple[list[Event], str]:
             tap_local_y=safe_float(row.get("tap_local_y")),
             key_width=key_width,
             key_height=key_height,
+            session_mode=(row.get("session_mode") or "").strip().lower(),
+            study_session_index=max(0, safe_int(row.get("study_session_index"), 1) - 1),
+            trial_index=safe_int(row.get("trial_index"), 0),
+            timestamp_ms=safe_int(row.get("timestamp_ms"), 0),
         ))
 
     participant = ""
@@ -466,24 +498,58 @@ def render_pdf(
     model: dict[str, Gaussian2D],
     model_sources: dict[str, str],
 ) -> None:
-    fig = plt.figure(figsize=(PAGE_W / 72, PAGE_H / 72), dpi=100)
-    ax = fig.add_axes([0, 0, 1, 1])
+    page = PdfPage(
+        title="Gaussian Keyboard - Intended-Key Boundaries",
+        summary_text="",
+        detail_text="",
+        samples=samples,
+        model=model,
+        model_sources=model_sources,
+    )
+    render_pdf_pages(out_path, participant, [page])
+
+
+def render_pdf_pages(
+    out_path: Path,
+    participant: str,
+    pages: list[PdfPage],
+) -> None:
+    with PdfPages(out_path) as pdf:
+        for page in pages:
+            fig = plt.figure(figsize=(PAGE_W / 72, PAGE_H / 72), dpi=100)
+            ax = fig.add_axes([0, 0, 1, 1])
+            render_pdf_page(ax, participant, page)
+            pdf.savefig(fig)
+            plt.close(fig)
+
+
+def render_pdf_page(
+    ax,
+    participant: str,
+    page: PdfPage,
+) -> None:
     ax.set_xlim(0, PAGE_W)
     ax.set_ylim(PAGE_H, 0)
     ax.set_aspect("equal")
     ax.axis("off")
 
     ax.add_patch(Rectangle((0, 0), PAGE_W, 40, facecolor=(0.0, 0.55, 0.55, 0.9), edgecolor="none"))
-    ax.text(MARGIN, 20, "Gaussian Keyboard - Intended-Key Boundaries",
+    ax.text(MARGIN, 20, page.title,
             fontsize=14, fontweight="bold", color="white", va="center")
-    fitted_count = sum(1 for source in model_sources.values() if source == SOURCE_FITTED_CURRENT)
-    borrowed_count = sum(1 for source in model_sources.values() if source == SOURCE_PRIOR_MODEL)
-    geometry_count = len(ALL_KEYS) - len(model)
+    fitted_count = sum(1 for source in page.model_sources.values() if source == SOURCE_FITTED_CURRENT)
+    borrowed_count = sum(1 for source in page.model_sources.values() if source == SOURCE_PRIOR_MODEL)
+    geometry_count = len(ALL_KEYS) - len(page.model)
+    summary_text = page.summary_text or (
+        f"{len(page.samples)} samples  fitted={fitted_count}  borrowed={borrowed_count}  geometry={geometry_count}"
+    )
     ax.text(PAGE_W - MARGIN, 20,
-            f"{len(samples)} samples  fitted={fitted_count}  borrowed={borrowed_count}  geometry={geometry_count}",
+            summary_text,
             fontsize=10, family="monospace", color="white", ha="right", va="center")
+    detail_text = page.detail_text or (
+        f"Participant: {participant or '-'}   min-n={MIN_SAMPLES}  anchor={ANCHOR_FRAC}  spatial={SPATIAL_PRIOR_FRAC}"
+    )
     ax.text(MARGIN, 48,
-            f"Participant: {participant or '-'}   min-n={MIN_SAMPLES}  anchor={ANCHOR_FRAC}  spatial={SPATIAL_PRIOR_FRAC}",
+            detail_text,
             fontsize=8, color="#777777", va="center")
 
     canvas_left = MARGIN + PDF_SIDE_PAD
@@ -505,7 +571,7 @@ def render_pdf(
         py = canvas.y + row * RASTER_STEP + RASTER_STEP / 2.0
         for col in range(cols):
             px = canvas.x + col * RASTER_STEP + RASTER_STEP / 2.0
-            key = winner(px, py, frames, model)
+            key = winner(px, py, frames, page.model)
             if key:
                 raster[row, col] = key_color(key, 0.55)
     ax.imshow(
@@ -528,7 +594,7 @@ def render_pdf(
                 fontsize=7 if len(key) > 1 else max(6, frame.h * 0.22),
                 color=(1, 1, 1, 0.85), va="bottom", ha="left", fontweight="bold")
 
-    for key, gaussian in model.items():
+    for key, gaussian in page.model.items():
         frame = frames.get(key)
         if not frame:
             continue
@@ -544,7 +610,7 @@ def render_pdf(
         ax.plot([cx, cx], [cy - 3, cy + 3], color="white", linewidth=0.9)
 
     grouped = defaultdict(list)
-    for sample in samples:
+    for sample in page.samples:
         grouped[sample.target_key].append(sample)
     for key, key_samples in grouped.items():
         frame = frames.get(key)
@@ -558,7 +624,7 @@ def render_pdf(
 
     legend_y = canvas.y + canvas.h + 20
     lx = canvas.x
-    counts = Counter(sample.target_key for sample in samples)
+    counts = Counter(sample.target_key for sample in page.samples)
     for key in ALL_KEYS:
         if counts[key] == 0:
             continue
@@ -570,9 +636,7 @@ def render_pdf(
         if lx + 44 > canvas_right:
             break
 
-    with PdfPages(out_path) as pdf:
-        pdf.savefig(fig)
-    plt.close(fig)
+    return
 
 
 def print_summary(
