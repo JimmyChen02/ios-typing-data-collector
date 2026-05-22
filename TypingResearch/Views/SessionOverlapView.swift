@@ -441,3 +441,303 @@ private enum SessionOverlapMetric {
         return numerator / denominator
     }
 }
+
+struct GaussianBoundarySessionView: View {
+    let participant: Participant?
+    let session: Session?
+
+    @State private var visibleSessionCount: Int
+    @State private var previewImage: UIImage?
+    @State private var isRenderingPreview = false
+    @State private var shareItem: ShareItem? = nil
+    @State private var exportingKind: ExportKind? = nil
+
+    private let snapshots: [GaussianBoundarySessionSnapshot]
+
+    private enum ExportKind {
+        case current
+        case all
+    }
+
+    init(events: [InputEventData], participant: Participant?, session: Session?) {
+        let builtSnapshots = GaussianBoundaryTimeline.sessionSnapshots(from: events)
+        self.snapshots = builtSnapshots
+        self.participant = participant
+        self.session = session
+        _visibleSessionCount = State(initialValue: builtSnapshots.isEmpty ? 0 : 1)
+    }
+
+    private var visibleSnapshot: GaussianBoundarySessionSnapshot? {
+        guard !snapshots.isEmpty,
+              visibleSessionCount > 0,
+              visibleSessionCount <= snapshots.count else {
+            return nil
+        }
+        return snapshots[visibleSessionCount - 1]
+    }
+
+    private var headerText: String {
+        guard let snapshot = visibleSnapshot else {
+            return "No clean session boundary data available."
+        }
+        return "Session \(snapshot.displayIndex) boundary with \(snapshot.cleanEvents.count) clean events"
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                controls
+                previewSection
+                sourceSummary
+                exportButtons
+            }
+            .padding()
+        }
+        .navigationTitle("Gaussian Sessions")
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(item: $shareItem) { item in
+            ShareSheet(activityItems: [item.url])
+        }
+    }
+
+    private var controls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Session Boundary Viewer")
+                .font(.headline)
+            Text("Each step fits the current session first, then backs off to prior-session data for sparse keys.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            HStack(spacing: 10) {
+                Button(action: addNextSession) {
+                    Label(nextButtonTitle, systemImage: "plus.square.on.square")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(snapshots.isEmpty)
+
+                Button(action: resetViewer) {
+                    Image(systemName: "arrow.counterclockwise")
+                        .frame(width: 44)
+                }
+                .buttonStyle(.bordered)
+                .disabled(snapshots.count <= 1)
+            }
+
+            Text(headerText)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .padding()
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color(.systemGray6)))
+    }
+
+    private var previewSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Gaussian Boundary")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+
+            GeometryReader { geo in
+                let width = max(280, geo.size.width)
+                let height = max(220, width * 0.46)
+
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(Color(.systemGray6))
+
+                    if let previewImage {
+                        Image(uiImage: previewImage)
+                            .resizable()
+                            .interpolation(.high)
+                            .scaledToFit()
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                            .padding(8)
+                    } else if snapshots.isEmpty {
+                        Text("No boundary snapshots yet.")
+                            .foregroundColor(.secondary)
+                    }
+
+                    if isRenderingPreview {
+                        ProgressView()
+                            .padding(12)
+                            .background(.ultraThinMaterial, in: Capsule())
+                    }
+                }
+                .task(id: "\(visibleSessionCount)-\(Int(width.rounded()))") {
+                    await renderPreview(width: width, height: height)
+                }
+            }
+            .frame(height: 250)
+        }
+    }
+
+    private var sourceSummary: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Backoff Summary")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+
+            if let snapshot = visibleSnapshot {
+                HStack(spacing: 12) {
+                    sourcePill(
+                        title: "Current",
+                        value: "\(snapshot.fittedCurrentKeys)",
+                        color: .green
+                    )
+                    sourcePill(
+                        title: "Prior",
+                        value: "\(snapshot.priorModelKeys)",
+                        color: .orange
+                    )
+                    sourcePill(
+                        title: "Geometry",
+                        value: "\(snapshot.geometryFallbackKeys)",
+                        color: .secondary
+                    )
+                }
+
+                Text("Session \(snapshot.displayIndex) uses \(snapshot.priorEventCount) prior clean events for backoff when a key is too sparse.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                Text("No boundary summaries available.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding()
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color(.systemGray6)))
+    }
+
+    private var exportButtons: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Downloads")
+                .font(.headline)
+            Text("PDF works best here because it can package the current page or the full session sequence in one file.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            Button(action: { exportCurrentSessionPDF() }) {
+                HStack {
+                    if exportingKind == .current {
+                        ProgressView().tint(.white).padding(.trailing, 4)
+                    } else {
+                        Image(systemName: "square.and.arrow.down")
+                    }
+                    Text(exportingKind == .current ? "Generating…" : "Current Session Boundary PDF")
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(Color.teal)
+                .foregroundColor(.white)
+                .cornerRadius(10)
+            }
+            .disabled(exportingKind != nil || visibleSnapshot == nil || session == nil)
+
+            Button(action: { exportAllSessionsPDF() }) {
+                HStack {
+                    if exportingKind == .all {
+                        ProgressView().tint(.white).padding(.trailing, 4)
+                    } else {
+                        Image(systemName: "doc.on.doc")
+                    }
+                    Text(exportingKind == .all ? "Generating…" : "All Session Boundaries PDF")
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(Color.indigo)
+                .foregroundColor(.white)
+                .cornerRadius(10)
+            }
+            .disabled(exportingKind != nil || snapshots.isEmpty || session == nil)
+        }
+    }
+
+    private var nextButtonTitle: String {
+        guard !snapshots.isEmpty else { return "No Sessions" }
+        if visibleSessionCount >= snapshots.count {
+            return "Restart Viewer"
+        }
+        return "Show Session \(snapshots[visibleSessionCount].displayIndex)"
+    }
+
+    private func addNextSession() {
+        guard !snapshots.isEmpty else { return }
+        if visibleSessionCount >= snapshots.count {
+            visibleSessionCount = 1
+        } else {
+            visibleSessionCount += 1
+        }
+    }
+
+    private func resetViewer() {
+        visibleSessionCount = snapshots.isEmpty ? 0 : 1
+    }
+
+    private func sourcePill(title: String, value: String, color: Color) -> some View {
+        VStack(spacing: 3) {
+            Text(value)
+                .font(.headline)
+                .fontWeight(.bold)
+                .foregroundColor(color)
+            Text(title)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color(.systemBackground)))
+    }
+
+    @MainActor
+    private func renderPreview(width: CGFloat, height: CGFloat) async {
+        guard let snapshot = visibleSnapshot, width > 0, height > 0 else {
+            previewImage = nil
+            return
+        }
+
+        isRenderingPreview = true
+        let exporter = GaussianKeyboardExporter()
+        previewImage = exporter.previewImage(
+            snapshot: snapshot,
+            size: CGSize(width: width, height: height)
+        )
+        isRenderingPreview = false
+    }
+
+    private func exportCurrentSessionPDF() {
+        guard let session, let snapshot = visibleSnapshot else { return }
+        exportingKind = .current
+        Task {
+            let exporter = GaussianKeyboardExporter()
+            let url = await exporter.exportSessionPDF(
+                snapshots: [snapshot],
+                session: session,
+                participant: participant,
+                visibleSessionCount: snapshot.sessionOrdinal
+            )
+            await MainActor.run {
+                exportingKind = nil
+                if let url { shareItem = ShareItem(url: url) }
+            }
+        }
+    }
+
+    private func exportAllSessionsPDF() {
+        guard let session else { return }
+        exportingKind = .all
+        Task {
+            let exporter = GaussianKeyboardExporter()
+            let url = await exporter.exportSessionPDF(
+                snapshots: snapshots,
+                session: session,
+                participant: participant
+            )
+            await MainActor.run {
+                exportingKind = nil
+                if let url { shareItem = ShareItem(url: url) }
+            }
+        }
+    }
+}

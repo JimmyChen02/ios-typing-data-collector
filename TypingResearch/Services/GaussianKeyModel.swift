@@ -42,6 +42,12 @@ struct Gaussian2D: Codable {
     }
 }
 
+enum GaussianBackoffSource: String, Codable, Sendable {
+    case fittedCurrent = "fitted_current"
+    case priorModel = "prior_model"
+    case geometryFallback = "geometry_fallback"
+}
+
 // MARK: - GaussianKeyModel
 //
 // Fits one Gaussian per intended key and exposes a competitive argmax scorer
@@ -77,9 +83,21 @@ final class GaussianKeyModel {
     static let spatialPriorFrac: Double = 0.40
 
     var gaussians: [String: Gaussian2D] = [:]
+    var sources: [String: GaussianBackoffSource] = [:]
+    var sampleCounts: [String: Int] = [:]
 
-    init(gaussians: [String: Gaussian2D] = [:]) {
+    init(
+        gaussians: [String: Gaussian2D] = [:],
+        sources: [String: GaussianBackoffSource] = [:],
+        sampleCounts: [String: Int] = [:]
+    ) {
         self.gaussians = gaussians
+        self.sources = sources
+        self.sampleCounts = sampleCounts
+    }
+
+    func source(for key: String) -> GaussianBackoffSource {
+        sources[key] ?? .geometryFallback
     }
 
     /// log prior = -0.5 * ((out_x / sigma_x)^2 + (out_y / sigma_y)^2)
@@ -119,21 +137,33 @@ final class GaussianKeyModel {
     /// key, while quickly deleted inserts are not used as positive evidence.
     static func fit(
         events: [InputEventData],
-        keys: [String]
+        keys: [String],
+        priorModel: GaussianKeyModel? = nil
     ) -> GaussianKeyModel {
         let allowed = Set(keys)
         let samples = trainingSamples(from: events, allowed: allowed)
         let byKey: [String: [TrainingSample]] = Dictionary(grouping: samples, by: \.targetKey)
 
         var result: [String: Gaussian2D] = [:]
+        var sources: [String: GaussianBackoffSource] = [:]
+        var sampleCounts: [String: Int] = [:]
         for key in keys {
             let samples = byKey[key] ?? []
+            sampleCounts[key] = samples.count
             if samples.count >= minSamples,
                let g = fitSingle(samples: samples) {
                 result[key] = g
+                sources[key] = .fittedCurrent
+            } else if let prior = priorModel?.gaussians[key] {
+                result[key] = prior
+                sources[key] = .priorModel
             }
         }
-        return GaussianKeyModel(gaussians: result)
+        return GaussianKeyModel(
+            gaussians: result,
+            sources: sources,
+            sampleCounts: sampleCounts
+        )
     }
 
     private static func trainingSamples(

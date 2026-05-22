@@ -2,7 +2,7 @@
 
 TypingResearch combines two parts: an iPhone data-collection app for mobile text-entry studies, and companion offline Python scripts for post-study analysis.
 
-The iOS app runs timed HCI study sessions with instrumented custom keyboards in classic and adaptive Gaussian modes, capturing touch coordinates, timing, correction behavior, and accuracy metrics. The Python scripts operate on exported CSVs to clean data, regenerate keyboard-view PDFs, visualize session overlap, and compute trial-level loss analyses.
+The iOS app runs timed HCI study sessions with instrumented custom keyboards in classic and adaptive Gaussian modes, capturing touch coordinates, timing, correction behavior, and accuracy metrics. The Python scripts operate on exported CSVs to clean data, regenerate keyboard-view PDFs, generate per-session Gaussian-boundary PDFs, and compute trial-level loss analyses.
 
 ## iOS App
 
@@ -18,8 +18,8 @@ The iOS app runs timed HCI study sessions with instrumented custom keyboards in 
 - Captures per-keystroke touch coordinates, key geometry, timing, correctness, and correction behavior
 - Presents a continuous text stream drawn from rotating sentence corpora and expands the prompt as the participant types
 - Starts the session timer on the first keypress instead of on screen load
-- Shows in-app summaries for session performance, data cleaning, ground-truth loss, tap distribution, and session overlap
-- Exports raw and cleaned keystroke CSVs, plus raw, cleaned, and Gaussian visualization PDFs
+- Shows in-app summaries for session performance, data cleaning, ground-truth loss, tap distribution, tap-dot session overlap, and Gaussian boundary session progression
+- Exports raw and cleaned keystroke CSVs, plus raw, cleaned, Gaussian-boundary, and ground-truth-loss PDFs
 
 ### Current Study Design
 
@@ -40,6 +40,7 @@ Each fitted key is represented by a 2D Gaussian over centered touch offsets. The
 - still allows deleted mistaps to train the intended key when an `expectedChar` is known
 - includes delete taps as their own touch target
 - falls back to accepted correct taps when intended-character supervision is unavailable, while excluding quickly deleted inserts from that fallback path
+- supports a per-key backoff chain: current-trial/session fit -> prior model -> geometric key-area fallback
 
 ### Classification Logic
 
@@ -57,7 +58,7 @@ After each session or study, the app provides:
 - per-session accuracy, WPM, and backspace summaries
 - data-cleaning summaries and outlier counts
 - ground-truth loss charts computed from clean classic-session insert taps
-- tap distribution views and a session-overlap viewer
+- tap distribution views, a tap-dot session-overlap viewer, and a Gaussian boundary session viewer
 - file export and optional backend upload
 
 ### Available Exports
@@ -68,9 +69,10 @@ After each session or study, the app provides:
 | `Cleaned Keystrokes CSV` | Raw schema plus `dist_from_target_kw`, `is_outlier`, and `outlier_flags`; rows flagged as `spatial` or `far_from_target` are excluded, while other flagged rows remain annotated |
 | `Raw PDF` | Keyboard-view dot plot of recorded taps on the app's standard keyboard layout |
 | `Cleaned PDF` | The same keyboard-view PDF with `spatial` and `far_from_target` taps removed |
-| `Gaussian PDF` | Rasterized Gaussian decision surface with per-key ellipses and correct-tap overlays, fit from the persisted classic-session corpus |
+| `Final Gaussian Boundary PDF` | Rasterized Gaussian decision surface with per-key ellipses and correct-tap overlays, fit from all classic sessions only |
+| `Ground Truth Loss PDF` | Two-page PDF with the specific cumulative path charts and the average-across-all-combinations charts |
 
-The Gaussian PDF is shown from adaptive-session summaries because it visualizes the classic-trained model used by the adaptive keyboard.
+The summary screen exports the final classic-only Gaussian boundary and the ground-truth loss charts. The in-app Gaussian boundary session viewer can also export the currently visible session boundary PDF or one combined PDF containing all session boundaries.
 
 ## Offline Python Scripts
 
@@ -81,8 +83,10 @@ The `scripts/` folder contains companion analysis and export utilities:
 - `scripts/gaussian_keyboard_pdf.py`: mirrors the intended-key Gaussian fitting logic and exports a Gaussian keyboard PDF from a CSV
 - `scripts/ground_truth_trial_loss.py`: builds an all-trials ground truth and exports graph-ready loss/similarity CSVs for cumulative-prefix and all-combinations analyses
 - `scripts/future-trial-loss.py`: measures how well cumulative classic-trial data predicts future trials
-- `scripts/session_overlap_visualization.py`: generates cumulative session-overlap SVGs and weighted-Jaccard summaries
+- `scripts/key_backoff_report.py`: audits per-trial key coverage and reports whether each key is trial-specific, prior-backed, pooled-global, or falling back to raw key geometry
+- `scripts/session_overlap_visualization.py`: generates per-session Gaussian-boundary PDFs, a combined all-sessions PDF, a final classic-only ground-truth boundary PDF, and per-session backoff summaries
 - `scripts/manual_test_ground_truth_trial_loss.py`: produces synthetic/manual test outputs for the ground-truth loss pipeline
+- `scripts/manual_test_key_backoff_report.py`: produces and verifies a synthetic dataset for the key-backoff coverage report
 - `scripts/loss-automation.py`: legacy overlap-analysis helper retained in the repo but marked unused
 
 Examples:
@@ -93,8 +97,10 @@ python3 scripts/keystrokes_to_pdf.py <cleaned_keystrokes.csv> [output.pdf]
 python3 scripts/gaussian_keyboard_pdf.py <keystrokes.csv> [output.pdf]
 python3 scripts/ground_truth_trial_loss.py <cleaned_keystrokes.csv>
 python3 scripts/future-trial-loss.py <cleaned_keystrokes.csv>
+python3 scripts/key_backoff_report.py <cleaned_keystrokes.csv>
 python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv>
 python3 scripts/manual_test_ground_truth_trial_loss.py --output-dir /tmp/ground-truth-loss-test
+python3 scripts/manual_test_key_backoff_report.py --output-dir /tmp/key-backoff-test
 ```
 
 ### To Open The App
@@ -160,11 +166,30 @@ Primary output:
 
 - `<input_stem>_future_trial_loss_summary.csv`
 
-### 5. Session overlap visualizations
+### 5. Key backoff coverage
 
-Use this to visualize how tap behavior changes across study sessions. The
-script writes cumulative SVGs: frame `01` shows session 1, frame `02` shows
-sessions 1 + 2, and so on.
+Use this to check whether each trial has enough samples to fit its own
+character-specific Gaussian, or whether it would need to back off to prior
+trials, the pooled dataset, or the raw key area.
+
+```sh
+python3 scripts/key_backoff_report.py <cleaned_keystrokes.csv>
+python3 scripts/key_backoff_report.py <cleaned_keystrokes.csv> --min-samples 5 --label-column expected_char
+python3 scripts/manual_test_key_backoff_report.py --output-dir /tmp/key-backoff-test
+```
+
+Primary outputs:
+
+- `<input_stem>_key_backoff_trial_summary.csv`
+- `<input_stem>_key_backoff_trial_key_detail.csv`
+- `<input_stem>_key_backoff_key_summary.csv`
+
+### 6. Session Gaussian boundary PDFs
+
+Use this to generate the same per-session Gaussian-boundary progression used
+by the in-app Gaussian session viewer. Each session PDF is fit from that
+session first, then backs off to the cumulative prior-session model for sparse
+keys.
 
 ```sh
 python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --output-dir <output_dir>
@@ -173,27 +198,26 @@ python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --outp
 Example using a local exported file:
 
 ```sh
-python3 scripts/session_overlap_visualization.py /Users/jimmy2/Downloads/keystrokes_cleaned_Tran_.csv --output-dir /Users/jimmy2/Downloads/session_overlap_Tran_review
+python3 scripts/session_overlap_visualization.py /Users/jimmy2/Downloads/keystrokes_cleaned_Tran_.csv --output-dir /Users/jimmy2/Downloads/session_boundary_Tran_review
 ```
 
 Useful variants:
 
 ```sh
-# Default review configuration: Jaccard grid 20 + prominent Gaussian overlap.
+# Default review configuration.
 python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --output-dir <output_dir>
 
-# Override the defaults if needed.
-python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --output-dir <output_dir> --grid-size 20 --gaussian-step 3
+# Higher-fidelity boundary surface.
+python3 scripts/session_overlap_visualization.py <cleaned_keystrokes.csv> --output-dir <output_dir> --raster-step 1
 
 # Synthetic sanity-check data.
-python3 scripts/session_overlap_visualization.py --demo --output-dir /tmp/session-overlap-demo
+python3 scripts/session_overlap_visualization.py --demo --output-dir /tmp/session-boundary-demo
 ```
 
 Primary outputs:
 
-- `session_jaccard_overlay_XX.svg`: direct grid-20 Jaccard view; grey cells are previous-only, colored cells are newest-only, and overlap cells are shared bins.
-- `session_gaussian_overlap_XX.svg`: smooth Gaussian-overlap view; blue-grey is previous density, key color is newest density, and strongest key color is shared Gaussian density.
-- `session_jaccard_summary.csv`: weighted Jaccard similarity/loss by cumulative session step.
-- `session_jaccard_by_key.csv`: weighted Jaccard similarity/loss per key.
-- `session_gaussian_overlap_summary.csv`: Gaussian-overlap similarity/loss by cumulative session step.
-- `session_gaussian_overlap_by_key.csv`: Gaussian-overlap similarity/loss per key.
+- `session_gaussian_boundaries_XX.pdf`: one Gaussian-boundary PDF per session snapshot
+- `session_gaussian_boundaries_all_sessions.pdf`: all session snapshots in one PDF
+- `final_gaussian_ground_truth_boundary.pdf`: final classic-only ground-truth boundary PDF
+- `session_gaussian_boundaries_summary.csv`: per-session backoff/source summary
+- `session_gaussian_boundaries_by_key.csv`: per-session per-key source summary
