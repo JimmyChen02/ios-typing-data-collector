@@ -15,6 +15,7 @@ struct ParticipantSetupView: View {
     @State private var errorMessage: String = ""
     @State private var totalSessions: Int = 4  // min 2, step 2
     @State private var studyDesign: StudyDesign = .classicAndAdaptive
+    @State private var sessionDurationMinutes: Int = 1
 
     var body: some View {
         NavigationStack {
@@ -46,12 +47,13 @@ struct ParticipantSetupView: View {
                     }
                     .pickerStyle(.segmented)
                     .onChange(of: studyDesign) { _, newDesign in
-                        if newDesign == .classicAndAdaptive, totalSessions % 2 != 0 {
-                            totalSessions += 1
+                        if newDesign == .classicAndAdaptive {
+                            if totalSessions > 20 { totalSessions = 20 }
+                            if totalSessions % 2 != 0 { totalSessions += 1 }
                         }
                     }
 
-                    Stepper(value: $totalSessions, in: 2...20, step: studyDesign == .classicAndAdaptive ? 2 : 1) {
+                    Stepper(value: $totalSessions, in: 2...(studyDesign == .classicOnly ? 30 : 20), step: studyDesign == .classicAndAdaptive ? 2 : 1) {
                         HStack {
                             Text("Sessions")
                             Spacer()
@@ -61,13 +63,19 @@ struct ParticipantSetupView: View {
                         }
                     }
 
+                    Picker("Session Duration", selection: $sessionDurationMinutes) {
+                        ForEach(1...5, id: \.self) { min in
+                            Text("\(min) min").tag(min)
+                        }
+                    }
+
                     if studyDesign == .classicAndAdaptive {
-                        LabeledContent("Classic sessions", value: "\(totalSessions / 2) × 1 min")
-                        LabeledContent("Adaptive sessions", value: "\(totalSessions / 2) × 1 min")
+                        LabeledContent("Classic sessions", value: "\(totalSessions / 2) × \(sessionDurationMinutes) min")
+                        LabeledContent("Adaptive sessions", value: "\(totalSessions / 2) × \(sessionDurationMinutes) min")
                         Text("First \(totalSessions / 2) sessions use the standard keyboard. Gaussian adaptive keyboard activates for the remaining \(totalSessions / 2).")
                             .font(.caption).foregroundColor(.secondary)
                     } else {
-                        LabeledContent("Classic sessions", value: "\(totalSessions) × 1 min")
+                        LabeledContent("Classic sessions", value: "\(totalSessions) × \(sessionDurationMinutes) min")
                         Text("All sessions use the standard keyboard. No Gaussian adaptive keyboard.")
                             .font(.caption).foregroundColor(.secondary)
                     }
@@ -87,7 +95,7 @@ struct ParticipantSetupView: View {
                                 Text("Start Study")
                                     .fontWeight(.semibold)
                                     .foregroundColor(.white)
-                                Text("\(totalSessions) sessions · \(totalSessions) min total")
+                                Text("\(totalSessions) sessions · \(totalSessions * sessionDurationMinutes) min total")
                                     .font(.caption2)
                                     .foregroundColor(.white.opacity(0.85))
                             }
@@ -138,6 +146,6 @@ struct ParticipantSetupView: View {
         )
         modelContext.insert(participant)
         sessionManager.configure(modelContext: modelContext)
-        sessionManager.startStudy(participant: participant, totalSessions: totalSessions, design: studyDesign)
+        sessionManager.startStudy(participant: participant, totalSessions: totalSessions, design: studyDesign, sessionDurationSeconds: sessionDurationMinutes * 60)
     }
 }

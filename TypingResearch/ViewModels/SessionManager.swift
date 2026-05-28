@@ -277,19 +277,19 @@ final class SessionManager {
         startNextTrial()
     }
 
-    func startStudy(participant: Participant, totalSessions: Int, design: StudyDesign = .classicAndAdaptive) {
+    func startStudy(participant: Participant, totalSessions: Int, design: StudyDesign = .classicAndAdaptive, sessionDurationSeconds: Int = 60) {
         totalStudySessions = totalSessions
         studyDesign = design
         completedStudySessions = 0
         isStudyComplete = false
         studyId = UUID()
         allEvents = []
-        startSession(participant: participant, durationSeconds: 60, mode: currentSessionMode)
+        startSession(participant: participant, durationSeconds: sessionDurationSeconds, mode: currentSessionMode)
     }
 
     func continueToNextSession() {
         guard let p = participant else { return }
-        startSession(participant: p, durationSeconds: 60, mode: currentSessionMode)
+        startSession(participant: p, durationSeconds: sessionDurationSeconds, mode: currentSessionMode)
     }
 
     func endStudyEarly() {
@@ -660,8 +660,9 @@ final class SessionManager {
     func restartSameSession() {
         guard let p = participant else { return }
         let total = totalStudySessions
+        let duration = sessionDurationSeconds
         reset()
-        startStudy(participant: p, totalSessions: total)
+        startStudy(participant: p, totalSessions: total, sessionDurationSeconds: duration)
     }
 
     func reset() {
