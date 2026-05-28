@@ -27,19 +27,27 @@ Outlier criteria:
     iki_high         inter_key_interval_ms > 3000 → pause / distraction
     trial_start      text_before == ""  → first keystroke of a trial
     delete_event     event_type == "delete"  → intentional backspace
+    sigma_outlier    tap is > N std devs from its expected key's cluster mean
+                       (second pass, only applied when --sigma is set).
+                       Use this to remove stray isolated dots for Gaussian truth.
 
 Usage:
-    python clean_keystrokes.py <input.csv> [output.csv]
+    python clean_keystrokes.py <input.csv> [output.csv] [-t KW] [-s SD]
 
-    If output path is omitted, writes <stem>_cleaned.csv next to the input.
+    -t / --threshold FLOAT
+        far_from_target cutoff in key-widths (default 1.25).
+        Example: -t 1.0  →  keystrokes_Tran__cleaned_t1.0.csv
 
-Thresholds can be overridden at the top of this file.
+    -s / --sigma FLOAT
+        Per-key cluster filter: flag taps more than N std devs from their
+        expected key's mean tap position (computed from geometrically clean
+        taps only). Good starting values: 2.5 (tight) to 3.0 (loose).
+        Example: -s 2.5  →  keystrokes_Tran__cleaned_s2.5.csv
 """
 
 from __future__ import annotations
 
 import csv
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -50,6 +58,7 @@ SPATIAL_MAX = 1.5
 IKI_MIN_MS = 50.0
 IKI_MAX_MS = 3000.0
 DIST_MAX_KW = 1.25
+SIGMA_THRESHOLD: float | None = None
 
 ROW_H = 1.35
 
@@ -164,6 +173,37 @@ def compute_output_columns(rows: list[dict]) -> tuple[np.ndarray, np.ndarray, np
         for index in np.flatnonzero(mask):
             flags_per_row[int(index)].append(flag_name)
 
+    if SIGMA_THRESHOLD is not None:
+        geometric_outlier = np.array([len(f) > 0 for f in flags_per_row], dtype=bool)
+        valid_for_stats = hit_valid & expected_valid & ~geometric_outlier
+
+        # Per-expected-key mean/std from geometrically clean taps
+        key_stats: dict[int, tuple[float, float, float, float]] = {}
+        for key_idx in range(len(KEY_ORDER)):
+            mask = valid_for_stats & (expected_indices == key_idx)
+            if mask.sum() < 5:
+                continue
+            xs, ys = abs_x[mask], abs_y[mask]
+            sx, sy = float(xs.std()), float(ys.std())
+            if sx < 1e-6 or sy < 1e-6:
+                continue
+            key_stats[key_idx] = (float(xs.mean()), float(ys.mean()), sx, sy)
+
+        # Vectorised: flag taps > SIGMA_THRESHOLD std devs from their key's mean
+        sigma_outlier = np.zeros(row_count, dtype=bool)
+        valid_for_sigma = hit_valid & expected_valid
+        for key_idx, (mu_x, mu_y, s_x, s_y) in key_stats.items():
+            key_mask = valid_for_sigma & (expected_indices == key_idx)
+            if not key_mask.any():
+                continue
+            z = np.sqrt(((abs_x[key_mask] - mu_x) / s_x) ** 2 +
+                        ((abs_y[key_mask] - mu_y) / s_y) ** 2)
+            hits = np.where(key_mask)[0]
+            sigma_outlier[hits[z > SIGMA_THRESHOLD]] = True
+
+        for index in np.flatnonzero(sigma_outlier):
+            flags_per_row[int(index)].append("sigma_outlier")
+
     return norm_x, norm_y, distance, flags_per_row
 
 
@@ -176,11 +216,14 @@ def clean_file(input_path: str, output_path: str | None = None) -> str:
         original_fields = reader.fieldnames or []
         rows = list(reader)
 
+    SPATIAL_FLAGS = {"spatial", "far_from_target", "sigma_outlier"}
+
     new_fields = list(original_fields) + [
         "tap_norm_x",
         "tap_norm_y",
         "dist_from_target_kw",
         "is_outlier",
+        "is_spatial_outlier",
         "outlier_flags",
     ]
 
@@ -190,10 +233,12 @@ def clean_file(input_path: str, output_path: str | None = None) -> str:
     flag_counts: dict[str, int] = {}
     for index, row in enumerate(rows):
         flags = flags_per_row[index]
+        flag_set = set(flags)
         row["tap_norm_x"] = f"{norm_x[index]:.4f}"
         row["tap_norm_y"] = f"{norm_y[index]:.4f}"
         row["dist_from_target_kw"] = "" if np.isnan(distance[index]) else f"{distance[index]:.3f}"
         row["is_outlier"] = "1" if flags else "0"
+        row["is_spatial_outlier"] = "1" if flag_set & SPATIAL_FLAGS else "0"
         row["outlier_flags"] = "|".join(flags)
         if flags:
             flagged += 1
@@ -229,13 +274,43 @@ def clean_file(input_path: str, output_path: str | None = None) -> str:
 
 
 def main() -> None:
-    if len(sys.argv) < 2:
-        print(__doc__)
-        sys.exit(1)
+    import argparse
 
-    input_csv = sys.argv[1]
-    output_csv = sys.argv[2] if len(sys.argv) > 2 else None
-    clean_file(input_csv, output_csv)
+    parser = argparse.ArgumentParser(
+        description="Flag outliers in raw keystroke CSVs.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("input", help="Raw keystroke CSV")
+    parser.add_argument("output", nargs="?", help="Output CSV (optional)")
+    parser.add_argument(
+        "-t", "--threshold",
+        type=float,
+        default=1.25,
+        metavar="KW",
+        help="far_from_target cutoff in key-widths (default 1.25)",
+    )
+    parser.add_argument(
+        "-s", "--sigma",
+        type=float,
+        default=None,
+        metavar="SD",
+        help="per-key cluster filter: flag taps > N std devs from expected key mean (e.g. 2.5)",
+    )
+    args = parser.parse_args()
+
+    global DIST_MAX_KW, SIGMA_THRESHOLD
+    DIST_MAX_KW = args.threshold
+    SIGMA_THRESHOLD = args.sigma
+
+    output_csv = args.output
+    if output_csv is None:
+        stem = Path(args.input).stem
+        t_suffix = f"_t{args.threshold}" if args.threshold != 1.25 else ""
+        s_suffix = f"_s{args.sigma}" if args.sigma is not None else ""
+        if t_suffix or s_suffix:
+            output_csv = str(Path(args.input).with_name(f"{stem}_cleaned{t_suffix}{s_suffix}.csv"))
+
+    clean_file(args.input, output_csv)
 
 
 if __name__ == "__main__":
