@@ -38,7 +38,7 @@ enum KeystrokeCleaner {
     static let spatialMax: Double =  1.5
     static let ikiMinMs:   Double =  50.0
     static let ikiMaxMs:   Double = 3000.0
-    static let distMaxKW:  Double =  1.25
+    static let distMaxKW:  Double =  0.5
 
     // Keyboard layout in key-width units; row height = 1.35 key-widths.
     private static let rowH: Double = 1.35
