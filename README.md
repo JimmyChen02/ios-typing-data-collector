@@ -54,26 +54,10 @@ open TypingResearch.xcodeproj
 - `scripts/clean_keystrokes.py`: adds normalized coordinates and outlier flags
 - `scripts/keystrokes_to_pdf.py`: renders tap-distribution PDFs
 - `scripts/gaussian_keyboard_pdf.py`: renders one full-dataset Gaussian boundary as PDF or SVG
-- `scripts/session_overlap_visualization.py`: renders one Gaussian boundary per session plus summary CSVs
+- `scripts/session_overlap_visualization.py`: renders a baseline keyboard boundary plus cumulative per-session Gaussian boundaries and summary CSVs
+- `scripts/plot_cleansing_subset.py`: renders a side-by-side raw-vs-cleaned keyboard view for a chosen session range
 - `scripts/ground_truth_trial_loss.py`: compares trial prefixes against all-trial ground truth
-- `scripts/future-trial-loss.py`: measures how early trials predict later trials
-- `scripts/key_backoff_report.py`: shows which keys are fitted vs borrowed vs geometry fallback
-- `scripts/loss-automation.py`: older overlap-analysis helper retained for compatibility
-
-## Verification
-
-Synthetic verification for the render and NumPy analysis pipeline:
-
-```sh
-bash scripts/verify_render_and_numpy_pipeline.sh /private/tmp/typing-research-verify
-```
-
-Synthetic/manual test helpers:
-
-```sh
-python3 scripts/manual_test_ground_truth_trial_loss.py --output-dir /tmp/ground-truth-loss-test
-python3 scripts/manual_test_key_backoff_report.py --output-dir /tmp/key-backoff-test
-```
+- `scripts/numpy_analysis_utils.py`: shared histogram and CSV helpers for the analysis scripts
 
 ## Offline Workflow
 
@@ -128,6 +112,8 @@ python3 scripts/session_overlap_visualization.py --demo --output-dir /tmp/sessio
 
 Primary outputs:
 
+- `session_gaussian_boundaries_00.svg`
+- `session_gaussian_boundaries_00.pdf`
 - `session_gaussian_boundaries_XX.svg`
 - `session_gaussian_boundaries_XX.pdf`
 - `session_gaussian_boundaries_all_sessions.pdf`
@@ -136,28 +122,15 @@ Primary outputs:
 - `session_gaussian_boundaries_summary.csv`
 - `session_gaussian_boundaries_by_key.csv`
 
-### 5. Run trial-loss analyses
-
-Ground truth loss:
+### 5. Run ground-truth trial loss
 
 ```sh
 python3 scripts/ground_truth_trial_loss.py <cleaned_keystrokes.csv>
 ```
 
-Future-trial loss:
+### 6. Generate a side-by-side cleansing check
 
 ```sh
-python3 scripts/future-trial-loss.py <cleaned_keystrokes.csv>
-```
-
-Key backoff coverage:
-
-```sh
-python3 scripts/key_backoff_report.py <cleaned_keystrokes.csv>
-```
-
-Legacy overlap script:
-
-```sh
-python3 scripts/loss-automation.py <cleaned_keystrokes.csv>
+python3 scripts/plot_cleansing_subset.py <raw_keystrokes.csv> <cleaned_keystrokes.csv> <output.pdf> --session-start 1 --session-end 5
+python3 scripts/plot_cleansing_subset.py <raw_keystrokes.csv> <cleaned_keystrokes.csv> <output.pdf> --sessions 1 2 3 4 5
 ```

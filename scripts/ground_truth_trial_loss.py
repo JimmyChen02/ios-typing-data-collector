@@ -7,7 +7,7 @@ Ground truth is built from all usable trials. The script then evaluates:
 1. Simple / prefix mode:
    {1}, {1,2}, {1,2,3}, ... vs {all trials}
 
-2. All-combinations mode:
+2. All-combinations mode: (doesn't account for permutations - wld result in same point w more weight)
    Every size-k subset vs {all trials}, averaged within each k
 
 Similarity is normalized weighted-Jaccard overlap on grid-cell histograms:
