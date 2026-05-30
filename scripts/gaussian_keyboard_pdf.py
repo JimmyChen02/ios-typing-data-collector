@@ -53,20 +53,7 @@ LIVE_SIDE_PAD = 5.0
 LIVE_KEY_GAP = 6.0
 LIVE_ROW_GAP = 11.0
 
-SVG_WIDTH = 980
-SVG_SIDE_PAD = 16.0
-SVG_TOP_PAD = 18.0
-SVG_KEY_GAP = 10.0
-SVG_ROW_GAP = 22.0
-SVG_KEY_H = 76.0
-SVG_BOTTOM_PAD = 18.0
-SVG_PANEL_MARGIN = 10.0
-SVG_PANEL_RADIUS = 20.0
-SVG_INNER_MARGIN_X = 14.0
-SVG_INNER_MARGIN_Y = 14.0
-SVG_HEIGHT = int(
-    SVG_TOP_PAD + 4.0 * SVG_KEY_H + 3.0 * SVG_ROW_GAP + SVG_BOTTOM_PAD + 2.0 * (SVG_PANEL_MARGIN + SVG_INNER_MARGIN_Y)
-)
+PANEL_RADIUS = 16.0
 
 MIN_SAMPLES = 5
 RIDGE_FRAC = 0.05
@@ -81,6 +68,7 @@ ALL_KEYS = ROW0 + ROW1 + ROW2 + ["space", "delete"]
 LETTER_KEYS = set(ROW0 + ROW1 + ROW2)
 VALID_KEYS = set(ALL_KEYS)
 SOURCE_FITTED_CURRENT = "fitted_current"
+SOURCE_FITTED_CUMULATIVE = "fitted_cumulative"
 SOURCE_PRIOR_MODEL = "prior_model"
 SOURCE_GEOMETRY_FALLBACK = "geometry_fallback"
 
@@ -97,13 +85,43 @@ def hex_to_rgb_unit(hex_color: str) -> tuple[float, float, float]:
     )
 
 
+def srgb_to_linear(channel: float) -> float:
+    if channel <= 0.04045:
+        return channel / 12.92
+    return ((channel + 0.055) / 1.055) ** 2.4
+
+
+def rgb_to_lab(rgb: tuple[float, float, float]) -> tuple[float, float, float]:
+    r, g, b = (srgb_to_linear(channel) for channel in rgb)
+    x = (0.4124564 * r + 0.3575761 * g + 0.1804375 * b) / 0.95047
+    y = (0.2126729 * r + 0.7151522 * g + 0.0721750 * b) / 1.00000
+    z = (0.0193339 * r + 0.1191920 * g + 0.9503041 * b) / 1.08883
+
+    def f(value: float) -> float:
+        return value ** (1.0 / 3.0) if value > 0.008856 else (7.787 * value) + (16.0 / 116.0)
+
+    fx = f(x)
+    fy = f(y)
+    fz = f(z)
+    return (
+        (116.0 * fy) - 16.0,
+        500.0 * (fx - fy),
+        200.0 * (fy - fz),
+    )
+
+
 def color_distance(a: tuple[float, float, float], b: tuple[float, float, float]) -> float:
-    dr = a[0] - b[0]
-    dg = a[1] - b[1]
-    db = a[2] - b[2]
-    lum_a = 0.2126 * a[0] + 0.7152 * a[1] + 0.0722 * a[2]
-    lum_b = 0.2126 * b[0] + 0.7152 * b[1] + 0.0722 * b[2]
-    return 2.0 * dr * dr + 3.0 * dg * dg + 2.0 * db * db + 0.6 * (lum_a - lum_b) ** 2
+    lab_a = rgb_to_lab(a)
+    lab_b = rgb_to_lab(b)
+    dl = lab_a[0] - lab_b[0]
+    da = lab_a[1] - lab_b[1]
+    db = lab_a[2] - lab_b[2]
+    return dl * dl + da * da + db * db
+
+
+def relative_luminance(rgb: tuple[float, float, float]) -> float:
+    r, g, b = (srgb_to_linear(channel) for channel in rgb)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
 
 
 def build_distinct_semantic_colors() -> dict[str, str]:
@@ -115,18 +133,21 @@ def build_distinct_semantic_colors() -> dict[str, str]:
         "#7A00CC",
         "#00C8C8",
         "#FF1493",
-        "#7A4A00",
+        "#FF6F00",
         "#39FF14",
-        "#111111",
+        "#0F766E",
     ]
     selected = [hex_to_rgb_unit(value) for value in seed_hex]
 
     candidates: list[tuple[float, float, float]] = []
-    for hue in range(0, 360, 5):
-        for saturation in (0.98, 0.86, 0.74):
-            for value in (0.98, 0.86, 0.72):
+    for hue in range(0, 360, 2):
+        for saturation in (1.0, 0.96, 0.90, 0.84):
+            for value in (0.98, 0.92, 0.86, 0.80):
                 rgb = colorsys.hsv_to_rgb(hue / 360.0, saturation, value)
-                if max(rgb) - min(rgb) < 0.28:
+                if max(rgb) - min(rgb) < 0.45:
+                    continue
+                luminance = relative_luminance(rgb)
+                if luminance < 0.10 or luminance > 0.74:
                     continue
                 candidates.append(rgb)
 
@@ -506,6 +527,7 @@ def fit_single(samples: list[TrainingSample]) -> Gaussian2D | None:
 def fit_model(
     samples: list[TrainingSample],
     prior_model: dict[str, Gaussian2D] | None = None,
+    fitted_source: str = SOURCE_FITTED_CURRENT,
 ) -> tuple[dict[str, Gaussian2D], dict[str, str], dict[str, int]]:
     grouped: dict[str, list[TrainingSample]] = defaultdict(list)
     for sample in samples:
@@ -521,7 +543,7 @@ def fit_model(
         gaussian = fit_single(key_samples)
         if gaussian is not None:
             model[key] = gaussian
-            model_sources[key] = SOURCE_FITTED_CURRENT
+            model_sources[key] = fitted_source
         elif prior_model and key in prior_model:
             model[key] = prior_model[key]
             model_sources[key] = SOURCE_PRIOR_MODEL
@@ -610,52 +632,36 @@ def offset_frames(frames: dict[str, Rect], dx: float, dy: float) -> dict[str, Re
     }
 
 
-def build_svg_frames() -> tuple[Rect, dict[str, Rect]]:
-    panel_rect = Rect(
-        SVG_PANEL_MARGIN,
-        SVG_PANEL_MARGIN,
-        SVG_WIDTH - 2.0 * SVG_PANEL_MARGIN,
-        SVG_HEIGHT - 2.0 * SVG_PANEL_MARGIN,
-    )
-    inner_rect = Rect(
-        panel_rect.x + SVG_INNER_MARGIN_X,
-        panel_rect.y + SVG_INNER_MARGIN_Y,
-        panel_rect.w - 2.0 * SVG_INNER_MARGIN_X,
-        panel_rect.h - 2.0 * SVG_INNER_MARGIN_Y,
-    )
-    left = inner_rect.x
-    top = inner_rect.y
-    usable_width = inner_rect.w
-    key_w = (usable_width - 2.0 * SVG_SIDE_PAD - 9.0 * SVG_KEY_GAP) / 10.0
-    special_w = (usable_width - 2.0 * SVG_SIDE_PAD - 7.0 * key_w - 8.0 * SVG_KEY_GAP) / 2.0
-    frames: dict[str, Rect] = {}
+def scale_frames(frames: dict[str, Rect], scale: float) -> dict[str, Rect]:
+    return {
+        key: Rect(frame.x * scale, frame.y * scale, frame.w * scale, frame.h * scale)
+        for key, frame in frames.items()
+    }
 
-    y0 = top + SVG_TOP_PAD
-    for index, key in enumerate(ROW0):
-        frames[key] = Rect(left + SVG_SIDE_PAD + index * (key_w + SVG_KEY_GAP), y0, key_w, SVG_KEY_H)
 
-    y1 = y0 + SVG_KEY_H + SVG_ROW_GAP
-    row1_start = left + (usable_width - 9.0 * key_w - 8.0 * SVG_KEY_GAP) / 2.0
-    for index, key in enumerate(ROW1):
-        frames[key] = Rect(row1_start + index * (key_w + SVG_KEY_GAP), y1, key_w, SVG_KEY_H)
+def pdf_reference_canvas_width() -> float:
+    panel_x = MARGIN - 2.0
+    panel_w = PAGE_W - 2.0 * panel_x
+    return panel_w - 36.0
 
-    y2 = y1 + SVG_KEY_H + SVG_ROW_GAP
-    row2_start = left + SVG_SIDE_PAD + special_w + SVG_KEY_GAP
-    for index, key in enumerate(ROW2):
-        frames[key] = Rect(row2_start + index * (key_w + SVG_KEY_GAP), y2, key_w, SVG_KEY_H)
 
-    frames["delete"] = Rect(left + usable_width - SVG_SIDE_PAD - special_w, y2, special_w, SVG_KEY_H)
-    y3 = y2 + SVG_KEY_H + SVG_ROW_GAP
-    frames["space"] = Rect(
-        left + SVG_SIDE_PAD + special_w + SVG_KEY_GAP,
-        y3,
-        usable_width - 2.0 * SVG_SIDE_PAD - 2.0 * special_w - 2.0 * SVG_KEY_GAP,
-        SVG_KEY_H,
-    )
-    bounds = frame_bounds(frames)
-    dx = inner_rect.mid_x - bounds.mid_x
-    dy = inner_rect.mid_y - bounds.mid_y
-    return panel_rect, offset_frames(frames, dx, dy)
+def build_pdf_panel_and_frames(panel_y: float) -> tuple[Rect, dict[str, Rect]]:
+    panel_x = MARGIN - 2.0
+    panel_w = PAGE_W - 2.0 * panel_x
+    canvas_left = panel_x + 18.0
+    canvas_w = panel_w - 36.0
+    frames = build_pdf_frames(canvas_left, panel_y + 8.0, canvas_w)
+    key_h = next(iter(frames.values())).h
+    keyboard_h = PDF_TOP_PAD + 4.0 * key_h + 3.0 * PDF_ROW_GAP + 8.0
+    panel_h = keyboard_h + 20.0
+    return Rect(panel_x, panel_y, panel_w, panel_h), frames
+
+
+def build_svg_panel_and_frames() -> tuple[Rect, dict[str, Rect]]:
+    pdf_panel_rect, pdf_frames = build_pdf_panel_and_frames(58.0)
+    local_panel_rect = Rect(0.0, 0.0, pdf_panel_rect.w, pdf_panel_rect.h)
+    local_frames = offset_frames(pdf_frames, -pdf_panel_rect.x, -pdf_panel_rect.y)
+    return local_panel_rect, local_frames
 
 
 def raster_key_params(frames: dict[str, Rect], model: dict[str, Gaussian2D]) -> list[RasterKeyParams]:
@@ -730,7 +736,7 @@ def raster_background_rgba(
     frames: dict[str, Rect],
     model: dict[str, Gaussian2D],
     raster_step: float,
-    alpha: int = 208,
+    alpha: int = 232,
 ) -> np.ndarray:
     sample_step = max(1.0, float(raster_step))
     coarse_w = max(1, int(math.ceil(canvas.w / sample_step)))
@@ -788,24 +794,24 @@ def draw_keyboard_svg(lines: list[str], frames: dict[str, Rect]) -> None:
     for key, frame in frames.items():
         lines.append(
             f'<rect x="{frame.x:.2f}" y="{frame.y:.2f}" width="{frame.w:.2f}" height="{frame.h:.2f}" '
-            f'fill="#FFFFFF" fill-opacity="0.05" stroke="#111827" stroke-opacity="0.88" stroke-width="2.2"/>'
+            f'fill="#FFFFFF" fill-opacity="0.05" stroke="#111827" stroke-opacity="0.88" stroke-width="1.2"/>'
         )
         if key in LETTER_KEYS:
             lines.append(
-                f'<text x="{frame.mid_x:.2f}" y="{frame.mid_y + 10:.2f}" '
-                f'font-family="Helvetica,Arial,sans-serif" font-size="34" font-weight="700" '
+                f'<text x="{frame.mid_x:.2f}" y="{frame.mid_y + 8:.2f}" '
+                f'font-family="Helvetica,Arial,sans-serif" font-size="{max(14.0, frame.h * 0.40):.2f}" font-weight="700" '
                 f'text-anchor="middle" fill="#111111">{svg_escape(key.upper())}</text>'
             )
         elif key == "space":
             lines.append(
-                f'<text x="{frame.mid_x:.2f}" y="{frame.mid_y + 6:.2f}" '
-                f'font-family="Helvetica,Arial,sans-serif" font-size="18" font-weight="600" '
+                f'<text x="{frame.mid_x:.2f}" y="{frame.mid_y + 4:.2f}" '
+                f'font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="600" '
                 f'text-anchor="middle" fill="#111111" fill-opacity="0.55">SPACE</text>'
             )
         elif key == "delete":
             lines.append(
-                f'<text x="{frame.mid_x:.2f}" y="{frame.mid_y + 6:.2f}" '
-                f'font-family="Helvetica,Arial,sans-serif" font-size="18" font-weight="700" '
+                f'<text x="{frame.mid_x:.2f}" y="{frame.mid_y + 4:.2f}" '
+                f'font-family="Helvetica,Arial,sans-serif" font-size="12" font-weight="700" '
                 f'text-anchor="middle" fill="#111111" fill-opacity="0.60">DEL</text>'
             )
 
@@ -816,25 +822,25 @@ def render_boundary_svg(
     model: dict[str, Gaussian2D],
     raster_step: float | None = None,
 ) -> None:
-    panel_rect, frames = build_svg_frames()
+    panel_rect, frames = build_svg_panel_and_frames()
     panel_x = panel_rect.x
     panel_y = panel_rect.y
     panel_w = panel_rect.w
     panel_h = panel_rect.h
     clip_id = "keyboard_panel_clip"
     lines = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{SVG_WIDTH}" height="{SVG_HEIGHT}" viewBox="0 0 {SVG_WIDTH} {SVG_HEIGHT}">',
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{panel_w:.2f}" height="{panel_h:.2f}" viewBox="0 0 {panel_w:.2f} {panel_h:.2f}">',
         '<rect width="100%" height="100%" fill="#ffffff"/>',
         "<defs>",
         '  <filter id="panel_shadow" x="-10%" y="-10%" width="120%" height="120%">',
-        '    <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#0f172a" flood-opacity="0.14"/>',
+        '    <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#0f172a" flood-opacity="0.14"/>',
         "  </filter>",
         f'  <clipPath id="{clip_id}">',
-        f'    <rect x="{panel_x:.2f}" y="{panel_y:.2f}" width="{panel_w:.2f}" height="{panel_h:.2f}" rx="{SVG_PANEL_RADIUS:.2f}"/>',
+        f'    <rect x="{panel_x:.2f}" y="{panel_y:.2f}" width="{panel_w:.2f}" height="{panel_h:.2f}" rx="{PANEL_RADIUS:.2f}"/>',
         "  </clipPath>",
         "</defs>",
         f'<rect x="{panel_x:.2f}" y="{panel_y:.2f}" width="{panel_w:.2f}" height="{panel_h:.2f}" '
-        f'rx="{SVG_PANEL_RADIUS:.2f}" fill="#F8FAFC" stroke="#0F172A" stroke-opacity="0.18" stroke-width="1.4" filter="url(#panel_shadow)"/>',
+        f'rx="{PANEL_RADIUS:.2f}" fill="#F8FAFC" stroke="#0F172A" stroke-opacity="0.18" stroke-width="1.2" filter="url(#panel_shadow)"/>',
         f'<g clip-path="url(#{clip_id})">',
     ]
 
@@ -843,6 +849,7 @@ def render_boundary_svg(
         frames=frames,
         model=model,
         raster_step=RASTER_STEP if raster_step is None else raster_step,
+        alpha=224,
     )
     lines.append(
         f'<image x="{panel_x:.2f}" y="{panel_y:.2f}" width="{panel_w:.2f}" height="{panel_h:.2f}" preserveAspectRatio="none" href="{background_data_url}"/>'
@@ -850,7 +857,7 @@ def render_boundary_svg(
     lines.append("</g>")
     lines.append(
         f'<rect x="{panel_x:.2f}" y="{panel_y:.2f}" width="{panel_w:.2f}" height="{panel_h:.2f}" '
-        f'rx="{SVG_PANEL_RADIUS:.2f}" fill="none" stroke="#111827" stroke-width="2.6"/>'
+        f'rx="{PANEL_RADIUS:.2f}" fill="none" stroke="#111827" stroke-width="2.0"/>'
     )
     draw_keyboard_svg(lines, frames)
     lines.append("</svg>")
@@ -958,23 +965,14 @@ def render_pdf_page(ax, participant: str, page: PdfPage) -> None:
     if show_detail:
         ax.text(MARGIN, 56, page.detail_text, fontsize=8.5, color="#64748B", va="center")
 
-    panel_x = MARGIN - 2.0
     panel_y = HEADER_BOTTOM if (show_summary or show_detail) else 58.0
-    panel_w = PAGE_W - 2.0 * panel_x
-
-    canvas_left = panel_x + 18.0
-    canvas_w = panel_w - 36.0
-    frames = build_pdf_frames(canvas_left, panel_y + 8.0, canvas_w)
-    key_h = next(iter(frames.values())).h
-    keyboard_h = PDF_TOP_PAD + 4.0 * key_h + 3.0 * PDF_ROW_GAP + 8.0
-    panel_h = keyboard_h + 20.0
-    panel_rect = Rect(panel_x, panel_y, panel_w, panel_h)
+    panel_rect, frames = build_pdf_panel_and_frames(panel_y)
 
     shadow = FancyBboxPatch(
         (panel_rect.x, panel_rect.y + 6.0),
         panel_rect.w,
         panel_rect.h,
-        boxstyle="round,pad=0.0,rounding_size=16",
+        boxstyle=f"round,pad=0.0,rounding_size={PANEL_RADIUS}",
         facecolor=(15 / 255.0, 23 / 255.0, 42 / 255.0, 0.08),
         edgecolor="none",
         zorder=0.5,
@@ -985,7 +983,7 @@ def render_pdf_page(ax, participant: str, page: PdfPage) -> None:
         (panel_rect.x, panel_rect.y),
         panel_rect.w,
         panel_rect.h,
-        boxstyle="round,pad=0.0,rounding_size=16",
+        boxstyle=f"round,pad=0.0,rounding_size={PANEL_RADIUS}",
         facecolor="#F8FAFC",
         edgecolor=(15 / 255.0, 23 / 255.0, 42 / 255.0, 0.18),
         linewidth=1.2,
@@ -998,7 +996,7 @@ def render_pdf_page(ax, participant: str, page: PdfPage) -> None:
         frames=frames,
         model=page.model,
         raster_step=RASTER_STEP,
-        alpha=178,
+        alpha=224,
     )
     image = ax.imshow(
         background,
@@ -1014,7 +1012,7 @@ def render_pdf_page(ax, participant: str, page: PdfPage) -> None:
         (panel_rect.x, panel_rect.y),
         panel_rect.w,
         panel_rect.h,
-        boxstyle="round,pad=0.0,rounding_size=16",
+        boxstyle=f"round,pad=0.0,rounding_size={PANEL_RADIUS}",
         facecolor="none",
         edgecolor="#111827",
         linewidth=2.0,
@@ -1043,6 +1041,7 @@ def print_summary(
         + " ".join(
             [
                 f"{SOURCE_FITTED_CURRENT}={source_counts[SOURCE_FITTED_CURRENT]}",
+                f"{SOURCE_FITTED_CUMULATIVE}={source_counts[SOURCE_FITTED_CUMULATIVE]}",
                 f"{SOURCE_PRIOR_MODEL}={source_counts[SOURCE_PRIOR_MODEL]}",
                 f"{SOURCE_GEOMETRY_FALLBACK}={source_counts[SOURCE_GEOMETRY_FALLBACK]}",
             ]
