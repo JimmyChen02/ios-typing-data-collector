@@ -1,28 +1,5 @@
 import UIKit
 
-struct GaussianBoundarySessionSnapshot: Identifiable {
-    let studySessionIndex: Int
-    let sessionOrdinal: Int
-    let cleanEvents: [InputEventData]
-    let priorEventCount: Int
-    let model: GaussianKeyModel
-
-    var id: Int { studySessionIndex }
-    var displayIndex: Int { studySessionIndex + 1 }
-
-    var fittedCurrentKeys: Int {
-        GaussianBoundaryTimeline.allKeys.filter { model.source(for: $0) == .fittedCurrent }.count
-    }
-
-    var priorModelKeys: Int {
-        GaussianBoundaryTimeline.allKeys.filter { model.source(for: $0) == .priorModel }.count
-    }
-
-    var geometryFallbackKeys: Int {
-        GaussianBoundaryTimeline.allKeys.count - fittedCurrentKeys - priorModelKeys
-    }
-}
-
 enum GaussianBoundaryTimeline {
     static let allKeys = [
         "q","w","e","r","t","y","u","i","o","p",
@@ -56,46 +33,6 @@ enum GaussianBoundaryTimeline {
             }
     }
 
-    static func sessionSnapshots(from events: [InputEventData]) -> [GaussianBoundarySessionSnapshot] {
-        let filtered = filteredBoundaryEvents(from: events)
-        let grouped = Dictionary(grouping: filtered, by: \.studySessionIndex)
-        let orderedSessionIDs = grouped.keys.sorted()
-
-        var cumulativePriorEvents: [InputEventData] = []
-        var snapshots: [GaussianBoundarySessionSnapshot] = []
-        snapshots.reserveCapacity(orderedSessionIDs.count)
-
-        for (ordinal, sessionID) in orderedSessionIDs.enumerated() {
-            let currentEvents = (grouped[sessionID] ?? []).sorted { lhs, rhs in
-                if lhs.trialIndex != rhs.trialIndex {
-                    return lhs.trialIndex < rhs.trialIndex
-                }
-                return lhs.timestamp < rhs.timestamp
-            }
-            let priorModel = GaussianKeyModel.fit(
-                events: cumulativePriorEvents,
-                keys: allKeys
-            )
-            let model = GaussianKeyModel.fit(
-                events: currentEvents,
-                keys: allKeys,
-                priorModel: priorModel
-            )
-            snapshots.append(
-                GaussianBoundarySessionSnapshot(
-                    studySessionIndex: sessionID,
-                    sessionOrdinal: ordinal + 1,
-                    cleanEvents: currentEvents,
-                    priorEventCount: cumulativePriorEvents.count,
-                    model: model
-                )
-            )
-            cumulativePriorEvents.append(contentsOf: currentEvents)
-        }
-
-        return snapshots
-    }
-
     static func finalGroundTruthEvents(from events: [InputEventData]) -> [InputEventData] {
         filteredBoundaryEvents(from: events, onlyClassic: true)
     }
@@ -110,7 +47,6 @@ enum GaussianBoundaryTimeline {
 //      anchor override near each key's geometric center.
 //   3. Overlays:
 //        - key outlines + labels
-//        - fitted mean cross + 1-sigma / 2-sigma confidence ellipses
 //        - correct tap dots
 //   4. Draws a legend + summary banner.
 //
@@ -180,47 +116,10 @@ final class GaussianKeyboardExporter {
         )
     }
 
-    func exportSessionPDF(
-        snapshots: [GaussianBoundarySessionSnapshot],
-        session: Session,
-        participant: Participant?,
-        visibleSessionCount: Int? = nil
-    ) async -> URL? {
-        let selectedSnapshots: [GaussianBoundarySessionSnapshot]
-        if let visibleSessionCount {
-            selectedSnapshots = snapshots.filter { $0.sessionOrdinal == visibleSessionCount }
-        } else {
-            selectedSnapshots = snapshots
-        }
-        guard !selectedSnapshots.isEmpty else { return nil }
-
-        let pages = selectedSnapshots.map { snapshot in
-            BoundaryDocumentPage(
-                title: "Gaussian Boundary Session \(snapshot.displayIndex)",
-                trailingText: "\(snapshot.cleanEvents.count) clean events  \(snapshot.model.gaussians.count)/\(allKeys.count) fit",
-                detailText: detailLine(
-                    session: session,
-                    participant: participant,
-                    extra: "fitted=\(snapshot.fittedCurrentKeys)  prior=\(snapshot.priorModelKeys)  geometry=\(snapshot.geometryFallbackKeys)  prior events=\(snapshot.priorEventCount)"
-                ),
-                model: snapshot.model,
-                overlayEvents: snapshot.cleanEvents
-            )
-        }
-        let fileStem = visibleSessionCount == nil
-            ? "gaussian_boundary_sessions"
-            : "gaussian_boundary_session_\(selectedSnapshots[0].displayIndex)"
-        return writeDocument(
-            pages: pages,
-            fileStem: fileStem,
-            session: session,
-            participant: participant
-        )
-    }
-
     @MainActor
     func previewImage(
-        snapshot: GaussianBoundarySessionSnapshot,
+        model: GaussianKeyModel,
+        overlayEvents: [InputEventData],
         size: CGSize
     ) -> UIImage {
         let format = UIGraphicsImageRendererFormat()
@@ -239,8 +138,8 @@ final class GaussianKeyboardExporter {
                 cgCtx: cgCtx,
                 canvasRect: canvasRect,
                 frames: frames,
-                model: snapshot.model,
-                overlayEvents: snapshot.cleanEvents
+                model: model,
+                overlayEvents: overlayEvents
             )
         }
     }
@@ -276,51 +175,6 @@ final class GaussianKeyboardExporter {
             }
             y += step
         }
-    }
-
-    // MARK: - Ellipses + mean cross
-
-    private func drawEllipses(
-        cgCtx: CGContext,
-        gaussian: Gaussian2D,
-        frame: CGRect,
-        key: String
-    ) {
-        let e = GaussianKeyModel.ellipse(for: gaussian, keyFrame: frame)
-        let color = keyUIColor(key)
-
-        // Move to ellipse centre, rotate, draw axis-aligned ellipse.
-        cgCtx.saveGState()
-        cgCtx.translateBy(x: e.center.x, y: e.center.y)
-        cgCtx.rotate(by: CGFloat(e.angle))
-
-        // 2-sigma — dashed, faint
-        cgCtx.setStrokeColor(color.withAlphaComponent(0.55).cgColor)
-        cgCtx.setLineWidth(0.5)
-        cgCtx.setLineDash(phase: 0, lengths: [2, 2])
-        cgCtx.strokeEllipse(in: CGRect(
-            x: -CGFloat(e.semiA) * 2, y: -CGFloat(e.semiB) * 2,
-            width: CGFloat(e.semiA) * 4, height: CGFloat(e.semiB) * 4
-        ))
-
-        // 1-sigma — solid
-        cgCtx.setLineDash(phase: 0, lengths: [])
-        cgCtx.setStrokeColor(color.withAlphaComponent(0.95).cgColor)
-        cgCtx.setLineWidth(1.0)
-        cgCtx.strokeEllipse(in: CGRect(
-            x: -CGFloat(e.semiA), y: -CGFloat(e.semiB),
-            width: CGFloat(e.semiA) * 2, height: CGFloat(e.semiB) * 2
-        ))
-        cgCtx.restoreGState()
-
-        // Mean cross at (center + mu)
-        cgCtx.setStrokeColor(UIColor.white.cgColor)
-        cgCtx.setLineWidth(0.9)
-        cgCtx.move(to: CGPoint(x: e.center.x - 3, y: e.center.y))
-        cgCtx.addLine(to: CGPoint(x: e.center.x + 3, y: e.center.y))
-        cgCtx.move(to: CGPoint(x: e.center.x, y: e.center.y - 3))
-        cgCtx.addLine(to: CGPoint(x: e.center.x, y: e.center.y + 3))
-        cgCtx.strokePath()
     }
 
     // MARK: - Tap dots
@@ -368,11 +222,6 @@ final class GaussianKeyboardExporter {
             cgCtx.setLineWidth(0.6)
             cgCtx.addPath(path.cgPath)
             cgCtx.strokePath()
-        }
-
-        for (key, rect) in frames {
-            guard let gaussian = model.gaussians[key] else { continue }
-            drawEllipses(cgCtx: cgCtx, gaussian: gaussian, frame: rect, key: key)
         }
 
         drawTapDots(cgCtx: cgCtx, events: overlayEvents, frames: frames)
