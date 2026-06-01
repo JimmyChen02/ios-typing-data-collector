@@ -48,7 +48,7 @@ from PIL import Image
 
 import gaussian_keyboard_pdf as gkp
 
-ISOLATED_FILL_ALPHA = 224
+ISOLATED_FILL_ALPHA = 110
 WHITE_RGBA = np.array([255, 255, 255, 255], dtype=np.uint8)
 
 
@@ -194,7 +194,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dpi",
         type=float,
-        default=160.0,
+        default=220.0,
         help="Raster DPI for PNG output.",
     )
     parser.add_argument(
@@ -314,7 +314,7 @@ def render_keyboard_base(ax, frames: dict[str, gkp.Rect]) -> None:
                 frame.mid_x,
                 frame.mid_y + 4.5,
                 key.upper(),
-                fontsize=max(9, frame.h * 0.255),
+                fontsize=max(6.75, frame.h * 0.191),
                 fontweight="bold",
                 color="#111111",
                 ha="center",
@@ -326,7 +326,7 @@ def render_keyboard_base(ax, frames: dict[str, gkp.Rect]) -> None:
                 frame.mid_x,
                 frame.mid_y + 2.25,
                 "SPACE",
-                fontsize=7.5,
+                fontsize=5.625,
                 fontweight="semibold",
                 color=(17 / 255.0, 17 / 255.0, 17 / 255.0, 0.55),
                 ha="center",
@@ -338,7 +338,7 @@ def render_keyboard_base(ax, frames: dict[str, gkp.Rect]) -> None:
                 frame.mid_x,
                 frame.mid_y + 2.25,
                 "DEL",
-                fontsize=7.5,
+                fontsize=5.625,
                 fontweight="bold",
                 color=(17 / 255.0, 17 / 255.0, 17 / 255.0, 0.60),
                 ha="center",
@@ -379,14 +379,24 @@ def save_frame(
     output_format: str,
     fig: plt.Figure,
     dpi: float,
+    frame_rgba: np.ndarray | None = None,
 ) -> list[Path]:
+    """Save a frame.
+
+    If *frame_rgba* (H×W×4 uint8) is provided AND the format is png-only,
+    we skip matplotlib's savefig entirely and write the PNG directly with
+    PIL, which is ~3× faster.  SVG output always goes through matplotlib.
+    """
     saved: list[Path] = []
     wants_png = output_format in {"png", "both"}
     wants_svg = output_format in {"svg", "both"}
 
     if wants_png:
         png_path = output_dir / f"frame_{frame_index:02d}_{stage}.png"
-        fig.savefig(png_path, dpi=dpi, facecolor="white", bbox_inches=None, pad_inches=0)
+        if frame_rgba is not None and not wants_svg:
+            Image.fromarray(frame_rgba, mode="RGBA").convert("RGB").save(png_path)
+        else:
+            fig.savefig(png_path, dpi=dpi, facecolor="white", bbox_inches=None, pad_inches=0)
         saved.append(png_path)
     if wants_svg:
         svg_path = output_dir / f"frame_{frame_index:02d}_{stage}.svg"
@@ -475,6 +485,73 @@ def rendered_full_winner_map_rgba(
     )
 
 
+def rendered_full_winner_map_rgba_from_snapshot(
+    *,
+    snapshot: "Snapshot",
+    analysis_rect: gkp.Rect,
+    layout: "SamplingLayout",
+) -> np.ndarray:
+    """Build the full RGBA background from winner_indices already stored in
+    a Snapshot, skipping the redundant winner_indices_grid call inside
+    raster_background_rgba."""
+    return gkp.raster_background_rgba_from_indices(
+        winner_indices=snapshot.winner_indices,
+        coarse_h=layout.coarse_h,
+        coarse_w=layout.coarse_w,
+        sub_samples=layout.sub_samples,
+        canvas=analysis_rect,
+        alpha=ISOLATED_FILL_ALPHA,
+    )
+
+
+def render_keyboard_overlay_rgba(
+    *,
+    display_panel_rect: gkp.Rect,
+    display_frames: dict[str, gkp.Rect],
+    dpi: float,
+) -> np.ndarray:
+    """Pre-render the static keyboard UI (key outlines + labels + panel border)
+    to a numpy RGBA array with a fully transparent background.
+
+    The panel shadow and fill are NOT included here — they are drawn per-frame
+    by panel_patches() so that the colored key background is visible underneath.
+    This image is composited on top of each frame via ax.imshow, giving key
+    outlines and labels without re-drawing every patch/text object per frame.
+    """
+    from matplotlib.patches import FancyBboxPatch as _FBP
+
+    fig, ax = configure_axes(panel_rect=display_panel_rect, dpi=dpi)
+    # Make the figure and all background rects fully transparent.
+    fig.patch.set_alpha(0.0)
+    for patch in list(ax.patches):
+        patch.set_facecolor((0.0, 0.0, 0.0, 0.0))
+        patch.set_edgecolor((0.0, 0.0, 0.0, 0.0))
+
+    # Key outlines + labels (key fill is nearly transparent; only the dark
+    # border and letter text will be visible over the colored background).
+    render_keyboard_base(ax, display_frames)
+
+    # Panel border only — no fill, so the background shows through.
+    outline = _FBP(
+        (display_panel_rect.x, display_panel_rect.y),
+        display_panel_rect.w,
+        display_panel_rect.h,
+        boxstyle=f"round,pad=0.0,rounding_size={gkp.PANEL_RADIUS}",
+        facecolor="none",
+        edgecolor="#111827",
+        linewidth=2.0,
+        zorder=4.5,
+    )
+    ax.add_patch(outline)
+
+    fig.canvas.draw()
+    buf = fig.canvas.buffer_rgba()
+    w, h = fig.canvas.get_width_height()
+    arr = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 4).copy()
+    plt.close(fig)
+    return arr
+
+
 def isolate_pixels_from_full_render(
     *,
     full_background: np.ndarray,
@@ -502,6 +579,120 @@ def image_axes(analysis_rect: gkp.Rect, image: np.ndarray) -> tuple[np.ndarray, 
         dtype=np.float32,
     )
     return x, y
+
+
+def _find_boundary_at_size(
+    coverage_alpha: np.ndarray,
+    dst_w: int,
+    dst_h: int,
+) -> np.ndarray:
+    """Return boolean mask (dst_h, dst_w) of 1-pixel-wide boundary in display space.
+
+    Upscales coverage_alpha to (dst_h, dst_w) with LANCZOS first so the
+    boundary follows the smoother resized edge rather than the coarse grid.
+    """
+    alpha_img = Image.fromarray(coverage_alpha, mode="L")
+    if alpha_img.size != (dst_w, dst_h):
+        alpha_img = alpha_img.resize((dst_w, dst_h), resample=Image.Resampling.LANCZOS)
+    alpha_disp = np.asarray(alpha_img)
+    mask = alpha_disp > 127
+    padded = np.pad(mask, 1, constant_values=False)
+    interior = (
+        padded[:-2, 1:-1] & padded[2:, 1:-1] &
+        padded[1:-1, :-2] & padded[1:-1, 2:]
+    )
+    return mask & ~interior
+
+
+def _draw_boundary_on_frame(
+    frame_arr: np.ndarray,
+    boundary: np.ndarray,
+    color: tuple[int, int, int, int],
+    radius: int,
+    dashed: bool = False,
+) -> None:
+    """Draw a boundary mask onto frame_arr (H×W×4 uint8) in-place.
+
+    Uses vectorized numpy slicing for each offset in the disc of the given
+    radius — no Python-level per-pixel loops.  Dashed mode keeps only every
+    3-of-5 boundary rows (approximates a dashed contour).
+    """
+    h, w = boundary.shape
+    color_arr = np.array(color, dtype=np.uint8)
+
+    draw_mask = boundary.copy()
+    if dashed:
+        # Sort boundary pixels by angle from centroid — O(n log n), gives
+        # contour-like ordering for convex-ish key shapes so the dash period
+        # is measured along the path rather than in raster-scan order.
+        ys, xs = np.where(draw_mask)
+        if len(ys) > 1:
+            angles = np.arctan2(ys - ys.mean(), xs - xs.mean())
+            order = np.argsort(angles)
+            ordered_ys = ys[order]
+            ordered_xs = xs[order]
+            dash_on, dash_off = 10, 16
+            period = dash_on + dash_off
+            idx = np.arange(len(ordered_ys))
+            gap = (idx % period) >= dash_on
+            draw_mask[ordered_ys[gap], ordered_xs[gap]] = False
+
+    for dy in range(-radius, radius + 1):
+        for dx in range(-radius, radius + 1):
+            if dy * dy + dx * dx > radius * radius:
+                continue
+            # Source slice in draw_mask
+            sy0 = max(0, -dy);  sy1 = h - max(0, dy)
+            sx0 = max(0, -dx);  sx1 = w - max(0, dx)
+            # Destination slice in frame_arr
+            dy0 = max(0, dy);   dy1 = h + min(0, dy)
+            dx0 = max(0, dx);   dx1 = w + min(0, dx)
+            submask = draw_mask[sy0:sy1, sx0:sx1]
+            frame_arr[dy0:dy1, dx0:dx1][submask] = color_arr
+
+
+def make_frame_rgba_pil(
+    *,
+    background: np.ndarray,
+    keyboard_overlay_rgba: np.ndarray,
+    final_coverage: np.ndarray,
+    current_coverage: np.ndarray,
+    key_color_rgba: tuple[int, int, int, int],
+    boundary_radius: int = 2,
+) -> np.ndarray:
+    """Composite one frame entirely in PIL/numpy — no matplotlib figure needed.
+
+    Steps:
+    1. LANCZOS-upscale background (analysis res) to display res.
+    2. Find boundary of final_coverage (ground truth) at display res.
+    3. Find boundary of current_coverage at display res.
+    4. Draw solid black ground-truth boundary, then dashed colored session boundary.
+    5. Alpha-composite keyboard_overlay_rgba (outlines + labels) on top.
+
+    Returns H×W×4 uint8 RGBA.
+    """
+    dst_h, dst_w = keyboard_overlay_rgba.shape[:2]
+
+    # 1. Upscale background to display resolution.
+    bg_img = Image.fromarray(background, mode="RGBA")
+    if bg_img.size != (dst_w, dst_h):
+        bg_img = bg_img.resize((dst_w, dst_h), resample=Image.Resampling.LANCZOS)
+    # Composite onto white base.
+    base = Image.new("RGBA", (dst_w, dst_h), (255, 255, 255, 255))
+    base = Image.alpha_composite(base, bg_img)
+    frame_arr = np.array(base, dtype=np.uint8)
+
+    # 2-4. Draw boundary contours directly on the pixel array.
+    final_bnd = _find_boundary_at_size(final_coverage, dst_w, dst_h)
+    current_bnd = _find_boundary_at_size(current_coverage, dst_w, dst_h)
+
+    _draw_boundary_on_frame(frame_arr, final_bnd, (17, 24, 39, 250), boundary_radius + 1, dashed=False)
+    _draw_boundary_on_frame(frame_arr, current_bnd, key_color_rgba, boundary_radius + 1, dashed=True)
+
+    # 5. Composite keyboard overlay (outlines + labels, transparent background).
+    overlay_img = Image.fromarray(keyboard_overlay_rgba, mode="RGBA")
+    result = Image.alpha_composite(Image.fromarray(frame_arr, mode="RGBA"), overlay_img)
+    return np.asarray(result)
 
 
 def draw_raster_boundary(
@@ -658,21 +849,33 @@ def render_key_frames(
         display_frames = frames
 
     manifest_rows: list[dict[str, str | int]] = []
-    final_full_background = rendered_full_winner_map_rgba(
+
+    # Build full RGBA backgrounds from pre-computed winner_indices stored in each
+    # Snapshot, avoiding a redundant winner_indices_grid call per snapshot.
+    final_full_background = rendered_full_winner_map_rgba_from_snapshot(
+        snapshot=ground_truth,
         analysis_rect=analysis_rect,
-        frames=frames,
-        model=ground_truth.model,
-        raster_step=raster_step,
+        layout=layout,
     )
     current_full_backgrounds = [
-        rendered_full_winner_map_rgba(
+        rendered_full_winner_map_rgba_from_snapshot(
+            snapshot=snapshot,
             analysis_rect=analysis_rect,
-            frames=frames,
-            model=snapshot.model,
-            raster_step=raster_step,
+            layout=layout,
         )
         for snapshot in snapshots
     ]
+
+    # Pre-render the static keyboard overlay (panel + key outlines + labels +
+    # panel outline) once; composite it on every frame with PIL instead of
+    # re-drawing ~30 matplotlib patches and text objects per frame.
+    keyboard_overlay_rgba: np.ndarray | None = None
+    if display_panel_rect is not None and display_frames is not None:
+        keyboard_overlay_rgba = render_keyboard_overlay_rgba(
+            display_panel_rect=display_panel_rect,
+            display_frames=display_frames,
+            dpi=dpi,
+        )
     for key in selected_keys:
         key_dir = output_dir / key
         key_dir.mkdir(parents=True, exist_ok=True)
@@ -687,9 +890,10 @@ def render_key_frames(
             full_background=final_full_background,
             coverage_alpha=final_coverage,
         )
+        kr, kg, kb = key_rgb(key)
+        key_color_rgba = (int(kr * 255), int(kg * 255), int(kb * 255), 250)
+
         for frame_index, current_snapshot in enumerate(snapshots):
-            fig, ax = configure_axes(panel_rect=display_panel_rect, dpi=dpi)
-            panel, outline = panel_patches(ax, display_panel_rect)
             current_coverage = selected_key_coverage_alpha(
                 winner_indices=current_snapshot.winner_indices,
                 key_index=key_index,
@@ -700,27 +904,49 @@ def render_key_frames(
                 full_background=current_full_backgrounds[frame_index],
                 coverage_alpha=current_coverage,
             )
-            # The background RGBA and coverage_alpha were computed in
-            # analysis_rect coordinates (eval space).  Stretch them to fill
-            # display_panel_rect so that the key-outline overlay aligns.
-            image = ax.imshow(
+
+            stage = f"session_{current_snapshot.latest_session:02d}"
+
+            # Fast PIL path for PNG: skip matplotlib figure creation entirely.
+            # Boundary finding + compositing in numpy/PIL is ~10-20× faster than
+            # ax.contour + fig.canvas.draw() + plt.close().
+            if keyboard_overlay_rgba is not None and output_format == "png":
+                frame_rgba = make_frame_rgba_pil(
+                    background=background,
+                    keyboard_overlay_rgba=keyboard_overlay_rgba,
+                    final_coverage=final_coverage,
+                    current_coverage=current_coverage,
+                    key_color_rgba=key_color_rgba,
+                )
+                png_path = key_dir / f"frame_{frame_index:02d}_{stage}.png"
+                Image.fromarray(frame_rgba, mode="RGBA").convert("RGB").save(png_path)
+                manifest_rows.append(
+                    {
+                        "key": key,
+                        "frame_index": frame_index,
+                        "latest_session": current_snapshot.latest_session,
+                        "visible_sessions": visible_session_label(current_snapshot.visible_sessions),
+                        "path": str(png_path),
+                    }
+                )
+                continue
+
+            # SVG / both: fall through to matplotlib (vector output requires it).
+            _disp = display_panel_rect
+            fig, ax = configure_axes(panel_rect=_disp, dpi=dpi)
+            panel, outline = panel_patches(ax, _disp)
+
+            img_obj = ax.imshow(
                 background,
-                extent=(
-                    display_panel_rect.x,
-                    display_panel_rect.x + display_panel_rect.w,
-                    display_panel_rect.y + display_panel_rect.h,
-                    display_panel_rect.y,
-                ),
+                extent=(_disp.x, _disp.x + _disp.w, _disp.y + _disp.h, _disp.y),
                 interpolation="bilinear",
                 zorder=1.5,
             )
-            image.set_clip_path(panel)
-            # Boundary contours: pass display_panel_rect as analysis_rect so
-            # contour x/y axes span the display coordinate space.
+            img_obj.set_clip_path(panel)
             draw_raster_boundary(
                 ax=ax,
                 alpha=final_coverage,
-                analysis_rect=display_panel_rect,
+                analysis_rect=_disp,
                 color=(0.0, 0.0, 0.0, 0.98),
                 linewidth=2.2,
                 linestyle="solid",
@@ -730,17 +956,24 @@ def render_key_frames(
             draw_raster_boundary(
                 ax=ax,
                 alpha=current_coverage,
-                analysis_rect=display_panel_rect,
+                analysis_rect=_disp,
                 color=(*key_rgb(key), 0.98),
                 linewidth=2.1,
                 linestyle=(0, (3.0, 2.0)),
                 zorder=3.2,
                 panel=panel,
             )
-            render_keyboard_base(ax, display_frames)
-            ax.add_patch(outline)
+            if keyboard_overlay_rgba is not None:
+                ax.imshow(
+                    keyboard_overlay_rgba,
+                    extent=(_disp.x, _disp.x + _disp.w, _disp.y + _disp.h, _disp.y),
+                    interpolation="nearest",
+                    zorder=4.0,
+                )
+            else:
+                render_keyboard_base(ax, display_frames)
+                ax.add_patch(outline)
 
-            stage = f"session_{current_snapshot.latest_session:02d}"
             saved_paths = save_frame(
                 output_dir=key_dir,
                 frame_index=frame_index,
@@ -748,6 +981,7 @@ def render_key_frames(
                 output_format=output_format,
                 fig=fig,
                 dpi=dpi,
+                frame_rgba=None,
             )
             plt.close(fig)
 
@@ -896,19 +1130,19 @@ def main() -> None:
         raise SystemExit("No summary rows were produced.")
 
     largest_difference_key = str(summary_rows[0]["key"])
-    (output_dir / "largest_difference_key.txt").write_text(
-        "\n".join(
-            [
-                f"key={largest_difference_key}",
-                f"max_overlap_loss={summary_rows[0]['max_overlap_loss']}",
-                f"max_overlap_session={summary_rows[0]['max_overlap_session']}",
-                f"mean_overlap_loss={summary_rows[0]['mean_overlap_loss']}",
-                f"final_overlap_loss={summary_rows[0]['final_overlap_loss']}",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    top_n = min(5, len(summary_rows))
+    lines: list[str] = [f"top_{top_n}_keys_by_max_overlap_loss"]
+    for rank, row in enumerate(summary_rows[:top_n], start=1):
+        lines += [
+            f"",
+            f"rank={rank}",
+            f"key={row['key']}",
+            f"max_overlap_loss={row['max_overlap_loss']}",
+            f"max_overlap_session={row['max_overlap_session']}",
+            f"mean_overlap_loss={row['mean_overlap_loss']}",
+            f"final_overlap_loss={row['final_overlap_loss']}",
+        ]
+    (output_dir / "largest_difference_key.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     manifest_rows: list[dict[str, str | int]] = []
     frames_root = output_dir / "frames"

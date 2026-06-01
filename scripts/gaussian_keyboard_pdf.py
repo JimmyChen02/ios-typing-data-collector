@@ -125,44 +125,115 @@ def relative_luminance(rgb: tuple[float, float, float]) -> float:
 
 
 def build_distinct_semantic_colors() -> dict[str, str]:
-    seed_hex = [
-        "#D60000",
-        "#005FDD",
-        "#00A651",
-        "#FFB000",
-        "#7A00CC",
-        "#00C8C8",
-        "#FF1493",
-        "#FF6F00",
-        "#39FF14",
-        "#0F766E",
-    ]
-    selected = [hex_to_rgb_unit(value) for value in seed_hex]
-
-    candidates: list[tuple[float, float, float]] = []
-    for hue in range(0, 360, 2):
-        for saturation in (1.0, 0.96, 0.90, 0.84):
-            for value in (0.98, 0.92, 0.86, 0.80):
-                rgb = colorsys.hsv_to_rgb(hue / 360.0, saturation, value)
-                if max(rgb) - min(rgb) < 0.45:
-                    continue
-                luminance = relative_luminance(rgb)
-                if luminance < 0.10 or luminance > 0.74:
-                    continue
-                candidates.append(rgb)
-
-    while len(selected) < len(ALL_KEYS):
-        best_candidate = max(
-            candidates,
-            key=lambda candidate: min(color_distance(candidate, current) for current in selected),
-        )
-        selected.append(best_candidate)
-        candidates = [candidate for candidate in candidates if candidate != best_candidate]
-
-    return {
-        key: rgb_to_hex(color)
-        for key, color in zip(ALL_KEYS, selected[: len(ALL_KEYS)])
+    # Keyboard adjacency — each key's direct spatial neighbors (horizontal +
+    # diagonal).  Used to ensure adjacent keys get maximally different colors.
+    _NEIGHBORS: dict[str, list[str]] = {
+        "q": ["w", "a"],
+        "w": ["q", "e", "a", "s"],
+        "e": ["w", "r", "s", "d"],
+        "r": ["e", "t", "d", "f"],
+        "t": ["r", "y", "f", "g"],
+        "y": ["t", "u", "g", "h"],
+        "u": ["y", "i", "h", "j"],
+        "i": ["u", "o", "j", "k"],
+        "o": ["i", "p", "k", "l"],
+        "p": ["o", "l", "delete"],
+        "a": ["q", "w", "s", "z"],
+        "s": ["a", "d", "w", "e", "z", "x"],
+        "d": ["s", "f", "e", "r", "x", "c"],
+        "f": ["d", "g", "r", "t", "x", "c"],
+        "g": ["f", "h", "t", "y", "c", "v"],
+        "h": ["g", "j", "y", "u", "v", "b"],
+        "j": ["h", "k", "u", "i", "b", "n"],
+        "k": ["j", "l", "i", "o", "n", "m"],
+        "l": ["k", "o", "p", "m"],
+        "z": ["a", "s", "x", "space"],
+        "x": ["z", "c", "s", "d"],
+        "c": ["x", "v", "d", "f"],
+        "v": ["c", "b", "f", "g"],
+        "b": ["v", "n", "g", "h"],
+        "n": ["b", "m", "h", "j"],
+        "m": ["n", "k", "l", "space"],
+        "space": ["z", "m", "delete"],
+        "delete": ["p", "space"],
     }
+
+    def _rgb_to_lab_vec(rgbs: np.ndarray) -> np.ndarray:
+        """(N,3) sRGB float → (N,3) LAB float."""
+        lin = np.where(rgbs <= 0.04045, rgbs / 12.92, ((rgbs + 0.055) / 1.055) ** 2.4)
+        x = (lin @ np.array([0.4124564, 0.3575761, 0.1804375])) / 0.95047
+        y = (lin @ np.array([0.2126729, 0.7151522, 0.0721750])) / 1.00000
+        z = (lin @ np.array([0.0193339, 0.1191920, 0.9503041])) / 1.08883
+        xyz = np.stack([x, y, z], axis=1)
+        f = np.where(xyz > 0.008856, xyz ** (1.0 / 3.0), 7.787 * xyz + 16.0 / 116.0)
+        L = 116.0 * f[:, 1] - 16.0
+        a_ch = 500.0 * (f[:, 0] - f[:, 1])
+        b_ch = 200.0 * (f[:, 1] - f[:, 2])
+        return np.stack([L, a_ch, b_ch], axis=1)
+
+    # Hand-curated pool of 48 strongly distinct colors — 6 per major hue sector
+    # (red, orange, yellow, green, cyan, blue, violet, magenta) at varying
+    # brightness/saturation so adjacent keys always look clearly different.
+    _POOL_HEX = [
+        # Reds
+        "#E60000", "#FF4136", "#C0392B", "#FF1744", "#B71C1C", "#FF6B6B",
+        # Oranges
+        "#FF6600", "#FF8C00", "#FF4500", "#FFAB40", "#E65100", "#FF9A3C",
+        # Yellows
+        "#FFD700", "#FFEA00", "#F9A825", "#FFC107", "#FFB300", "#FFCC02",
+        # Greens
+        "#00C853", "#00E676", "#43A047", "#1B5E20", "#76FF03", "#33691E",
+        # Cyans
+        "#00BCD4", "#00E5FF", "#006064", "#26C6DA", "#00B7C3", "#40E0D0",
+        # Blues
+        "#0057E9", "#1565C0", "#1E90FF", "#0D47A1", "#4FC3F7", "#0000CD",
+        # Violets / Purples
+        "#8B00FF", "#6A0DAD", "#9400D3", "#4A148C", "#7B1FA2", "#B39DDB",
+        # Magentas / Pinks
+        "#FF1493", "#F012BE", "#C71585", "#E040FB", "#FF007F", "#FF69B4",
+    ]
+    pool_rgb = [hex_to_rgb_unit(h) for h in _POOL_HEX]
+    pool_lab = _rgb_to_lab_vec(np.array(pool_rgb, dtype=np.float32))
+
+    # Adjacency-aware assignment: visit keys in BFS order from 'q' so each key's
+    # neighbors are mostly already colored when we choose its color.  For each key,
+    # pick the remaining pool color that maximizes the minimum LAB distance to its
+    # already-assigned neighbors.
+    from collections import deque
+    bfs_order: list[str] = []
+    visited: set[str] = set()
+    queue: deque[str] = deque(["q"])
+    while queue:
+        key = queue.popleft()
+        if key in visited:
+            continue
+        visited.add(key)
+        bfs_order.append(key)
+        for nb in _NEIGHBORS.get(key, []):
+            if nb not in visited:
+                queue.append(nb)
+    for k in ALL_KEYS:
+        if k not in bfs_order:
+            bfs_order.append(k)
+
+    assigned: dict[str, int] = {}   # key → pool index
+    available = list(range(len(pool_rgb)))
+
+    for key in bfs_order:
+        neighbor_indices = [assigned[nb] for nb in _NEIGHBORS.get(key, []) if nb in assigned]
+        if neighbor_indices:
+            nb_lab = pool_lab[neighbor_indices]          # (K, 3)
+            avail_lab = pool_lab[available]              # (M, 3)
+            # For each available color, find min distance to any neighbor color.
+            diff = avail_lab[:, np.newaxis, :] - nb_lab[np.newaxis, :, :]
+            min_dists = (diff * diff).sum(axis=2).min(axis=1)
+            best_pos = int(min_dists.argmax())
+        else:
+            best_pos = 0  # take the next globally-distinct color
+        chosen = available.pop(best_pos)
+        assigned[key] = chosen
+
+    return {key: rgb_to_hex(pool_rgb[assigned[key]]) for key in ALL_KEYS}
 
 
 SEMANTIC_COLORS = build_distinct_semantic_colors()
@@ -764,6 +835,57 @@ def raster_background_rgba(
 
     if sub_samples > 1:
         coarse_rgba = fine_rgba.reshape(coarse_h, sub_samples, coarse_w, sub_samples, 4).mean(axis=(1, 3), dtype=np.float32).astype(np.uint8)
+    else:
+        coarse_rgba = fine_rgba
+
+    target_w = max(1, int(round(canvas.w)))
+    target_h = max(1, int(round(canvas.h)))
+    image = Image.fromarray(coarse_rgba, mode="RGBA")
+    if image.size != (target_w, target_h):
+        image = image.resize((target_w, target_h), resample=Image.Resampling.LANCZOS)
+    return np.asarray(image)
+
+
+def raster_background_rgba_from_indices(
+    *,
+    winner_indices: np.ndarray,
+    coarse_h: int,
+    coarse_w: int,
+    sub_samples: int,
+    canvas: Rect,
+    alpha: int = 232,
+) -> np.ndarray:
+    """Like raster_background_rgba but accepts pre-computed fine winner indices.
+
+    Use this when winner_indices_grid has already been run (e.g. the indices
+    stored in a Snapshot) to avoid a redundant re-computation.
+
+    Parameters
+    ----------
+    winner_indices:
+        Fine-resolution (fine_h × fine_w) integer array from winner_indices_grid.
+    coarse_h, coarse_w:
+        Coarse grid dimensions (fine_h / sub_samples, fine_w / sub_samples).
+    sub_samples:
+        Super-sampling factor used when the fine grid was built.
+    canvas:
+        The Rect used when the fine grid was built (determines output pixel size).
+    alpha:
+        Opacity byte (0–255) for the key-color fill.
+    """
+    palette = np.array(
+        [hex_to_rgba(SEMANTIC_COLORS.get(key, "#D1D5DB"), alpha) for key in ALL_KEYS],
+        dtype=np.uint8,
+    )
+    fine_rgba = palette[winner_indices]
+
+    if sub_samples > 1:
+        coarse_rgba = (
+            fine_rgba
+            .reshape(coarse_h, sub_samples, coarse_w, sub_samples, 4)
+            .mean(axis=(1, 3), dtype=np.float32)
+            .astype(np.uint8)
+        )
     else:
         coarse_rgba = fine_rgba
 
