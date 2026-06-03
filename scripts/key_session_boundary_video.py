@@ -686,7 +686,13 @@ def make_frame_rgba_pil(
     final_bnd = _find_boundary_at_size(final_coverage, dst_w, dst_h)
     current_bnd = _find_boundary_at_size(current_coverage, dst_w, dst_h)
 
-    _draw_boundary_on_frame(frame_arr, final_bnd, (17, 24, 39, 250), boundary_radius + 1, dashed=False)
+    dark_color_rgba = (
+        int(key_color_rgba[0] * 0.45),
+        int(key_color_rgba[1] * 0.45),
+        int(key_color_rgba[2] * 0.45),
+        key_color_rgba[3],
+    )
+    _draw_boundary_on_frame(frame_arr, final_bnd, dark_color_rgba, boundary_radius + 1, dashed=False)
     _draw_boundary_on_frame(frame_arr, current_bnd, key_color_rgba, boundary_radius + 1, dashed=True)
 
     # 5. Composite keyboard overlay (outlines + labels, transparent background).
