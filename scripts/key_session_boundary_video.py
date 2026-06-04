@@ -20,6 +20,8 @@ Primary outputs:
 - `key_boundary_frame_manifest.csv`
 - `largest_difference_key.txt`
 - `frames/<key>/frame_XX_*.png` or `.svg`
+- `frames/whole_keyboard/frame_XX_*.png` or `.svg`
+- `videos/whole_keyboard_boundary.mp4` when PNG frames are enabled and ffmpeg is available
 """
 
 from __future__ import annotations
@@ -28,6 +30,8 @@ import argparse
 import csv
 import math
 import os
+import shutil
+import subprocess
 import tempfile
 import time
 from collections import defaultdict
@@ -44,12 +48,16 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.patches import FancyBboxPatch, Rectangle
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 import gaussian_keyboard_pdf as gkp
 
 ISOLATED_FILL_ALPHA = 110
 WHITE_RGBA = np.array([255, 255, 255, 255], dtype=np.uint8)
+CM_PER_INCH = 2.54
+BADGE_PADDING_CM = 0.04
+DISPLAY_BADGE_HEIGHT_FRAC = 0.62
+DISPLAY_BADGE_MIN = 44.0
 
 
 @dataclass(frozen=True)
@@ -65,6 +73,8 @@ class SamplingLayout:
 class Snapshot:
     latest_session: int
     visible_sessions: list[int]
+    visible_trial_count: int
+    total_trial_count: int
     model: dict[str, gkp.Gaussian2D]
     winner_indices: np.ndarray
 
@@ -209,6 +219,22 @@ def parse_args() -> argparse.Namespace:
         help="Optional subset of keys to export. Defaults to all keys.",
     )
     parser.add_argument(
+        "--fps",
+        type=float,
+        default=2.0,
+        help="Frames per second for the combined all-letters MP4 export.",
+    )
+    parser.add_argument(
+        "--skip-letter-overview",
+        action="store_true",
+        help="Skip the combined all-letters frame sequence and MP4 export.",
+    )
+    parser.add_argument(
+        "--skip-video",
+        action="store_true",
+        help="Skip MP4 assembly even when PNG frames are available.",
+    )
+    parser.add_argument(
         "--demo",
         action="store_true",
         help="Generate synthetic shifted sessions before rendering outputs.",
@@ -292,8 +318,145 @@ def display_key_label(key: str) -> str:
     return key.upper()
 
 
+def frame_badge_lines(
+    *,
+    title: str,
+    snapshot: Snapshot,
+) -> tuple[str, str]:
+    return (
+        title,
+        f"Session {snapshot.latest_session}   Trials {snapshot.visible_trial_count}/{snapshot.total_trial_count}",
+    )
+
+
 def visible_session_label(session_ids: list[int]) -> str:
     return ",".join(str(session_id + 1) for session_id in session_ids)
+
+
+def draw_frame_badge(
+    *,
+    ax: plt.Axes,
+    export_rect: gkp.Rect,
+    keyboard_panel_rect: gkp.Rect,
+    badge_gap_px: float,
+    title: str,
+    detail: str,
+) -> None:
+    badge_x = keyboard_panel_rect.x + keyboard_panel_rect.w * 0.040
+    badge_y = export_rect.y
+    ax.text(
+        badge_x,
+        badge_y,
+        f"{title}\n{detail}",
+        ha="left",
+        va="top",
+        color="#0F172A",
+        fontsize=max(10.0, min(13.0, max(DISPLAY_BADGE_MIN, badge_gap_px) * 0.28)),
+        fontweight="bold",
+        linespacing=1.25,
+        bbox={
+            "boxstyle": "round,pad=0.48,rounding_size=0.6",
+            "facecolor": (248 / 255.0, 250 / 255.0, 252 / 255.0, 0.93),
+            "edgecolor": (15 / 255.0, 23 / 255.0, 42 / 255.0, 0.18),
+            "linewidth": 1.0,
+        },
+        zorder=5.2,
+    )
+
+
+def annotate_frame_rgba(
+    *,
+    frame_rgba: np.ndarray,
+    title: str,
+    detail: str,
+    badge_region_top_px: int | None = None,
+    badge_region_bottom_px: int | None = None,
+) -> np.ndarray:
+    image = Image.fromarray(frame_rgba, mode="RGBA")
+    draw = ImageDraw.Draw(image, "RGBA")
+    title_font = ImageFont.load_default(size=max(15, image.height // 26))
+    detail_font = ImageFont.load_default(size=max(12, image.height // 34))
+    pad_x = max(12, image.width // 24)
+    pad_y = max(12, image.height // 26)
+    inner_pad_x = max(10, image.width // 48)
+    inner_pad_y = max(8, image.height // 52)
+    line_gap = max(4, image.height // 120)
+
+    title_box = draw.textbbox((0, 0), title, font=title_font)
+    detail_box = draw.textbbox((0, 0), detail, font=detail_font)
+    text_w = max(title_box[2] - title_box[0], detail_box[2] - detail_box[0])
+    title_h = title_box[3] - title_box[1]
+    detail_h = detail_box[3] - detail_box[1]
+    box_w = text_w + inner_pad_x * 2
+    box_h = title_h + detail_h + line_gap + inner_pad_y * 2
+
+    left = pad_x
+    if badge_region_top_px is not None and badge_region_bottom_px is not None:
+        region_top = max(0, badge_region_top_px)
+        region_bottom = max(region_top + 1, badge_region_bottom_px)
+        top = max(0, min(region_top, region_bottom - box_h))
+    else:
+        top = pad_y
+    right = left + box_w
+    bottom = top + box_h
+    draw.rounded_rectangle(
+        (left, top, right, bottom),
+        radius=max(14, image.height // 28),
+        fill=(248, 250, 252, 236),
+        outline=(15, 23, 42, 38),
+        width=1,
+    )
+    draw.text(
+        (left + inner_pad_x, top + inner_pad_y),
+        title,
+        font=title_font,
+        fill=(15, 23, 42, 255),
+    )
+    draw.text(
+        (left + inner_pad_x, top + inner_pad_y + title_h + line_gap),
+        detail,
+        font=detail_font,
+        fill=(30, 41, 59, 255),
+    )
+    return np.asarray(image)
+
+
+def trial_identity(event: gkp.Event) -> tuple[int, int]:
+    return (event.study_session_index, event.trial_index)
+
+
+def build_display_geometry(
+    *,
+    base_panel_rect: gkp.Rect,
+    base_frames: dict[str, gkp.Rect],
+    scale: float,
+    dpi: float,
+) -> tuple[gkp.Rect, gkp.Rect, dict[str, gkp.Rect], float]:
+    scaled_panel_rect = gkp.Rect(
+        base_panel_rect.x * scale,
+        base_panel_rect.y * scale,
+        base_panel_rect.w * scale,
+        base_panel_rect.h * scale,
+    )
+    scaled_frames = gkp.scale_frames(base_frames, scale)
+    sample_frame = next(iter(scaled_frames.values()))
+    badge_gap_px = max(0.0, float(dpi) * BADGE_PADDING_CM / CM_PER_INCH)
+    badge_height = max(DISPLAY_BADGE_MIN, sample_frame.h * DISPLAY_BADGE_HEIGHT_FRAC)
+    header_height = badge_gap_px + badge_height
+    keyboard_panel_rect = gkp.Rect(
+        scaled_panel_rect.x,
+        scaled_panel_rect.y + header_height,
+        scaled_panel_rect.w,
+        scaled_panel_rect.h,
+    )
+    export_rect = gkp.Rect(
+        scaled_panel_rect.x,
+        scaled_panel_rect.y,
+        scaled_panel_rect.w,
+        scaled_panel_rect.h + header_height,
+    )
+    display_frames = gkp.offset_frames(scaled_frames, 0.0, header_height)
+    return export_rect, keyboard_panel_rect, display_frames, badge_gap_px
 
 
 def render_keyboard_base(ax, frames: dict[str, gkp.Rect]) -> None:
@@ -450,7 +613,22 @@ def selected_key_coverage_alpha(
     analysis_rect: gkp.Rect,
     layout: SamplingLayout,
 ) -> np.ndarray:
-    winner_mask = winner_indices == key_index
+    return selected_key_indices_coverage_alpha(
+        winner_indices=winner_indices,
+        key_indices=[key_index],
+        analysis_rect=analysis_rect,
+        layout=layout,
+    )
+
+
+def selected_key_indices_coverage_alpha(
+    *,
+    winner_indices: np.ndarray,
+    key_indices: list[int],
+    analysis_rect: gkp.Rect,
+    layout: SamplingLayout,
+) -> np.ndarray:
+    winner_mask = np.isin(winner_indices, np.asarray(key_indices, dtype=winner_indices.dtype))
     alpha = np.zeros(winner_mask.shape, dtype=np.uint8)
     alpha[winner_mask] = 255
 
@@ -506,7 +684,8 @@ def rendered_full_winner_map_rgba_from_snapshot(
 
 def render_keyboard_overlay_rgba(
     *,
-    display_panel_rect: gkp.Rect,
+    export_rect: gkp.Rect,
+    keyboard_panel_rect: gkp.Rect,
     display_frames: dict[str, gkp.Rect],
     dpi: float,
 ) -> np.ndarray:
@@ -520,7 +699,7 @@ def render_keyboard_overlay_rgba(
     """
     from matplotlib.patches import FancyBboxPatch as _FBP
 
-    fig, ax = configure_axes(panel_rect=display_panel_rect, dpi=dpi)
+    fig, ax = configure_axes(panel_rect=export_rect, dpi=dpi)
     # Make the figure and all background rects fully transparent.
     fig.patch.set_alpha(0.0)
     for patch in list(ax.patches):
@@ -533,9 +712,9 @@ def render_keyboard_overlay_rgba(
 
     # Panel border only — no fill, so the background shows through.
     outline = _FBP(
-        (display_panel_rect.x, display_panel_rect.y),
-        display_panel_rect.w,
-        display_panel_rect.h,
+        (keyboard_panel_rect.x, keyboard_panel_rect.y),
+        keyboard_panel_rect.w,
+        keyboard_panel_rect.h,
         boxstyle=f"round,pad=0.0,rounding_size={gkp.PANEL_RADIUS}",
         facecolor="none",
         edgecolor="#111827",
@@ -651,51 +830,75 @@ def _draw_boundary_on_frame(
             frame_arr[dy0:dy1, dx0:dx1][submask] = color_arr
 
 
+@dataclass(frozen=True)
+class PixelBoundary:
+    coverage: np.ndarray
+    color: tuple[int, int, int, int]
+    radius: int
+    dashed: bool = False
+
+
 def make_frame_rgba_pil(
     *,
     background: np.ndarray,
     keyboard_overlay_rgba: np.ndarray,
-    final_coverage: np.ndarray,
-    current_coverage: np.ndarray,
-    key_color_rgba: tuple[int, int, int, int],
-    boundary_radius: int = 2,
+    boundaries: list[PixelBoundary],
+    display_panel_rect: gkp.Rect,
+    display_analysis_rect: gkp.Rect,
 ) -> np.ndarray:
     """Composite one frame entirely in PIL/numpy — no matplotlib figure needed.
 
     Steps:
     1. LANCZOS-upscale background (analysis res) to display res.
-    2. Find boundary of final_coverage (ground truth) at display res.
-    3. Find boundary of current_coverage at display res.
-    4. Draw solid black ground-truth boundary, then dashed colored session boundary.
-    5. Alpha-composite keyboard_overlay_rgba (outlines + labels) on top.
+    2. Draw all requested raster boundaries in display space.
+    3. Alpha-composite keyboard_overlay_rgba (outlines + labels) on top.
 
     Returns H×W×4 uint8 RGBA.
     """
     dst_h, dst_w = keyboard_overlay_rgba.shape[:2]
+    scale_x = dst_w / max(display_panel_rect.w, 1.0)
+    scale_y = dst_h / max(display_panel_rect.h, 1.0)
+    region_left = int(round((display_analysis_rect.x - display_panel_rect.x) * scale_x))
+    region_top = int(round((display_analysis_rect.y - display_panel_rect.y) * scale_y))
+    region_w = max(1, int(round(display_analysis_rect.w * scale_x)))
+    region_h = max(1, int(round(display_analysis_rect.h * scale_y)))
 
     # 1. Upscale background to display resolution.
     bg_img = Image.fromarray(background, mode="RGBA")
-    if bg_img.size != (dst_w, dst_h):
-        bg_img = bg_img.resize((dst_w, dst_h), resample=Image.Resampling.LANCZOS)
+    if bg_img.size != (region_w, region_h):
+        bg_img = bg_img.resize((region_w, region_h), resample=Image.Resampling.LANCZOS)
     # Composite onto white base.
     base = Image.new("RGBA", (dst_w, dst_h), (255, 255, 255, 255))
-    base = Image.alpha_composite(base, bg_img)
     frame_arr = np.array(base, dtype=np.uint8)
-
-    # 2-4. Draw boundary contours directly on the pixel array.
-    final_bnd = _find_boundary_at_size(final_coverage, dst_w, dst_h)
-    current_bnd = _find_boundary_at_size(current_coverage, dst_w, dst_h)
-
-    dark_color_rgba = (
-        int(key_color_rgba[0] * 0.45),
-        int(key_color_rgba[1] * 0.45),
-        int(key_color_rgba[2] * 0.45),
-        key_color_rgba[3],
+    bg_region = Image.alpha_composite(
+        Image.new("RGBA", (region_w, region_h), (255, 255, 255, 255)),
+        bg_img,
     )
-    _draw_boundary_on_frame(frame_arr, final_bnd, dark_color_rgba, boundary_radius + 1, dashed=False)
-    _draw_boundary_on_frame(frame_arr, current_bnd, key_color_rgba, boundary_radius + 1, dashed=True)
+    bg_arr = np.array(bg_region, dtype=np.uint8)
+    region_bottom = min(dst_h, region_top + bg_arr.shape[0])
+    region_right = min(dst_w, region_left + bg_arr.shape[1])
+    frame_arr[
+        region_top:region_bottom,
+        region_left:region_right,
+    ] = bg_arr[: region_bottom - region_top, : region_right - region_left]
 
-    # 5. Composite keyboard overlay (outlines + labels, transparent background).
+    # 2. Draw boundary contours directly on the pixel array.
+    for boundary in boundaries:
+        local_boundary_mask = _find_boundary_at_size(boundary.coverage, region_w, region_h)
+        boundary_mask = np.zeros((dst_h, dst_w), dtype=bool)
+        boundary_mask[
+            region_top:region_bottom,
+            region_left:region_right,
+        ] = local_boundary_mask[: region_bottom - region_top, : region_right - region_left]
+        _draw_boundary_on_frame(
+            frame_arr,
+            boundary_mask,
+            boundary.color,
+            boundary.radius,
+            dashed=boundary.dashed,
+        )
+
+    # 3. Composite keyboard overlay (outlines + labels, transparent background).
     overlay_img = Image.fromarray(keyboard_overlay_rgba, mode="RGBA")
     result = Image.alpha_composite(Image.fromarray(frame_arr, mode="RGBA"), overlay_img)
     return np.asarray(result)
@@ -783,11 +986,14 @@ def build_snapshots(
 
     session_ids = sorted(grouped)
     cumulative_events: list[gkp.Event] = []
+    visible_trials: set[tuple[int, int]] = set()
+    total_trial_count = len({trial_identity(event) for event in events})
     snapshots: list[Snapshot] = []
 
     for count, session_id in enumerate(session_ids, start=1):
         current_events = grouped[session_id]
         cumulative_events.extend(current_events)
+        visible_trials.update(trial_identity(event) for event in current_events)
         cumulative_samples = gkp.training_samples(cumulative_events)
         model, _, _ = gkp.fit_model(
             cumulative_samples,
@@ -797,6 +1003,8 @@ def build_snapshots(
             Snapshot(
                 latest_session=session_id + 1,
                 visible_sessions=session_ids[:count],
+                visible_trial_count=len(visible_trials),
+                total_trial_count=total_trial_count,
                 model=model,
                 winner_indices=winner_indices_for_model(
                     sample_x=sample_x,
@@ -813,9 +1021,12 @@ def build_snapshots(
 
     classic_samples = gkp.training_samples(classic_events)
     classic_model, _, _ = gkp.fit_model(classic_samples)
+    classic_trial_count = len({trial_identity(event) for event in classic_events})
     ground_truth = Snapshot(
         latest_session=max(session_ids) + 1,
         visible_sessions=sorted({event.study_session_index for event in classic_events}),
+        visible_trial_count=classic_trial_count,
+        total_trial_count=classic_trial_count,
         model=classic_model,
         winner_indices=winner_indices_for_model(
             sample_x=sample_x,
@@ -846,11 +1057,15 @@ def render_key_frames(
     # display_panel_rect and display_frames are used only for the matplotlib
     # axes, key-outline rendering, and imshow extent.
     display_panel_rect: gkp.Rect | None = None,
+    display_analysis_rect: gkp.Rect | None = None,
     display_frames: dict[str, gkp.Rect] | None = None,
+    badge_gap_px: float = 0.0,
 ) -> list[dict[str, str | int]]:
     # Fall back to analysis_rect / frames when no separate display geometry.
     if display_panel_rect is None:
         display_panel_rect = panel_rect
+    if display_analysis_rect is None:
+        display_analysis_rect = display_panel_rect
     if display_frames is None:
         display_frames = frames
 
@@ -878,7 +1093,8 @@ def render_key_frames(
     keyboard_overlay_rgba: np.ndarray | None = None
     if display_panel_rect is not None and display_frames is not None:
         keyboard_overlay_rgba = render_keyboard_overlay_rgba(
-            display_panel_rect=display_panel_rect,
+            export_rect=display_panel_rect,
+            keyboard_panel_rect=display_analysis_rect,
             display_frames=display_frames,
             dpi=dpi,
         )
@@ -898,6 +1114,12 @@ def render_key_frames(
         )
         kr, kg, kb = key_rgb(key)
         key_color_rgba = (int(kr * 255), int(kg * 255), int(kb * 255), 250)
+        dark_color_rgba = (
+            int(key_color_rgba[0] * 0.45),
+            int(key_color_rgba[1] * 0.45),
+            int(key_color_rgba[2] * 0.45),
+            key_color_rgba[3],
+        )
 
         for frame_index, current_snapshot in enumerate(snapshots):
             current_coverage = selected_key_coverage_alpha(
@@ -912,6 +1134,10 @@ def render_key_frames(
             )
 
             stage = f"session_{current_snapshot.latest_session:02d}"
+            badge_title, badge_detail = frame_badge_lines(
+                title=display_key_label(key),
+                snapshot=current_snapshot,
+            )
 
             # Fast PIL path for PNG: skip matplotlib figure creation entirely.
             # Boundary finding + compositing in numpy/PIL is ~10-20× faster than
@@ -920,9 +1146,39 @@ def render_key_frames(
                 frame_rgba = make_frame_rgba_pil(
                     background=background,
                     keyboard_overlay_rgba=keyboard_overlay_rgba,
-                    final_coverage=final_coverage,
-                    current_coverage=current_coverage,
-                    key_color_rgba=key_color_rgba,
+                    boundaries=[
+                        PixelBoundary(
+                            coverage=final_coverage,
+                            color=dark_color_rgba,
+                            radius=3,
+                        ),
+                        PixelBoundary(
+                            coverage=current_coverage,
+                            color=key_color_rgba,
+                            radius=3,
+                            dashed=True,
+                        ),
+                    ],
+                    display_panel_rect=display_panel_rect,
+                    display_analysis_rect=display_analysis_rect,
+                )
+                frame_rgba = annotate_frame_rgba(
+                    frame_rgba=frame_rgba,
+                    title=badge_title,
+                    detail=badge_detail,
+                    badge_region_top_px=0,
+                    badge_region_bottom_px=max(
+                        1,
+                        int(
+                            round(
+                                (
+                                    (display_analysis_rect.y - display_panel_rect.y)
+                                    / max(display_panel_rect.h, 1.0)
+                                )
+                                * frame_rgba.shape[0]
+                            )
+                        ),
+                    ),
                 )
                 png_path = key_dir / f"frame_{frame_index:02d}_{stage}.png"
                 Image.fromarray(frame_rgba, mode="RGBA").convert("RGB").save(png_path)
@@ -938,13 +1194,19 @@ def render_key_frames(
                 continue
 
             # SVG / both: fall through to matplotlib (vector output requires it).
-            _disp = display_panel_rect
-            fig, ax = configure_axes(panel_rect=_disp, dpi=dpi)
-            panel, outline = panel_patches(ax, _disp)
+            export_rect = display_panel_rect
+            keyboard_panel_rect = display_analysis_rect
+            fig, ax = configure_axes(panel_rect=export_rect, dpi=dpi)
+            panel, outline = panel_patches(ax, keyboard_panel_rect)
 
             img_obj = ax.imshow(
                 background,
-                extent=(_disp.x, _disp.x + _disp.w, _disp.y + _disp.h, _disp.y),
+                extent=(
+                    keyboard_panel_rect.x,
+                    keyboard_panel_rect.x + keyboard_panel_rect.w,
+                    keyboard_panel_rect.y + keyboard_panel_rect.h,
+                    keyboard_panel_rect.y,
+                ),
                 interpolation="bilinear",
                 zorder=1.5,
             )
@@ -952,7 +1214,7 @@ def render_key_frames(
             draw_raster_boundary(
                 ax=ax,
                 alpha=final_coverage,
-                analysis_rect=_disp,
+                analysis_rect=display_analysis_rect,
                 color=(0.0, 0.0, 0.0, 0.98),
                 linewidth=2.2,
                 linestyle="solid",
@@ -962,7 +1224,7 @@ def render_key_frames(
             draw_raster_boundary(
                 ax=ax,
                 alpha=current_coverage,
-                analysis_rect=_disp,
+                analysis_rect=display_analysis_rect,
                 color=(*key_rgb(key), 0.98),
                 linewidth=2.1,
                 linestyle=(0, (3.0, 2.0)),
@@ -972,13 +1234,26 @@ def render_key_frames(
             if keyboard_overlay_rgba is not None:
                 ax.imshow(
                     keyboard_overlay_rgba,
-                    extent=(_disp.x, _disp.x + _disp.w, _disp.y + _disp.h, _disp.y),
+                    extent=(
+                        export_rect.x,
+                        export_rect.x + export_rect.w,
+                        export_rect.y + export_rect.h,
+                        export_rect.y,
+                    ),
                     interpolation="nearest",
                     zorder=4.0,
                 )
             else:
                 render_keyboard_base(ax, display_frames)
                 ax.add_patch(outline)
+            draw_frame_badge(
+                ax=ax,
+                export_rect=export_rect,
+                keyboard_panel_rect=keyboard_panel_rect,
+                badge_gap_px=badge_gap_px,
+                title=badge_title,
+                detail=badge_detail,
+            )
 
             saved_paths = save_frame(
                 output_dir=key_dir,
@@ -1003,6 +1278,284 @@ def render_key_frames(
                 )
 
     return manifest_rows
+
+
+def render_letter_overview_frames(
+    *,
+    snapshots: list[Snapshot],
+    ground_truth: Snapshot,
+    panel_rect: gkp.Rect,
+    analysis_rect: gkp.Rect,
+    layout: SamplingLayout,
+    frames: dict[str, gkp.Rect],
+    output_dir: Path,
+    output_format: str,
+    dpi: float,
+    display_panel_rect: gkp.Rect | None = None,
+    display_analysis_rect: gkp.Rect | None = None,
+    display_frames: dict[str, gkp.Rect] | None = None,
+    badge_gap_px: float = 0.0,
+) -> list[dict[str, str | int]]:
+    if display_panel_rect is None:
+        display_panel_rect = panel_rect
+    if display_analysis_rect is None:
+        display_analysis_rect = display_panel_rect
+    if display_frames is None:
+        display_frames = frames
+
+    manifest_rows: list[dict[str, str | int]] = []
+    overview_dir = output_dir / "whole_keyboard"
+    overview_dir.mkdir(parents=True, exist_ok=True)
+    overview_keys = list(gkp.ALL_KEYS)
+    overview_indices = [gkp.ALL_KEYS.index(key) for key in overview_keys]
+
+    final_coverages = {
+        key: selected_key_coverage_alpha(
+            winner_indices=ground_truth.winner_indices,
+            key_index=gkp.ALL_KEYS.index(key),
+            analysis_rect=analysis_rect,
+            layout=layout,
+        )
+        for key in overview_keys
+    }
+    current_full_backgrounds = [
+        rendered_full_winner_map_rgba_from_snapshot(
+            snapshot=snapshot,
+            analysis_rect=analysis_rect,
+            layout=layout,
+        )
+        for snapshot in snapshots
+    ]
+
+    keyboard_overlay_rgba: np.ndarray | None = None
+    if display_panel_rect is not None and display_frames is not None:
+        keyboard_overlay_rgba = render_keyboard_overlay_rgba(
+            export_rect=display_panel_rect,
+            keyboard_panel_rect=display_analysis_rect,
+            display_frames=display_frames,
+            dpi=dpi,
+        )
+
+    for frame_index, current_snapshot in enumerate(snapshots):
+        stage = f"session_{current_snapshot.latest_session:02d}"
+        current_background = isolate_pixels_from_full_render(
+            full_background=current_full_backgrounds[frame_index],
+            coverage_alpha=selected_key_indices_coverage_alpha(
+                winner_indices=current_snapshot.winner_indices,
+                key_indices=overview_indices,
+                analysis_rect=analysis_rect,
+                layout=layout,
+            ),
+        )
+        badge_title, badge_detail = frame_badge_lines(
+            title="Whole Keyboard",
+            snapshot=current_snapshot,
+        )
+
+        current_coverages = {
+            key: selected_key_coverage_alpha(
+                winner_indices=current_snapshot.winner_indices,
+                key_index=gkp.ALL_KEYS.index(key),
+                analysis_rect=analysis_rect,
+                layout=layout,
+            )
+            for key in overview_keys
+        }
+
+        if keyboard_overlay_rgba is not None and output_format == "png":
+            boundaries: list[PixelBoundary] = []
+            for key in overview_keys:
+                kr, kg, kb = key_rgb(key)
+                key_color_rgba = (int(kr * 255), int(kg * 255), int(kb * 255), 250)
+                dark_color_rgba = (
+                    int(key_color_rgba[0] * 0.45),
+                    int(key_color_rgba[1] * 0.45),
+                    int(key_color_rgba[2] * 0.45),
+                    key_color_rgba[3],
+                )
+                boundaries.append(
+                    PixelBoundary(
+                        coverage=final_coverages[key],
+                        color=dark_color_rgba,
+                        radius=2,
+                    )
+                )
+                boundaries.append(
+                    PixelBoundary(
+                        coverage=current_coverages[key],
+                        color=key_color_rgba,
+                        radius=2,
+                        dashed=True,
+                    )
+                )
+            frame_rgba = make_frame_rgba_pil(
+                background=current_background,
+                keyboard_overlay_rgba=keyboard_overlay_rgba,
+                boundaries=boundaries,
+                display_panel_rect=display_panel_rect,
+                display_analysis_rect=display_analysis_rect,
+            )
+            frame_rgba = annotate_frame_rgba(
+                frame_rgba=frame_rgba,
+                title=badge_title,
+                detail=badge_detail,
+                badge_region_top_px=0,
+                badge_region_bottom_px=max(
+                    1,
+                    int(
+                        round(
+                            (
+                                (display_analysis_rect.y - display_panel_rect.y)
+                                / max(display_panel_rect.h, 1.0)
+                            )
+                            * frame_rgba.shape[0]
+                        )
+                    ),
+                ),
+            )
+            png_path = overview_dir / f"frame_{frame_index:02d}_{stage}.png"
+            Image.fromarray(frame_rgba, mode="RGBA").convert("RGB").save(png_path)
+            manifest_rows.append(
+                {
+                    "key": "whole_keyboard",
+                    "frame_index": frame_index,
+                    "latest_session": current_snapshot.latest_session,
+                    "visible_sessions": visible_session_label(current_snapshot.visible_sessions),
+                    "path": str(png_path),
+                }
+            )
+            continue
+
+        export_rect = display_panel_rect
+        keyboard_panel_rect = display_analysis_rect
+        fig, ax = configure_axes(panel_rect=export_rect, dpi=dpi)
+        panel, outline = panel_patches(ax, keyboard_panel_rect)
+
+        img_obj = ax.imshow(
+            current_background,
+            extent=(
+                keyboard_panel_rect.x,
+                keyboard_panel_rect.x + keyboard_panel_rect.w,
+                keyboard_panel_rect.y + keyboard_panel_rect.h,
+                keyboard_panel_rect.y,
+            ),
+            interpolation="bilinear",
+            zorder=1.5,
+        )
+        img_obj.set_clip_path(panel)
+        for key in overview_keys:
+            kr, kg, kb = key_rgb(key)
+            draw_raster_boundary(
+                ax=ax,
+                alpha=final_coverages[key],
+                analysis_rect=display_analysis_rect,
+                color=(kr * 0.45, kg * 0.45, kb * 0.45, 0.98),
+                linewidth=1.45,
+                linestyle="solid",
+                zorder=3.0,
+                panel=panel,
+            )
+            draw_raster_boundary(
+                ax=ax,
+                alpha=current_coverages[key],
+                analysis_rect=display_analysis_rect,
+                color=(kr, kg, kb, 0.98),
+                linewidth=1.3,
+                linestyle=(0, (3.0, 2.0)),
+                zorder=3.2,
+                panel=panel,
+            )
+        if keyboard_overlay_rgba is not None:
+            ax.imshow(
+                keyboard_overlay_rgba,
+                extent=(
+                    export_rect.x,
+                    export_rect.x + export_rect.w,
+                    export_rect.y + export_rect.h,
+                    export_rect.y,
+                ),
+                interpolation="nearest",
+                zorder=4.0,
+            )
+        else:
+            render_keyboard_base(ax, display_frames)
+            ax.add_patch(outline)
+        draw_frame_badge(
+            ax=ax,
+            export_rect=export_rect,
+            keyboard_panel_rect=keyboard_panel_rect,
+            badge_gap_px=badge_gap_px,
+            title=badge_title,
+            detail=badge_detail,
+        )
+
+        saved_paths = save_frame(
+            output_dir=overview_dir,
+            frame_index=frame_index,
+            stage=stage,
+            output_format=output_format,
+            fig=fig,
+            dpi=dpi,
+            frame_rgba=None,
+        )
+        plt.close(fig)
+
+        for saved_path in saved_paths:
+            manifest_rows.append(
+                {
+                    "key": "whole_keyboard",
+                    "frame_index": frame_index,
+                    "latest_session": current_snapshot.latest_session,
+                    "visible_sessions": visible_session_label(current_snapshot.visible_sessions),
+                    "path": str(saved_path),
+                }
+            )
+
+    return manifest_rows
+
+
+def assemble_mp4_from_frames(
+    *,
+    frame_dir: Path,
+    output_path: Path,
+    fps: float,
+) -> bool:
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if ffmpeg_bin is None:
+        return False
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(
+            [
+                ffmpeg_bin,
+                "-y",
+                "-loglevel",
+                "error",
+                "-framerate",
+                f"{max(float(fps), 0.25):g}",
+                "-pattern_type",
+                "glob",
+                "-i",
+                "frame_*.png",
+                "-vf",
+                "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+                str(output_path),
+            ],
+            cwd=frame_dir,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError:
+        return False
+    return output_path.exists()
 
 
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, str | int | float]]) -> None:
@@ -1048,14 +1601,14 @@ def main() -> None:
     base_panel_rect, base_frames = gkp.build_svg_panel_and_frames()
     scale = max(float(args.scale), 0.5)
 
-    # --- display geometry (scaled, for matplotlib panel / key outlines) ---
-    display_panel_rect = gkp.Rect(
-        base_panel_rect.x * scale,
-        base_panel_rect.y * scale,
-        base_panel_rect.w * scale,
-        base_panel_rect.h * scale,
+    # --- display geometry (scaled, with header space reserved for the badge) ---
+    render_dpi = max(float(args.dpi), 72.0)
+    display_panel_rect, display_analysis_rect, display_frames, badge_gap_px = build_display_geometry(
+        base_panel_rect=base_panel_rect,
+        base_frames=base_frames,
+        scale=scale,
+        dpi=render_dpi,
     )
-    display_frames = gkp.scale_frames(base_frames, scale)
 
     # --- evaluation geometry (scale=1.0, matching reference PDF pipeline) ---
     # Gaussian model parameters are in phone-pixel units that match the
@@ -1165,11 +1718,47 @@ def main() -> None:
             raster_step=eval_raster_step,
             output_dir=frames_root,
             output_format=args.format,
-            dpi=max(float(args.dpi), 72.0),
+            dpi=render_dpi,
             display_panel_rect=display_panel_rect,
+            display_analysis_rect=display_analysis_rect,
             display_frames=display_frames,
+            badge_gap_px=badge_gap_px,
         )
     )
+    whole_keyboard_video_path: Path | None = None
+    video_status = "not requested"
+    if not args.skip_letter_overview:
+        manifest_rows.extend(
+            render_letter_overview_frames(
+                snapshots=snapshots,
+                ground_truth=ground_truth,
+                panel_rect=eval_panel_rect,
+                analysis_rect=eval_panel_rect,
+                layout=layout,
+                frames=eval_frames,
+                output_dir=frames_root,
+                output_format=args.format,
+                dpi=render_dpi,
+                display_panel_rect=display_panel_rect,
+                display_analysis_rect=display_analysis_rect,
+                display_frames=display_frames,
+                badge_gap_px=badge_gap_px,
+            )
+        )
+        video_status = "skipped (--skip-video)"
+        if args.format not in {"png", "both"}:
+            video_status = "skipped (PNG frames required)"
+        elif not args.skip_video:
+            candidate_video_path = output_dir / "videos" / "whole_keyboard_boundary.mp4"
+            if assemble_mp4_from_frames(
+                frame_dir=frames_root / "whole_keyboard",
+                output_path=candidate_video_path,
+                fps=args.fps,
+            ):
+                whole_keyboard_video_path = candidate_video_path
+                video_status = f"created ({candidate_video_path.relative_to(output_dir)})"
+            else:
+                video_status = "skipped (ffmpeg unavailable or encode failed)"
 
     write_csv(
         output_dir / "key_boundary_overlap_summary.csv",
@@ -1220,6 +1809,13 @@ def main() -> None:
     print("  - key_boundary_frame_manifest.csv")
     print("  - largest_difference_key.txt")
     print("  - frames/<key>/frame_XX_*")
+    if not args.skip_letter_overview:
+        print("  - frames/whole_keyboard/frame_XX_*")
+    if whole_keyboard_video_path is not None:
+        print(f"  - {whole_keyboard_video_path.relative_to(output_dir)}")
+        print(f"Whole-keyboard video: {whole_keyboard_video_path}")
+    elif not args.skip_letter_overview:
+        print(f"Whole-keyboard video: {video_status}")
     finished_at = datetime.now().astimezone()
     elapsed_seconds = time.perf_counter() - start
     print(f"Started: {started_at.strftime('%Y-%m-%d %H:%M:%S %Z')}")
