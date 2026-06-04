@@ -131,7 +131,7 @@ python3 scripts/ground_truth_trial_loss.py <cleaned_keystrokes.csv>
 
 ### 6. Export per-key boundary video frames
 
-This is useful when you want to animate one key at a time over sessions, using the Gaussian boundary panel UI while also showing that key's Gaussian fade outside its winner boundary. Each exported frame now includes a `Session N   Trials X/Y` badge, and the script also writes a combined `all_letters` overview sequence plus an MP4 when PNG frames are enabled and `ffmpeg` is installed.
+This is useful when you want to animate one key at a time over sessions, using the Gaussian boundary panel UI while also showing that key's Gaussian fade outside its winner boundary. Each exported frame now includes a `Session N   Trials X/Y` label, and the script also writes a combined whole-keyboard overview sequence plus an MP4 when PNG frames are enabled and `ffmpeg` is installed.
 
 ```sh
 python3 scripts/key_session_boundary_video.py <cleaned_keystrokes.csv> --output-dir <output_dir>
@@ -154,8 +154,8 @@ Primary outputs:
 - `key_boundary_frame_manifest.csv`
 - `largest_difference_key.txt`
 - `frames/<key>/frame_XX_*.png`
-- `frames/all_letters/frame_XX_*.png`
-- `videos/all_letters_boundary.mp4`
+- `frames/whole_keyboard/frame_XX_*.png`
+- `videos/whole_keyboard_boundary.mp4`
 
 **Implementation note — eval vs display coordinate systems:** The Gaussian model parameters (`mu_x`, `mu_y`, precision matrix) are fit in phone-pixel units that match the unscaled PDF key dimensions (~45 px/key). The script uses `--scale` (default 2.0) to enlarge the output image, but winner-map evaluation must stay in the scale=1.0 coordinate system. Evaluating in scaled coordinates inflates `dx` relative to `mu_x`/`mu_y`, causing fitted neighbour keys to score artificially low and letting fallback-Gaussian keys steal their territory. The script therefore always evaluates all winner maps and raster backgrounds using `base_panel_rect` / `base_frames` (scale=1.0) and only applies the display scale to the matplotlib axes, `imshow` extent, and key-outline rendering.
 

@@ -354,12 +354,6 @@ def draw_frame_badge(
         fontsize=max(10.0, min(13.0, max(DISPLAY_BADGE_MIN, badge_gap_px) * 0.28)),
         fontweight="bold",
         linespacing=1.25,
-        bbox={
-            "boxstyle": "round,pad=0.48,rounding_size=0.6",
-            "facecolor": (248 / 255.0, 250 / 255.0, 252 / 255.0, 0.93),
-            "edgecolor": (15 / 255.0, 23 / 255.0, 42 / 255.0, 0.18),
-            "linewidth": 1.0,
-        },
         zorder=5.2,
     )
 
@@ -378,42 +372,29 @@ def annotate_frame_rgba(
     detail_font = ImageFont.load_default(size=max(12, image.height // 34))
     pad_x = max(12, image.width // 24)
     pad_y = max(12, image.height // 26)
-    inner_pad_x = max(10, image.width // 48)
-    inner_pad_y = max(8, image.height // 52)
     line_gap = max(4, image.height // 120)
 
     title_box = draw.textbbox((0, 0), title, font=title_font)
     detail_box = draw.textbbox((0, 0), detail, font=detail_font)
-    text_w = max(title_box[2] - title_box[0], detail_box[2] - detail_box[0])
     title_h = title_box[3] - title_box[1]
     detail_h = detail_box[3] - detail_box[1]
-    box_w = text_w + inner_pad_x * 2
-    box_h = title_h + detail_h + line_gap + inner_pad_y * 2
+    text_block_h = title_h + detail_h + line_gap
 
     left = pad_x
     if badge_region_top_px is not None and badge_region_bottom_px is not None:
         region_top = max(0, badge_region_top_px)
         region_bottom = max(region_top + 1, badge_region_bottom_px)
-        top = max(0, min(region_top, region_bottom - box_h))
+        top = max(0, min(region_top, region_bottom - text_block_h))
     else:
         top = pad_y
-    right = left + box_w
-    bottom = top + box_h
-    draw.rounded_rectangle(
-        (left, top, right, bottom),
-        radius=max(14, image.height // 28),
-        fill=(248, 250, 252, 236),
-        outline=(15, 23, 42, 38),
-        width=1,
-    )
     draw.text(
-        (left + inner_pad_x, top + inner_pad_y),
+        (left, top),
         title,
         font=title_font,
         fill=(15, 23, 42, 255),
     )
     draw.text(
-        (left + inner_pad_x, top + inner_pad_y + title_h + line_gap),
+        (left, top + title_h + line_gap),
         detail,
         font=detail_font,
         fill=(30, 41, 59, 255),
