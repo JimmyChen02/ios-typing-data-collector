@@ -24,8 +24,14 @@ Pods/
 __pycache__/
 *.pyc
 
+# Generated analysis output (keep the folder's README)
+results/*
+!results/README.md
+venv/
+
 # Claude / project notes
-CLAUDE.md
-.claude
+# CLAUDE.md and .claude/ are shared (project context for collaborators + agents).
+# Keep machine-specific bits out:
+.claude/settings.local.json
 build_log.md
 logs/
