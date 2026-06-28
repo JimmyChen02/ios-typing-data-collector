@@ -16,6 +16,8 @@ struct TrialView: View {
     private let kbBufH:    CGFloat = 8
     private let alphaTop = ["q","w","e","r","t","y","u","i","o","p"]
     private let numTop   = ["1","2","3","4","5","6","7","8","9","0"]
+    private let textWindowBeforeCursor = 140
+    private let textWindowAfterCursor = 260
 
     private var keyboardHeight: CGFloat {
         max(180, sessionManager.measuredKeyboardHeight - sessionManager.safeAreaBottom)
@@ -234,11 +236,16 @@ struct TrialView: View {
                 let targetChars = Array(trial.targetText)
                 let typedChars  = Array(typedText)
                 let cursorIndex = typedChars.count
+                let lowerBound = max(0, cursorIndex - textWindowBeforeCursor)
+                let upperBound = min(targetChars.count, cursorIndex + textWindowAfterCursor)
+                let visibleRange = lowerBound..<upperBound
+                let scrollTarget = min(cursorIndex, max(0, targetChars.count - 1))
 
                 ScrollViewReader { proxy in
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 0) {
-                            ForEach(Array(targetChars.enumerated()), id: \.offset) { index, char in
+                            ForEach(Array(visibleRange), id: \.self) { index in
+                                let char = targetChars[index]
                                 let isWrongSpace = char == " " && index < cursorIndex && typedChars[index] != char
                                 Text(isWrongSpace ? "·" : String(char))
                                     .font(.system(size: 22, weight: .medium, design: .monospaced))
@@ -252,8 +259,9 @@ struct TrialView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .onChange(of: typedText) { _, _ in
-                        withAnimation(.easeOut(duration: 0.1)) {
-                            proxy.scrollTo(cursorIndex, anchor: .center)
+                        // Avoid animating every keypress; this reduces frequent main-thread work.
+                        if cursorIndex < 24 || cursorIndex % 3 == 0 {
+                            proxy.scrollTo(scrollTarget, anchor: .center)
                         }
                     }
                 }
