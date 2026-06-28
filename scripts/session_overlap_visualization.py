@@ -4,14 +4,16 @@ Create per-session Gaussian boundary SVGs that mirror the older smooth session v
 
 For each study session, this script:
 
-1. Fits the current session's per-key Gaussian model when a key has enough data.
-2. Falls back to the cumulative prior-session model for sparse keys.
-3. Uses the geometric key fallback only when no Gaussian exists for that key.
+1. Pools all visible sessions up to the current one.
+2. Fits each key's Gaussian from the cumulative data when enough samples exist.
+3. Uses the geometric key fallback directly for sparse keys.
 
 Outputs:
 
+- `session_gaussian_boundaries_00.svg`: baseline keyboard geometry boundary
 - `session_gaussian_boundaries_XX.svg`: one SVG per session snapshot
 - `final_gaussian_ground_truth_boundary.svg`: final classic-only ground-truth SVG
+- `session_gaussian_boundaries_00.pdf`: baseline keyboard geometry boundary
 - `session_gaussian_boundaries_XX.pdf`: one PDF per session snapshot
 - `final_gaussian_ground_truth_boundary.pdf`: final classic-only ground-truth PDF
 - `session_gaussian_boundaries_summary.csv`
@@ -179,10 +181,9 @@ def write_summary_csvs(
             "visible_sessions",
             "latest_session",
             "session_events",
-            "prior_events",
+            "cumulative_events",
             "training_samples",
-            "fitted_current_keys",
-            "prior_model_keys",
+            "fitted_cumulative_keys",
             "geometry_fallback_keys",
         ]
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -196,7 +197,7 @@ def write_summary_csvs(
             "key",
             "source",
             "session_samples",
-            "prior_model_samples",
+            "cumulative_samples",
             "model_samples",
         ]
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -216,28 +217,53 @@ def write_outputs(
         raise SystemExit("No grouped session events were available after filtering.")
 
     session_ids = sorted(grouped)
-    cumulative_prior_events: list[gkp.Event] = []
+    cumulative_events: list[gkp.Event] = []
     summary_rows: list[dict[str, str | int]] = []
     by_key_rows: list[dict[str, str | int]] = []
     pdf_pages: list[gkp.PdfPage] = []
     wants_svg = output_format in {"svg", "both"}
     wants_pdf = output_format in {"pdf", "both"}
 
+    baseline_page = make_page(
+        title="Keyboard Baseline",
+        participant=participant,
+        visible_sessions=[],
+        prior_event_count=0,
+        samples=[],
+        model={},
+        model_sources={},
+    )
+    if wants_svg:
+        gkp.render_boundary_svg(
+            output_dir / "session_gaussian_boundaries_00.svg",
+            model={},
+            raster_step=gkp.RASTER_STEP,
+        )
+    if wants_pdf:
+        gkp.render_pdf_pages(
+            output_dir / "session_gaussian_boundaries_00.pdf",
+            participant,
+            [baseline_page],
+        )
+        pdf_pages.append(baseline_page)
+
     for count, session_id in enumerate(session_ids, start=1):
         visible_sessions = session_ids[:count]
         current_events = grouped[session_id]
-
-        prior_samples = gkp.training_samples(cumulative_prior_events)
-        prior_model, _, _ = gkp.fit_model(prior_samples)
-
         current_samples = gkp.training_samples(current_events)
-        model, model_sources, sample_counts = gkp.fit_model(current_samples, prior_model=prior_model)
+        current_sample_counts = Counter(sample.target_key for sample in current_samples)
+        cumulative_visible_events = cumulative_events + current_events
+        cumulative_samples = gkp.training_samples(cumulative_visible_events)
+        model, model_sources, sample_counts = gkp.fit_model(
+            cumulative_samples,
+            fitted_source=gkp.SOURCE_FITTED_CUMULATIVE,
+        )
         page = make_page(
             title=f"Gaussian Trial {session_id + 1}",
             participant=participant,
             visible_sessions=visible_sessions,
-            prior_event_count=len(cumulative_prior_events),
-            samples=current_samples,
+            prior_event_count=len(cumulative_events),
+            samples=cumulative_samples,
             model=model,
             model_sources=model_sources,
         )
@@ -261,10 +287,9 @@ def write_outputs(
                 "visible_sessions": visible_session_label(visible_sessions),
                 "latest_session": session_id + 1,
                 "session_events": len(current_events),
-                "prior_events": len(cumulative_prior_events),
-                "training_samples": len(current_samples),
-                "fitted_current_keys": counts[gkp.SOURCE_FITTED_CURRENT],
-                "prior_model_keys": counts[gkp.SOURCE_PRIOR_MODEL],
+                "cumulative_events": len(cumulative_visible_events),
+                "training_samples": len(cumulative_samples),
+                "fitted_cumulative_keys": counts[gkp.SOURCE_FITTED_CUMULATIVE],
                 "geometry_fallback_keys": counts[gkp.SOURCE_GEOMETRY_FALLBACK],
             }
         )
@@ -277,13 +302,13 @@ def write_outputs(
                     "latest_session": session_id + 1,
                     "key": key,
                     "source": source,
-                    "session_samples": sample_counts.get(key, 0),
-                    "prior_model_samples": prior_model[key].count if key in prior_model else 0,
+                    "session_samples": current_sample_counts.get(key, 0),
+                    "cumulative_samples": sample_counts.get(key, 0),
                     "model_samples": model[key].count if key in model else 0,
                 }
             )
 
-        cumulative_prior_events.extend(current_events)
+        cumulative_events = cumulative_visible_events
 
     classic_events = [event for event in events if event.session_mode == "classic"]
     if classic_events:

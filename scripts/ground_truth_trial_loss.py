@@ -7,7 +7,7 @@ Ground truth is built from all usable trials. The script then evaluates:
 1. Simple / prefix mode:
    {1}, {1,2}, {1,2,3}, ... vs {all trials}
 
-2. All-combinations mode:
+2. All-combinations mode: (doesn't account for permutations - wld result in same point w more weight)
    Every size-k subset vs {all trials}, averaged within each k
 
 Similarity is normalized weighted-Jaccard overlap on grid-cell histograms:
@@ -27,6 +27,8 @@ import argparse
 import time
 from itertools import combinations
 from pathlib import Path
+
+import numpy as np
 
 from numpy_analysis_utils import (
     HistogramBank,
@@ -77,13 +79,98 @@ def format_group(group: list[int] | tuple[int, ...]) -> str:
     return "{" + ",".join(str(unit_id) for unit_id in group) + "}"
 
 
+def keyboard_baseline_similarity(
+    histogram_bank: HistogramBank,
+    ground_truth: list[int],
+    min_taps: int,
+) -> tuple[float | None, float | None, int]:
+    if not ground_truth:
+        return None, None, 0
+
+    group_index = np.array([histogram_bank.unit_to_index[unit_id] for unit_id in ground_truth], dtype=np.int32)
+    ground_truth_hist = histogram_bank.histograms[group_index].sum(axis=0, dtype=np.float32)
+    total_truth = ground_truth_hist.sum(axis=1, dtype=np.float32)
+    valid = total_truth >= min_taps
+    if not np.any(valid):
+        return None, None, 0
+
+    valid_truth = ground_truth_hist[valid]
+    valid_totals = total_truth[valid]
+    cell_count = histogram_bank.grid_size * histogram_bank.grid_size
+
+    # The keyboard baseline treats each key as a uniform distribution over its
+    # normalized local key area. Matching each key's total mass to the ground
+    # truth keeps the weighted-Jaccard comparison on the same scale.
+    uniform_baseline = np.repeat((valid_totals / cell_count)[:, None], cell_count, axis=1)
+
+    min_mass = np.minimum(uniform_baseline, valid_truth).sum(axis=1, dtype=np.float32)
+    max_mass = np.maximum(uniform_baseline, valid_truth).sum(axis=1, dtype=np.float32)
+    positive = max_mass > 0
+    if not np.any(positive):
+        return None, None, 0
+
+    similarities = (min_mass[positive] / max_mass[positive]).astype(np.float64, copy=False)
+    weights = valid_totals[positive].astype(np.float64, copy=False)
+    weighted_similarity = float(np.average(similarities, weights=weights)) if float(weights.sum()) > 0 else None
+    return float(similarities.mean()), weighted_similarity, int(similarities.size)
+
+
+def baseline_simple_row(
+    trial_ids: list[int],
+    histogram_bank: HistogramBank,
+    min_taps: int,
+) -> dict:
+    mean_similarity, weighted_similarity, num_keys = keyboard_baseline_similarity(
+        histogram_bank,
+        trial_ids,
+        min_taps,
+    )
+    mean_loss = None if mean_similarity is None else 1.0 - mean_similarity
+    weighted_loss = None if weighted_similarity is None else 1.0 - weighted_similarity
+    return {
+        "num_trials": 0,
+        "total_trials": len(trial_ids),
+        "subset": "{keyboard_baseline}",
+        "ground_truth": format_group(trial_ids),
+        "num_keys_compared": num_keys,
+        "similarity": format_float(weighted_similarity),
+        "loss": format_float(weighted_loss),
+        "weighted_mean_loss": format_float(weighted_loss),
+        "mean_loss": format_float(mean_loss),
+    }
+
+
+def baseline_combination_row(
+    trial_ids: list[int],
+    histogram_bank: HistogramBank,
+    min_taps: int,
+) -> dict:
+    mean_similarity, weighted_similarity, _ = keyboard_baseline_similarity(
+        histogram_bank,
+        trial_ids,
+        min_taps,
+    )
+    mean_loss = None if mean_similarity is None else 1.0 - mean_similarity
+    weighted_loss = None if weighted_similarity is None else 1.0 - weighted_similarity
+    return {
+        "num_trials": 0,
+        "total_trials": len(trial_ids),
+        "num_combinations": 1,
+        "ground_truth": format_group(trial_ids),
+        "similarity": format_float(weighted_similarity),
+        "loss": format_float(weighted_loss),
+        "avg_combination_weighted_loss": format_float(weighted_loss),
+        "avg_combination_mean_loss": format_float(mean_loss),
+    }
+
+
 def make_simple_rows(
     trial_ids: list[int],
     histogram_bank: HistogramBank,
     min_taps: int,
 ) -> list[dict]:
     ground_truth = trial_ids
-    rows: list[dict] = []
+    rows: list[dict] = [baseline_simple_row(trial_ids, histogram_bank, min_taps)]
 
     for k in range(1, len(trial_ids) + 1):
         subset = trial_ids[:k]
@@ -118,7 +205,7 @@ def make_combination_rows(
     min_taps: int,
 ) -> list[dict]:
     ground_truth = trial_ids
-    summary_rows: list[dict] = []
+    summary_rows: list[dict] = [baseline_combination_row(trial_ids, histogram_bank, min_taps)]
 
     for k in range(1, len(trial_ids) + 1):
         weighted_losses: list[float] = []

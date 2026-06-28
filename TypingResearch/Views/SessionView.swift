@@ -1,4 +1,3 @@
-import Charts
 import SwiftUI
 
 struct SessionView: View {
@@ -41,14 +40,17 @@ struct SummaryView: View {
     @State private var showResetConfirm: Bool = false
     @State private var generatingPDF: PDFKind? = nil
     @State private var plotLayout: TapDotPlotView.LayoutMode = .alpha
-    @State private var groundTruthAnalysis: GroundTruthLossAnalysis? = nil
-    @State private var groundTruthError: String? = nil
-    @State private var isLoadingGroundTruth: Bool = false
+    @State private var gaussianPreviewImage: UIImage? = nil
+    @State private var isRenderingGaussianPreview = false
 
-    private enum PDFKind { case raw, cleaned, gaussianFinal, groundTruth }
+    private enum PDFKind { case raw, cleaned }
+
+    private var gaussianBoundaryEvents: [InputEventData] {
+        GaussianBoundaryTimeline.finalGroundTruthEvents(from: sessionManager.allEvents)
+    }
 
     private var hasClassicBoundaryData: Bool {
-        !GaussianBoundaryTimeline.finalGroundTruthEvents(from: sessionManager.allEvents).isEmpty
+        !gaussianBoundaryEvents.isEmpty
     }
 
     var body: some View {
@@ -63,16 +65,15 @@ struct SummaryView: View {
                     Divider()
                     cleaningSection
                     Divider()
-                    groundTruthLossSection
-                    Divider()
+                    if hasClassicBoundaryData {
+                        gaussianBoundarySection
+                        Divider()
+                    }
                     tapPlotSection
                     Divider()
                     exportButtons
                 }
                 .padding()
-            }
-            .task {
-                await loadGroundTruthAnalysisIfNeeded()
             }
             .navigationTitle(sessionManager.studyDesign == .classicOnly ? "Collection Complete" : "Study Complete")
             .toolbar {
@@ -335,66 +336,51 @@ struct SummaryView: View {
 
     // MARK: - Tap Plot Section
 
-    private var groundTruthLossSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Ground Truth Loss")
+    private var gaussianBoundarySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Gaussian boundaries")
                 .font(.headline)
-
-            Text("Computed automatically from clean classic-session insert taps. Prefix mode shows one specific cumulative path; all-combinations mode averages across every subset of the same size.")
+            Text("Final cumulative boundary fit from all classic sessions only.")
                 .font(.caption)
                 .foregroundColor(.secondary)
 
-            if isLoadingGroundTruth {
-                HStack(spacing: 12) {
-                    ProgressView()
-                    Text("Computing ground-truth loss curves...")
-                        .foregroundColor(.secondary)
-                }
-                .padding(.vertical, 8)
-            } else if let groundTruthError {
-                Text(groundTruthError)
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .padding(.vertical, 8)
-            } else if let analysis = groundTruthAnalysis {
-                Text("\(analysis.totalTrials) classic trials, \(analysis.usableEventCount) clean insert events")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+            GeometryReader { geo in
+                let width = max(280, geo.size.width)
+                let height = max(220, width * 0.62)
 
-                VStack(alignment: .leading, spacing: 20) {
-                    chartSection(
-                        title: "Specific Cumulative Path",
-                        subtitle: "{1}, {1,2}, {1,2,3}, ... compared with all classic trials",
-                        points: analysis.simpleSummary
-                    )
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(Color(.systemGray6))
 
-                    chartSection(
-                        title: "Average Across All Combinations",
-                        subtitle: "Mean over every same-size subset before comparing with all classic trials",
-                        points: analysis.allCombinationsSummary
-                    )
-                }
-
-                Button(action: { exportGroundTruthPDF() }) {
-                    HStack {
-                        if generatingPDF == .groundTruth {
-                            ProgressView().tint(.white).padding(.trailing, 4)
-                        } else {
-                            Image(systemName: "chart.line.text.clipboard")
+                    if let gaussianPreviewImage {
+                        Image(uiImage: gaussianPreviewImage)
+                            .resizable()
+                            .interpolation(.high)
+                            .scaledToFit()
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                            .padding(8)
+                    } else if isRenderingGaussianPreview {
+                        VStack(spacing: 10) {
+                            ProgressView()
+                            Text("Rendering Gaussian boundary...")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
-                        Text(generatingPDF == .groundTruth ? "Generating…" : "Ground Truth Loss PDF")
+                    } else {
+                        Text("No Gaussian boundary preview available.")
+                            .foregroundColor(.secondary)
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(10)
                 }
-                .disabled(generatingPDF != nil)
+                .task(id: "\(Int(width.rounded()))-\(gaussianBoundaryEvents.count)") {
+                    await renderGaussianBoundaryPreview(width: width, height: height)
+                }
             }
+            .frame(height: 230)
+
+            Text("\(gaussianBoundaryEvents.count) clean classic taps")
+                .font(.caption2)
+                .foregroundColor(.secondary)
         }
-        .padding()
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color(.systemGray6)))
     }
 
     private var tapPlotSection: some View {
@@ -417,139 +403,6 @@ struct SummaryView: View {
                 colorMode: .byKey,
                 layoutMode: plotLayout
             )
-
-            NavigationLink {
-                SessionOverlapView(events: sessionManager.allEvents)
-            } label: {
-                Label("Open Session Overlap Viewer", systemImage: "square.stack.3d.up")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-
-            NavigationLink {
-                GaussianBoundarySessionView(
-                    events: sessionManager.allEvents,
-                    participant: sessionManager.participant,
-                    session: sessionManager.currentSession
-                )
-            } label: {
-                Label("Open Gaussian Boundary Session Viewer", systemImage: "square.stack.3d.down.right")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-        }
-    }
-
-    @ViewBuilder
-    private func chartSection(
-        title: String,
-        subtitle: String,
-        points: [GroundTruthSeriesPoint]
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title)
-                .font(.subheadline)
-                .fontWeight(.semibold)
-
-            Text(subtitle)
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            groundTruthCard(title: "Loss and Mean Loss") {
-                lossChart(points: points)
-            }
-
-            groundTruthCard(title: "Similarity") {
-                similarityChart(points: points)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func groundTruthCard<Content: View>(
-        title: String,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title)
-                .font(.caption)
-                .fontWeight(.semibold)
-                .foregroundColor(.secondary)
-
-            content()
-                .frame(height: 220)
-        }
-        .padding()
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color(.systemBackground))
-        )
-    }
-
-    private func lossChart(points: [GroundTruthSeriesPoint]) -> some View {
-        Chart {
-            ForEach(points) { point in
-                LineMark(
-                    x: .value("Trials", point.numTrials),
-                    y: .value("Value", point.loss)
-                )
-                .interpolationMethod(.catmullRom)
-                .foregroundStyle(by: .value("Metric", "loss"))
-
-                PointMark(
-                    x: .value("Trials", point.numTrials),
-                    y: .value("Value", point.loss)
-                )
-                .foregroundStyle(by: .value("Metric", "loss"))
-
-                LineMark(
-                    x: .value("Trials", point.numTrials),
-                    y: .value("Value", point.meanLoss)
-                )
-                .interpolationMethod(.catmullRom)
-                .foregroundStyle(by: .value("Metric", "mean_loss"))
-
-                PointMark(
-                    x: .value("Trials", point.numTrials),
-                    y: .value("Value", point.meanLoss)
-                )
-                .foregroundStyle(by: .value("Metric", "mean_loss"))
-            }
-        }
-        .chartForegroundStyleScale([
-            "loss": Color.pink,
-            "mean_loss": Color.purple,
-        ])
-        .chartYScale(domain: 0...1)
-        .chartXAxis {
-            AxisMarks(values: .stride(by: 1))
-        }
-        .chartYAxis {
-            AxisMarks(position: .leading)
-        }
-    }
-
-    private func similarityChart(points: [GroundTruthSeriesPoint]) -> some View {
-        Chart(points) { point in
-            LineMark(
-                x: .value("Trials", point.numTrials),
-                y: .value("Similarity", point.similarity)
-            )
-            .interpolationMethod(.catmullRom)
-            .foregroundStyle(.teal)
-
-            PointMark(
-                x: .value("Trials", point.numTrials),
-                y: .value("Similarity", point.similarity)
-            )
-            .foregroundStyle(.teal)
-        }
-        .chartYScale(domain: 0...1)
-        .chartXAxis {
-            AxisMarks(values: .stride(by: 1))
-        }
-        .chartYAxis {
-            AxisMarks(position: .leading)
         }
     }
 
@@ -576,39 +429,9 @@ struct SummaryView: View {
                 pdfLabel: "Cleaned Keyboard View PDF",
                 pdfKind: .cleaned
             )
-
-            if hasClassicBoundaryData {
-                gaussianExportGroup
-            }
         }
         .sheet(item: $shareItem) { item in
             ShareSheet(activityItems: [item.url])
-        }
-    }
-
-    private var gaussianExportGroup: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Gaussian boundaries")
-                .font(.headline)
-            Text("Final cumulative boundary fit from all classic sessions only.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            Button(action: { exportGaussianPDF() }) {
-                HStack {
-                    if generatingPDF == .gaussianFinal {
-                        ProgressView().tint(.white).padding(.trailing, 4)
-                    } else {
-                        Image(systemName: "scope")
-                    }
-                    Text(generatingPDF == .gaussianFinal ? "Generating\u{2026}"
-                         : "Final Gaussian Boundary PDF")
-                }
-                .frame(maxWidth: .infinity).padding()
-                .background(Color.teal)
-                .foregroundColor(.white).cornerRadius(10)
-            }
-            .disabled(generatingPDF != nil)
         }
     }
 
@@ -676,41 +499,6 @@ struct SummaryView: View {
         }
     }
 
-    private func exportGaussianPDF() {
-        guard let session = sessionManager.currentSession else { return }
-        generatingPDF = .gaussianFinal
-        let events = sessionManager.allEvents
-        let participant = sessionManager.participant
-        Task.detached(priority: .userInitiated) {
-            let exporter = GaussianKeyboardExporter()
-            let url = await exporter.exportPDF(
-                events: events,
-                session: session,
-                participant: participant
-            )
-            await MainActor.run {
-                generatingPDF = nil
-                if let url { shareItem = ShareItem(url: url) }
-            }
-        }
-    }
-
-    private func exportGroundTruthPDF() {
-        guard let session = sessionManager.currentSession,
-              let analysis = groundTruthAnalysis else { return }
-        generatingPDF = .groundTruth
-        Task { @MainActor in
-            let exporter = GroundTruthLossPDFExporter()
-            let url = exporter.exportPDF(
-                analysis: analysis,
-                session: session,
-                participant: sessionManager.participant
-            )
-            generatingPDF = nil
-            if let url { shareItem = ShareItem(url: url) }
-        }
-    }
-
     private func exportCSV(cleaned: Bool) {
         guard let session = sessionManager.currentSession else { return }
         let exporter = DataExporter()
@@ -726,34 +514,37 @@ struct SummaryView: View {
         if let url { shareItem = ShareItem(url: url) }
     }
 
-    @MainActor
-    private func loadGroundTruthAnalysisIfNeeded() async {
-        guard groundTruthAnalysis == nil, !isLoadingGroundTruth else { return }
-
-        let classicInsertCount = sessionManager.allEvents.reduce(into: 0) { count, event in
-            if event.sessionMode == "classic", event.eventType == .insert {
-                count += 1
+    private func renderGaussianBoundaryPreview(width: CGFloat, height: CGFloat) async {
+        let events = gaussianBoundaryEvents
+        guard !events.isEmpty else {
+            await MainActor.run {
+                gaussianPreviewImage = nil
+                isRenderingGaussianPreview = false
             }
-        }
-        guard classicInsertCount > 0 else {
-            groundTruthError = "No classic insert events are available yet."
             return
         }
 
-        isLoadingGroundTruth = true
-        groundTruthError = nil
-        let events = sessionManager.allEvents
-
-        do {
-            let analysis = try await Task.detached(priority: .userInitiated) {
-                try GroundTruthLossAnalyzer.analyze(events: events)
-            }.value
-            groundTruthAnalysis = analysis
-        } catch {
-            groundTruthError = error.localizedDescription
+        await MainActor.run {
+            isRenderingGaussianPreview = true
         }
 
-        isLoadingGroundTruth = false
+        let model = await Task.detached(priority: .userInitiated) {
+            GaussianKeyModel.fit(events: events, keys: GaussianBoundaryTimeline.allKeys)
+        }.value
+
+        let image = await MainActor.run {
+            let exporter = GaussianKeyboardExporter()
+            return exporter.previewImage(
+                model: model,
+                overlayEvents: events,
+                size: CGSize(width: width, height: height)
+            )
+        }
+
+        await MainActor.run {
+            gaussianPreviewImage = image
+            isRenderingGaussianPreview = false
+        }
     }
 }
 
@@ -1196,201 +987,5 @@ final class KeyboardViewPDFExporter {
                               width: rect.width,
                               height: size.height)
         text.draw(in: textRect, withAttributes: attrs)
-    }
-}
-
-// MARK: - GroundTruthLossPDFExporter
-
-@MainActor
-final class GroundTruthLossPDFExporter {
-    private let pageRect = CGRect(x: 0, y: 0, width: 612, height: 792)
-
-    func exportPDF(
-        analysis: GroundTruthLossAnalysis,
-        session: Session,
-        participant: Participant?
-    ) -> URL? {
-        let first = participant?.firstName ?? "unknown"
-        let last = participant?.lastName ?? "unknown"
-        let url = FileManager.default
-            .temporaryDirectory
-            .appendingPathComponent("ground_truth_loss_\(first)_\(last).pdf")
-
-        let renderer = UIGraphicsPDFRenderer(bounds: pageRect)
-        let pages: [(String, String, [GroundTruthSeriesPoint])] = [
-            (
-                "Specific Cumulative Path",
-                "{1}, {1,2}, {1,2,3}, … compared with all classic trials",
-                analysis.simpleSummary
-            ),
-            (
-                "Average Across All Combinations",
-                "Mean over every same-size subset before comparing with all classic trials",
-                analysis.allCombinationsSummary
-            ),
-        ]
-
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withFullDate]
-        let participantName = participant.map {
-            "\($0.firstName) \($0.lastName)".trimmingCharacters(in: .whitespaces)
-        } ?? "—"
-
-        let data = renderer.pdfData { context in
-            for (title, subtitle, points) in pages {
-                context.beginPage()
-                let view = GroundTruthLossExportPage(
-                    sectionTitle: title,
-                    sectionSubtitle: subtitle,
-                    points: points,
-                    participantName: participantName,
-                    dateText: iso.string(from: session.startedAt),
-                    totalTrials: analysis.totalTrials,
-                    usableEventCount: analysis.usableEventCount
-                )
-                .frame(width: pageRect.width, height: pageRect.height)
-                .background(Color.white)
-
-                let imageRenderer = ImageRenderer(content: view)
-                imageRenderer.scale = UIScreen.main.scale
-                imageRenderer.render { _, renderInContext in
-                    renderInContext(context.cgContext)
-                }
-            }
-        }
-
-        do {
-            try data.write(to: url)
-            return url
-        } catch {
-            return nil
-        }
-    }
-}
-
-private struct GroundTruthLossExportPage: View {
-    let sectionTitle: String
-    let sectionSubtitle: String
-    let points: [GroundTruthSeriesPoint]
-    let participantName: String
-    let dateText: String
-    let totalTrials: Int
-    let usableEventCount: Int
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Ground Truth Loss")
-                    .font(.title2)
-                    .fontWeight(.bold)
-                Text("Participant: \(participantName)   Date: \(dateText)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text("\(totalTrials) classic trials, \(usableEventCount) clean insert events")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text(sectionTitle)
-                    .font(.headline)
-                Text(sectionSubtitle)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            GroundTruthLossExportCard(title: "Loss and Mean Loss") {
-                Chart {
-                    ForEach(points) { point in
-                        LineMark(
-                            x: .value("Trials", point.numTrials),
-                            y: .value("Value", point.loss)
-                        )
-                        .interpolationMethod(.catmullRom)
-                        .foregroundStyle(by: .value("Metric", "loss"))
-
-                        PointMark(
-                            x: .value("Trials", point.numTrials),
-                            y: .value("Value", point.loss)
-                        )
-                        .foregroundStyle(by: .value("Metric", "loss"))
-
-                        LineMark(
-                            x: .value("Trials", point.numTrials),
-                            y: .value("Value", point.meanLoss)
-                        )
-                        .interpolationMethod(.catmullRom)
-                        .foregroundStyle(by: .value("Metric", "mean_loss"))
-
-                        PointMark(
-                            x: .value("Trials", point.numTrials),
-                            y: .value("Value", point.meanLoss)
-                        )
-                        .foregroundStyle(by: .value("Metric", "mean_loss"))
-                    }
-                }
-                .chartForegroundStyleScale([
-                    "loss": Color.pink,
-                    "mean_loss": Color.purple,
-                ])
-                .chartYScale(domain: 0...1)
-                .chartXAxis {
-                    AxisMarks(values: .stride(by: 1))
-                }
-                .chartYAxis {
-                    AxisMarks(position: .leading)
-                }
-            }
-
-            GroundTruthLossExportCard(title: "Similarity") {
-                Chart(points) { point in
-                    LineMark(
-                        x: .value("Trials", point.numTrials),
-                        y: .value("Similarity", point.similarity)
-                    )
-                    .interpolationMethod(.catmullRom)
-                    .foregroundStyle(.teal)
-
-                    PointMark(
-                        x: .value("Trials", point.numTrials),
-                        y: .value("Similarity", point.similarity)
-                    )
-                    .foregroundStyle(.teal)
-                }
-                .chartYScale(domain: 0...1)
-                .chartXAxis {
-                    AxisMarks(values: .stride(by: 1))
-                }
-                .chartYAxis {
-                    AxisMarks(position: .leading)
-                }
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color.white)
-    }
-}
-
-private struct GroundTruthLossExportCard<Content: View>: View {
-    let title: String
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.caption)
-                .fontWeight(.semibold)
-                .foregroundColor(.secondary)
-            content
-                .frame(height: 250)
-        }
-        .padding()
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color(.systemGray6))
-        )
     }
 }
