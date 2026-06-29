@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 
 final class DataExporter {
 
@@ -110,6 +111,48 @@ final class DataExporter {
         }
 
         return rows.joined(separator: "\n")
+    }
+
+    // MARK: - Hand Manifest CSV
+    //
+    // One row per HandSample. Schema matches the manifest consumed by
+    // scripts/hand_dataset.py and scripts/train_hand_classifier.py.
+
+    func exportHandManifestCSV(samples: [HandSample], participant: Participant?) -> URL? {
+        guard !samples.isEmpty else { return nil }
+
+        let iso = ISO8601DateFormatter()
+        let header = [
+            "participant_first", "participant_last", "study_id", "session_id",
+            "study_session_index", "captured_at_iso", "holding_hand",
+            "image_relative_path", "image_pixel_width", "image_pixel_height",
+            "camera_position", "device_model", "system_version", "notes"
+        ]
+
+        var rows: [String] = [header.joined(separator: ",")]
+        for s in samples {
+            let row: [String] = [
+                csvEscape(participant?.firstName ?? ""),
+                csvEscape(participant?.lastName  ?? ""),
+                csvEscape(s.studyId.uuidString),
+                csvEscape(s.sessionId?.uuidString ?? ""),
+                String(s.studySessionIndex),
+                csvEscape(iso.string(from: s.capturedAt)),
+                csvEscape(s.holdingHand.rawValue),
+                csvEscape(s.imageRelativePath),
+                String(s.imagePixelWidth),
+                String(s.imagePixelHeight),
+                csvEscape(s.cameraPosition),
+                csvEscape(s.deviceModel),
+                csvEscape(s.systemVersion),
+                csvEscape(s.notes)
+            ]
+            rows.append(row.joined(separator: ","))
+        }
+
+        let csv = rows.joined(separator: "\n")
+        let name = filename(participant: participant, suffix: "hand_manifest", ext: "csv")
+        return writeToTempFile(content: csv, filename: name)
     }
 
     // MARK: - Helpers

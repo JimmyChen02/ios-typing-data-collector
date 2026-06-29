@@ -1,6 +1,5 @@
 # macOS
 .DS_Store
-
 # Xcode build artifacts
 build/
 DerivedData/
@@ -8,27 +7,23 @@ DerivedData/
 *.ipa
 *.dSYM.zip
 *.dSYM
-
 # Xcode user state (machine-specific UI layout, breakpoints)
 *.xcuserstate
 xcuserdata/
-
 # Swift Package Manager
 .build/
 .swiftpm/
-
 # CocoaPods (not used, but just in case)
 Pods/
-
 # Python cache
 __pycache__/
 *.pyc
-
 # Generated analysis output (keep the folder's README)
 results/*
 !results/README.md
 venv/
-
+# Isolated ML venv (created by scripts/setup_ml_env.sh)
+.venv-ml/
 # Claude / project notes
 # CLAUDE.md and .claude/ are shared (project context for collaborators + agents).
 # Keep machine-specific bits out:

@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 struct SessionView: View {
     var sessionManager: SessionManager
@@ -86,7 +87,10 @@ struct SummaryView: View {
                                 isPresented: $showResetConfirm,
                                 titleVisibility: .visible) {
                 Button("Same participant") { sessionManager.restartSameSession() }
-                Button("New participant", role: .destructive) { sessionManager.reset() }
+                Button("New participant", role: .destructive) {
+                    HandImageStore.shared.deleteAll()
+                    sessionManager.reset()
+                }
                 Button("Cancel", role: .cancel) {}
             }
         }
@@ -429,9 +433,24 @@ struct SummaryView: View {
                 pdfLabel: "Cleaned Keyboard View PDF",
                 pdfKind: .cleaned
             )
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Hand data")
+                    .font(.headline)
+                Text("Holding-hand manifest CSV + captured images (HandyTrak-style).")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Button(action: exportHandData) {
+                    Label("Hand Manifest CSV + Images", systemImage: "hand.raised")
+                        .frame(maxWidth: .infinity).padding()
+                        .background(Color(.systemGray5))
+                        .foregroundColor(.primary).cornerRadius(10)
+                }
+            }
         }
         .sheet(item: $shareItem) { item in
-            ShareSheet(activityItems: [item.url])
+            ShareSheet(activityItems: item.urls)
         }
     }
 
@@ -514,6 +533,20 @@ struct SummaryView: View {
         if let url { shareItem = ShareItem(url: url) }
     }
 
+    private func exportHandData() {
+        let samples = sessionManager.pendingHandSamples
+        guard !samples.isEmpty else { return }
+        let exporter = DataExporter()
+        guard let csvURL = exporter.exportHandManifestCSV(
+            samples: samples,
+            participant: sessionManager.participant
+        ) else { return }
+
+        var urls: [URL] = [csvURL]
+        urls.append(contentsOf: HandImageStore.shared.allImageURLs())
+        shareItem = ShareItem(urls: urls)
+    }
+
     private func renderGaussianBoundaryPreview(width: CGFloat, height: CGFloat) async {
         let events = gaussianBoundaryEvents
         guard !events.isEmpty else {
@@ -553,6 +586,8 @@ struct SummaryView: View {
 struct BetweenSessionView: View {
     var sessionManager: SessionManager
 
+    @State private var showHandCapture: Bool = false
+
     private var completedCount: Int { sessionManager.completedStudySessions }
     private var totalCount: Int { sessionManager.totalStudySessions }
     private var isClassicOnly: Bool { sessionManager.studyDesign == .classicOnly }
@@ -563,7 +598,7 @@ struct BetweenSessionView: View {
         VStack(spacing: 24) {
             // Buttons at top so they're out of thumb-reach from the keyboard area
             VStack(spacing: 12) {
-                Button(action: { sessionManager.continueToNextSession() }) {
+                Button(action: { showHandCapture = true }) {
                     Text("Continue to Session \(completedCount + 1)")
                         .fontWeight(.semibold)
                         .foregroundColor(.white)
@@ -586,6 +621,24 @@ struct BetweenSessionView: View {
                 .padding(.horizontal, 32)
             }
             .padding(.top, 16)
+            .sheet(isPresented: $showHandCapture) {
+                if let participant = sessionManager.participant {
+                    HandCaptureView(
+                        participant: participant,
+                        sessionId: sessionManager.currentSession?.id,
+                        studyId: sessionManager.studyId,
+                        studySessionIndex: sessionManager.completedStudySessions - 1
+                    ) { samples in
+                        if let samples {
+                            for sample in samples {
+                                sessionManager.recordHandSample(sample)
+                            }
+                        }
+                        showHandCapture = false
+                        sessionManager.continueToNextSession()
+                    }
+                }
+            }
 
             Divider()
 
@@ -676,7 +729,13 @@ struct BetweenSessionView: View {
 
 struct ShareItem: Identifiable {
     let id = UUID()
-    let url: URL
+    let urls: [URL]
+
+    /// Convenience init for sharing a single URL (backward-compatible).
+    init(url: URL) { self.urls = [url] }
+
+    /// Init for sharing multiple URLs (hand manifest + images).
+    init(urls: [URL]) { self.urls = urls }
 }
 
 struct ShareSheet: UIViewControllerRepresentable {

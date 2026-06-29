@@ -13,7 +13,8 @@ struct TypingResearchApp: App {
             Participant.self,
             Session.self,
             Trial.self,
-            InputEvent.self
+            InputEvent.self,
+            HandSample.self
         ])
     }
 }

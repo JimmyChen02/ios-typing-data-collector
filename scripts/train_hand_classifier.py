@@ -1,0 +1,985 @@
+#!/usr/bin/env python3
+"""
+train_hand_classifier.py
+------------------------
+Implements the HandyTrak (UIST '21) pipeline shape for holding-hand
+classification from front-camera upper-body silhouette images.
+
+Pipeline stages (preprocess -> segment -> classify):
+  1. preprocess   — load + resize to 224×224
+  2. segment      — human-body silhouette extraction
+  3. extract_features — feature vector from silhouette
+  4. train        — HandyNet-style classifier
+
+Paper-faithful vs. lightweight fallback
+----------------------------------------
+  segment()
+    Paper-faithful:  FCN-ResNet101 (torchvision) person-class mask → binary
+                     silhouette.  Requires: torch, torchvision.
+    Fallback:        Luminance-based Otsu-style threshold to binary mask.
+                     Comment below marks this clearly.
+
+  extract_features()
+    Paper-faithful:  VGG16 backbone feature extraction.  Requires:
+                     tensorflow / keras.
+    Fallback:        Downscale silhouette to 32×32 and flatten.
+
+  train()
+    Paper-faithful:  Frozen VGG16 + dropout(0.5) + softmax-3 ("HandyNet").
+                     Requires: tensorflow / keras.
+    Fallback (1):    LogisticRegression from scikit-learn.
+    Fallback (2):    Nearest-centroid classifier (pure numpy).
+
+The script always runs end-to-end regardless of which optional libraries are
+present.  A [PAPER-FAITHFUL] or [FALLBACK] banner is printed at startup
+indicating whether torch+tf were both importable.
+
+Per-participant training (Option B): models are trained per user per condition
+with a time-ordered first-80%/last-20% held-out split. A 2 Hz sliding-window
++ majority-vote evaluation (window size 30) reports windowed accuracy.
+
+Centroid baseline (Option C): zero-training geometric sanity check — reports
+whether the horizontal centroid of the silhouette carries label signal.
+
+Usage:
+    python3 scripts/train_hand_classifier.py <manifest.csv> \\
+        --images-root <dir> --out <model_dir> \\
+        --mode both --train-frac 0.8 --window-size 30 --epochs 2
+    python3 scripts/train_hand_classifier.py --demo
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import pickle
+import re
+import sys
+import tempfile
+import warnings
+from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Optional heavy dependencies — imported lazily inside functions so the script
+# always loads even when none of them are installed.
+# ---------------------------------------------------------------------------
+
+def _try_import_torch():
+    try:
+        import torch
+        import torchvision
+        return torch, torchvision
+    except Exception:
+        return None, None
+
+
+def _try_import_keras():
+    try:
+        import tensorflow as tf
+        from tensorflow import keras
+        return tf, keras
+    except Exception:
+        try:
+            import keras  # standalone keras 3.x
+            return None, keras
+        except Exception:
+            return None, None
+
+
+def _try_import_sklearn():
+    try:
+        from sklearn.linear_model import LogisticRegression
+        return LogisticRegression
+    except Exception:
+        # ImportError or binary-incompatibility ValueError — treat as absent
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Required lightweight dependency: numpy + Pillow
+# ---------------------------------------------------------------------------
+try:
+    import numpy as np
+except ImportError:
+    raise ImportError("numpy is required.\nInstall with:  pip install numpy")
+
+try:
+    from PIL import Image
+except ImportError:
+    raise ImportError("Pillow is required.\nInstall with:  pip install pillow")
+
+# ---------------------------------------------------------------------------
+# Local helper
+# ---------------------------------------------------------------------------
+# Import load_dataset from hand_dataset.py in the same scripts/ directory.
+_SCRIPTS_DIR = Path(__file__).parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+from hand_dataset import (
+    load_dataset,
+    load_dataset_records,
+    _make_demo_manifest_and_images,
+)
+
+# ---------------------------------------------------------------------------
+# Module-level constants
+# ---------------------------------------------------------------------------
+
+# Default epochs (paper-faithful value per HandyTrak §4.1)
+_DEFAULT_EPOCHS = 2
+
+# Centroid baseline thresholds (tunable — see centroid_baseline_predict docstring)
+_CENTROID_LEFT_THRESH  = 0.42
+_CENTROID_RIGHT_THRESH = 0.58
+
+
+# ---------------------------------------------------------------------------
+# Pipeline stage 1 — preprocess
+# ---------------------------------------------------------------------------
+
+def preprocess(image_path: str) -> "np.ndarray":
+    """Load *image_path* and normalize to float32 224×224×3 (values in [0, 1]).
+
+    Returns a numpy array of shape (224, 224, 3).
+    """
+    img = Image.open(image_path).convert("RGB")
+    img = img.resize((224, 224), Image.BILINEAR)
+    arr = np.array(img, dtype=np.float32) / 255.0
+    return arr
+
+
+# ---------------------------------------------------------------------------
+# Pipeline stage 2 — segment
+# ---------------------------------------------------------------------------
+
+def segment(image: "np.ndarray") -> "np.ndarray":
+    """Extract a binary human-body silhouette from *image* (224×224×3 float32).
+
+    Returns a binary numpy array of shape (224, 224) with dtype uint8
+    (255 = body / foreground, 0 = background).
+
+    Paper-faithful path (requires torch + torchvision):
+        Runs FCN-ResNet101 pretrained on COCO; takes the "person" class
+        probability map and thresholds at 0.5 to produce a binary mask.
+
+    Fallback (no torch/torchvision):
+        Luminance-based Otsu-style threshold.  This is a stand-in for
+        FCN-ResNet101 segmentation and will NOT reproduce the paper's results.
+    """
+    torch, torchvision = _try_import_torch()
+
+    if torch is not None and torchvision is not None:
+        # --- Paper-faithful path ---
+        try:
+            return _segment_fcn(image, torch, torchvision)
+        except Exception as exc:
+            warnings.warn(
+                f"FCN-ResNet101 segmentation failed ({exc}); falling back to "
+                "luminance threshold.",
+                stacklevel=2,
+            )
+
+    # --- Fallback: luminance threshold (NOT the paper's real segmenter) ---
+    # Convert to greyscale luminance via BT.601 coefficients
+    luma = (0.299 * image[:, :, 0] +
+            0.587 * image[:, :, 1] +
+            0.114 * image[:, :, 2])
+
+    # Otsu-style threshold: split at mean luminance as a simple approximation
+    threshold = float(luma.mean())
+    # Foreground (body) assumed to be darker than the bright background typical
+    # of a selfie scenario.  This heuristic is intentionally simple.
+    mask = (luma < threshold).astype(np.uint8) * 255
+    return mask
+
+
+def _segment_fcn(
+    image: "np.ndarray",
+    torch,
+    torchvision,
+) -> "np.ndarray":
+    """FCN-ResNet101 segmentation (paper-faithful, requires torch/torchvision)."""
+    from torchvision import transforms
+    from torchvision.models.segmentation import fcn_resnet101, FCN_ResNet101_Weights
+
+    weights = FCN_ResNet101_Weights.DEFAULT
+    model = fcn_resnet101(weights=weights)
+    model.eval()
+
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                             std=[0.229, 0.224, 0.225]),
+    ])
+
+    pil_image = Image.fromarray((image * 255).astype(np.uint8))
+    tensor = transform(pil_image).unsqueeze(0)
+
+    with torch.no_grad():
+        output = model(tensor)["out"]  # shape: (1, 21, H, W)
+
+    # Class 15 = "person" in the COCO VOC-style palette used by torchvision
+    PERSON_CLASS = 15
+    person_prob = torch.softmax(output, dim=1)[0, PERSON_CLASS].numpy()  # (H, W)
+    binary = (person_prob > 0.5).astype(np.uint8) * 255
+    return binary
+
+
+# ---------------------------------------------------------------------------
+# Pipeline stage 3 — extract_features
+# ---------------------------------------------------------------------------
+
+def extract_features(silhouette: "np.ndarray") -> "np.ndarray":
+    """Extract a feature vector from a binary silhouette (224×224, uint8).
+
+    Paper-faithful path (requires tensorflow/keras):
+        Passes the silhouette (replicated to 3 channels, normalised) through
+        a pretrained VGG16 backbone with the classification head removed,
+        returning the 25088-dimensional feature vector (7×7×512 flattened).
+
+    Fallback:
+        Downscales the silhouette to 32×32 and flattens to a 1024-d vector.
+    """
+    _, keras = _try_import_keras()
+
+    if keras is not None:
+        try:
+            return _features_vgg16(silhouette, keras)
+        except Exception as exc:
+            warnings.warn(
+                f"VGG16 feature extraction failed ({exc}); falling back to "
+                "32×32 flatten.",
+                stacklevel=2,
+            )
+
+    # --- Fallback: 32×32 flatten ---
+    pil = Image.fromarray(silhouette).resize((32, 32), Image.BILINEAR)
+    arr = np.array(pil, dtype=np.float32) / 255.0
+    return arr.flatten()
+
+
+def _features_vgg16(silhouette: "np.ndarray", keras) -> "np.ndarray":
+    """VGG16 backbone features (paper-faithful, requires keras/tensorflow)."""
+    try:
+        from tensorflow.keras.applications import VGG16
+        from tensorflow.keras.applications.vgg16 import preprocess_input
+    except ImportError:
+        from keras.applications import VGG16
+        from keras.applications.vgg16 import preprocess_input
+
+    # Replicate single-channel silhouette to 3 channels (VGG16 expects RGB)
+    rgb = np.stack([silhouette, silhouette, silhouette], axis=-1).astype(np.float32)
+
+    # Resize to 224×224 if needed (should already be, but be safe)
+    if rgb.shape[:2] != (224, 224):
+        pil = Image.fromarray(rgb.astype(np.uint8)).resize((224, 224))
+        rgb = np.array(pil, dtype=np.float32)
+
+    x = preprocess_input(rgb[np.newaxis, ...])  # (1, 224, 224, 3)
+
+    # Build backbone once (no caching across calls — acceptable for offline use)
+    backbone = VGG16(weights="imagenet", include_top=False, input_shape=(224, 224, 3))
+    features = backbone.predict(x, verbose=0)  # (1, 7, 7, 512)
+    return features.flatten()
+
+
+# ---------------------------------------------------------------------------
+# Pipeline stage 4 — train
+# ---------------------------------------------------------------------------
+
+def train(features: "np.ndarray", labels: list[str], epochs: int = _DEFAULT_EPOCHS) -> object:
+    """Train a holding-hand classifier.
+
+    Parameters
+    ----------
+    features : np.ndarray, shape (N, D)
+    labels   : list of str, length N
+    epochs   : int, number of training epochs (default 2, paper-faithful)
+
+    Returns a fitted model object.
+
+    Paper-faithful path (requires tensorflow/keras):
+        HandyNet: frozen VGG16 backbone + Flatten + Dropout(0.5) + Dense(3,
+        activation='softmax').  This is the architecture described in the
+        HandyTrak paper.
+
+    Fallback 1 (requires scikit-learn):
+        LogisticRegression with l-bfgs solver, max_iter=1000.
+
+    Fallback 2 (pure numpy):
+        Nearest-centroid classifier — computes per-class feature centroids and
+        assigns test points to the nearest centroid by Euclidean distance.
+        This always runs successfully and is the guaranteed fallback.
+    """
+    unique_labels = sorted(set(labels))
+    label_to_idx = {l: i for i, l in enumerate(unique_labels)}
+    y = np.array([label_to_idx[l] for l in labels])
+
+    _, keras = _try_import_keras()
+    if keras is not None:
+        try:
+            return _train_handynet(features, y, unique_labels, keras, epochs=epochs)
+        except Exception as exc:
+            warnings.warn(
+                f"HandyNet training failed ({exc}); falling back to "
+                "LogisticRegression or nearest-centroid.",
+                stacklevel=2,
+            )
+
+    LogisticRegression = _try_import_sklearn()
+    if LogisticRegression is not None:
+        try:
+            clf = LogisticRegression(max_iter=1000, multi_class="multinomial",
+                                     solver="lbfgs")
+            clf.fit(features, y)
+            clf._hand_classes = unique_labels  # store for prediction
+            print(f"Trained LogisticRegression  (n={len(labels)}, "
+                  f"classes={unique_labels})")
+            return clf
+        except Exception as exc:
+            warnings.warn(
+                f"LogisticRegression failed ({exc}); falling back to "
+                "nearest-centroid.",
+                stacklevel=2,
+            )
+
+    # --- Fallback 2: nearest-centroid (pure numpy) ---
+    return _train_nearest_centroid(features, y, unique_labels)
+
+
+def _train_handynet(features, y, unique_labels, keras, epochs: int = _DEFAULT_EPOCHS):
+    """HandyNet: frozen VGG16 + Flatten + Dropout(0.5) + softmax-3.
+
+    batch_size=32 and epochs=2 are the paper-faithful values (HandyTrak §4.1).
+    """
+    try:
+        from tensorflow.keras.applications import VGG16
+        from tensorflow import keras as tfkeras
+        Dropout = tfkeras.layers.Dropout
+        Dense = tfkeras.layers.Dense
+        Flatten = tfkeras.layers.Flatten
+        Model = tfkeras.Model
+        Input = tfkeras.Input
+    except ImportError:
+        from keras.applications import VGG16
+        from keras.layers import Dropout, Dense, Flatten, Input
+        from keras import Model
+
+    # The features passed here are already the VGG16 backbone outputs (flattened),
+    # so HandyNet's classification head is a simple MLP on top.
+    n_classes = len(unique_labels)
+    n_features = features.shape[1]
+
+    try:
+        from tensorflow import keras as tfkeras
+        inp = tfkeras.Input(shape=(n_features,))
+        x = tfkeras.layers.Dropout(0.5)(inp)
+        out = tfkeras.layers.Dense(n_classes, activation="softmax")(x)
+        model = tfkeras.Model(inputs=inp, outputs=out)
+        model.compile(optimizer="adam",
+                      loss="sparse_categorical_crossentropy",
+                      metrics=["accuracy"])
+    except Exception:
+        import keras as k
+        inp = k.Input(shape=(n_features,))
+        x = k.layers.Dropout(0.5)(inp)
+        out = k.layers.Dense(n_classes, activation="softmax")(x)
+        model = k.Model(inputs=inp, outputs=out)
+        model.compile(optimizer="adam",
+                      loss="sparse_categorical_crossentropy",
+                      metrics=["accuracy"])
+
+    # Paper values: batch_size=32, epochs=2 (HandyTrak §4.1)
+    model.fit(features, y, epochs=epochs, batch_size=32, verbose=0)
+    model._hand_classes = unique_labels
+    print(f"Trained HandyNet head  (n={len(y)}, classes={unique_labels}, "
+          f"epochs={epochs}, batch_size=32)")
+    return model
+
+
+class _NearestCentroidClassifier:
+    """Pure-numpy nearest-centroid classifier (guaranteed fallback)."""
+
+    def __init__(self, centroids: "np.ndarray", classes: list[str]) -> None:
+        self.centroids = centroids
+        self.classes = classes
+        self._hand_classes = classes
+
+    def predict(self, X: "np.ndarray") -> "np.ndarray":
+        dists = np.linalg.norm(X[:, np.newaxis, :] - self.centroids[np.newaxis, :, :], axis=2)
+        return np.array([self.classes[i] for i in np.argmin(dists, axis=1)])
+
+    def score(self, X: "np.ndarray", y_labels: list[str]) -> float:
+        preds = self.predict(X)
+        return float(np.mean(preds == np.array(y_labels)))
+
+
+def _train_nearest_centroid(
+    features: "np.ndarray",
+    y: "np.ndarray",
+    unique_labels: list[str],
+) -> _NearestCentroidClassifier:
+    centroids = []
+    for idx in range(len(unique_labels)):
+        mask = y == idx
+        centroid = features[mask].mean(axis=0) if mask.any() else np.zeros(features.shape[1])
+        centroids.append(centroid)
+    centroids_arr = np.stack(centroids, axis=0)
+    clf = _NearestCentroidClassifier(centroids_arr, unique_labels)
+    print(f"Trained nearest-centroid  (n={len(y)}, classes={unique_labels})")
+    return clf
+
+
+# ---------------------------------------------------------------------------
+# Accuracy helpers
+# ---------------------------------------------------------------------------
+
+def _predict_labels(model, features: "np.ndarray") -> list[str]:
+    """Decode model predictions to a list of string labels.
+
+    Handles _NearestCentroidClassifier (string array), keras softmax output
+    (N, C float array → argmax → classes list), and sklearn integer predictions.
+    """
+    if isinstance(model, _NearestCentroidClassifier):
+        return list(model.predict(features))
+
+    preds_raw = model.predict(features)
+    preds_arr = np.array(preds_raw)
+
+    if preds_arr.ndim == 2:
+        # keras softmax output: shape (N, C)
+        pred_indices = preds_arr.argmax(axis=1)
+        classes = model._hand_classes
+        return [classes[i] for i in pred_indices]
+    elif preds_arr.dtype.kind in ("i", "u"):
+        # sklearn integer predictions
+        classes = model._hand_classes
+        return [classes[i] for i in preds_arr]
+    else:
+        # string predictions (e.g. _NearestCentroidClassifier on older path)
+        return list(preds_arr)
+
+
+def _compute_accuracy(model, features: "np.ndarray", labels: list[str]) -> float:
+    """Return accuracy for the fitted *model* on the given features/labels."""
+    try:
+        pred_labels = _predict_labels(model, features)
+        return float(np.mean(np.array(pred_labels) == np.array(labels)))
+    except Exception as exc:
+        warnings.warn(f"Could not compute accuracy: {exc}", stacklevel=2)
+        return float("nan")
+
+
+# ---------------------------------------------------------------------------
+# Section 1c — time-ordered per-condition split (UNSHUFFLED)
+# ---------------------------------------------------------------------------
+
+def split_train_eval_indices(
+    sort_keys: list,
+    labels: list[str],
+    train_frac: float = 0.8,
+) -> tuple[list[int], list[int]]:
+    """Return (train_idx, eval_idx) as lists of integer indices into the sample arrays.
+
+    HandyTrak split: per CONDITION (label value), take the first `train_frac`
+    of frames IN TIME ORDER as train and the remaining last (1-train_frac) as
+    eval.  NO shuffling.  Frames within a condition are ordered by `sort_keys`.
+
+    sort_keys : list of comparable tuples, one per sample, defining time order.
+    labels    : list[str] parallel to sort_keys (already excludes 'unknown').
+    train_frac: fraction of each condition's frames used for training.
+
+    Edge cases:
+    - A condition with < 2 frames → all frames go to TRAIN (cannot form an eval
+      split); a UserWarning is emitted.
+    - Empty input → returns ([], []).
+    """
+    if not sort_keys:
+        return [], []
+
+    from collections import defaultdict
+    condition_indices: dict[str, list[int]] = defaultdict(list)
+    for i, lbl in enumerate(labels):
+        condition_indices[lbl].append(i)
+
+    train_idx: list[int] = []
+    eval_idx:  list[int] = []
+
+    for cond, indices in condition_indices.items():
+        # Sort indices by their sort_key (time order)
+        sorted_indices = sorted(indices, key=lambda i: sort_keys[i])
+        n = len(sorted_indices)
+        if n < 2:
+            warnings.warn(
+                f"Condition '{cond}' has only {n} frame(s) — all go to TRAIN; "
+                "no eval frames for this condition.",
+                stacklevel=2,
+            )
+            train_idx.extend(sorted_indices)
+        else:
+            split_at = math.floor(n * train_frac)
+            # Guard: if floor gives 0 (n==1 already handled above), push 1 to train
+            if split_at == 0:
+                split_at = 1
+            train_idx.extend(sorted_indices[:split_at])
+            eval_idx.extend(sorted_indices[split_at:])
+
+    return train_idx, eval_idx
+
+
+# ---------------------------------------------------------------------------
+# Section 1d — 2 Hz sliding-window + majority-vote evaluation
+# ---------------------------------------------------------------------------
+
+def sliding_window_majority_vote(
+    per_frame_pred_labels: list[str],
+    window_size: int = 30,
+) -> list[str]:
+    """Collapse per-frame predicted labels into per-window labels via majority vote.
+
+    Returns list[str] of length max(0, len(per_frame_pred_labels) - window_size + 1)
+    (one label per sliding window, stride 1).  Tie-break: choose the label that
+    is alphabetically first among the tied maxima (deterministic).
+
+    This is the paper's runtime aggregation (size-30 window over the 2 Hz
+    frame stream, HandyTrak §4.2).
+    """
+    n = len(per_frame_pred_labels)
+    if n < window_size:
+        if n > 0:
+            warnings.warn(
+                f"sliding_window_majority_vote: only {n} frames but "
+                f"window_size={window_size} — no windows produced.",
+                stacklevel=2,
+            )
+        return []
+
+    result: list[str] = []
+    for start in range(n - window_size + 1):
+        window = per_frame_pred_labels[start: start + window_size]
+        # Count votes
+        counts: dict[str, int] = {}
+        for lbl in window:
+            counts[lbl] = counts.get(lbl, 0) + 1
+        max_count = max(counts.values())
+        # Tie-break: alphabetically first among tied labels
+        majority = min(lbl for lbl, c in counts.items() if c == max_count)
+        result.append(majority)
+    return result
+
+
+def windowed_accuracy(
+    per_frame_pred_labels: list[str],
+    per_frame_true_labels: list[str],
+    window_size: int = 30,
+) -> float:
+    """Window-level accuracy: a window is correct if its majority-vote label
+    equals the majority of the TRUE labels in that same window.
+
+    Returns float in [0, 1] (nan if no windows).  Used to report the
+    paper-style windowed accuracy (HandyTrak §4.2).
+    """
+    n = len(per_frame_pred_labels)
+    if n < window_size:
+        if n > 0:
+            warnings.warn(
+                f"windowed_accuracy: only {n} frames but window_size={window_size} "
+                "— returning nan.",
+                stacklevel=2,
+            )
+        return float("nan")
+
+    pred_windows  = sliding_window_majority_vote(per_frame_pred_labels, window_size)
+    true_windows  = sliding_window_majority_vote(per_frame_true_labels, window_size)
+
+    if not pred_windows:
+        return float("nan")
+
+    correct = sum(p == t for p, t in zip(pred_windows, true_windows))
+    return correct / len(pred_windows)
+
+
+# ---------------------------------------------------------------------------
+# Section 1e — Option C centroid baseline (zero-training, geometric)
+# ---------------------------------------------------------------------------
+
+def centroid_baseline_predict(
+    silhouette: "np.ndarray",
+    left_thresh:  float = _CENTROID_LEFT_THRESH,
+    right_thresh: float = _CENTROID_RIGHT_THRESH,
+) -> str:
+    """Zero-training geometric baseline (HandyTrak sanity check, NOT the paper classifier).
+
+    Compute the horizontal centroid (normalized x in [0, 1]) of foreground
+    (==255) pixels in the binary silhouette (224x224 uint8).  Map:
+        centroid_x < left_thresh  -> 'right'   (body leans right of frame =>
+                                       phone in right hand pulls torso; see note)
+        centroid_x > right_thresh -> 'left'
+        otherwise                 -> 'both'
+    Returns one of 'left' / 'right' / 'both'.
+
+    NOTE on left/right mapping: this is a HEURISTIC and the front camera mirrors
+    the image.  Do NOT over-invest in which side is which.  The baseline's job
+    is a SEPARABILITY SANITY CHECK (does centroid-x carry signal?), not accuracy.
+    Thresholds are exposed as module constants _CENTROID_LEFT_THRESH /
+    _CENTROID_RIGHT_THRESH and can be overridden for experimentation.
+
+    Empty silhouette (no foreground pixels) -> 'both', with a UserWarning.
+    """
+    fg_pixels = np.argwhere(silhouette == 255)  # shape (N, 2): rows are (row, col)
+    if fg_pixels.size == 0:
+        warnings.warn(
+            "centroid_baseline_predict: silhouette has no foreground pixels; "
+            "returning 'both'.",
+            stacklevel=2,
+        )
+        return "both"
+
+    # Normalized horizontal centroid (column direction)
+    h, w = silhouette.shape
+    centroid_x = float(fg_pixels[:, 1].mean()) / w
+
+    if centroid_x < left_thresh:
+        return "right"
+    elif centroid_x > right_thresh:
+        return "left"
+    else:
+        return "both"
+
+
+def centroid_baseline_eval(
+    silhouettes: list["np.ndarray"],
+    true_labels: list[str],
+) -> tuple[float, dict]:
+    """Evaluate the centroid baseline on a list of silhouettes.
+
+    Returns:
+        accuracy (float): frame-level accuracy in [0, 1].
+        confusion (dict): {(true_label, pred_label): count} summary.
+    """
+    if not silhouettes:
+        return float("nan"), {}
+
+    pred_labels = [centroid_baseline_predict(s) for s in silhouettes]
+    confusion: dict[tuple[str, str], int] = {}
+    for t, p in zip(true_labels, pred_labels):
+        key = (t, p)
+        confusion[key] = confusion.get(key, 0) + 1
+
+    correct = sum(t == p for t, p in zip(true_labels, pred_labels))
+    accuracy = correct / len(true_labels)
+    return accuracy, confusion
+
+
+# ---------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------
+
+def _save_model(model, out_dir: Path) -> None:
+    """Save model to out_dir as .keras or .pkl."""
+    model_path_keras = out_dir / "hand_model.keras"
+    model_path_pkl   = out_dir / "hand_model.pkl"
+    saved = False
+
+    _, keras_mod = _try_import_keras()
+    if keras_mod is not None and hasattr(model, "save"):
+        try:
+            model.save(str(model_path_keras))
+            print(f"    Model saved to: {model_path_keras}  (keras format)")
+            saved = True
+        except Exception as exc:
+            warnings.warn(f"keras .save() failed ({exc}); using pickle.", stacklevel=2)
+
+    if not saved:
+        with model_path_pkl.open("wb") as fh:
+            pickle.dump(model, fh)
+        print(f"    Model saved to: {model_path_pkl}  (pickle format)")
+
+
+def main() -> None:
+    args = _parse_args()
+
+    # ---- Paper-faithful / fallback banner ----
+    torch_ok = _try_import_torch()[0] is not None
+    keras_ok  = _try_import_keras()[1] is not None
+    if torch_ok and keras_ok:
+        print("[PAPER-FAITHFUL] torch + tensorflow/keras both importable — "
+              "FCN-ResNet101 segmentation and VGG16 HandyNet will be used.")
+    else:
+        missing = []
+        if not torch_ok:
+            missing.append("torch/torchvision")
+        if not keras_ok:
+            missing.append("tensorflow/keras")
+        print(f"[FALLBACK — not paper results] Missing: {', '.join(missing)}. "
+              "Lightweight substitutes will run.")
+
+    if args.demo:
+        print("\n-- demo mode: generating synthetic manifest and images --")
+        tmp = Path(tempfile.mkdtemp(prefix="train_hand_demo_"))
+        manifest_path, images_root = _make_demo_manifest_and_images(tmp)
+        out_dir = tmp / "model"
+        print(f"Manifest : {manifest_path}")
+        print(f"Images   : {images_root}")
+        print(f"Model out: {out_dir}")
+    else:
+        if not args.manifest:
+            print("Error: provide a manifest CSV path, or use --demo")
+            sys.exit(1)
+        manifest_path = args.manifest
+        images_root = args.images_root
+        out_dir = Path(args.out)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    mode        = args.mode
+    train_frac  = args.train_frac
+    window_size = args.window_size
+    epochs      = args.epochs
+
+    # ---- Step 1: Load dataset records ----
+    records = load_dataset_records(manifest_path, images_root)
+
+    if not records:
+        print("No samples loaded. Exiting.")
+        sys.exit(0)
+
+    print(f"\nLoaded {len(records)} records from manifest")
+
+    # ---- Step 2: Preprocess + segment ALL samples (cached) ----
+    print("Stage 1 — preprocess ...")
+    raw_images = [preprocess(r["image_path"]) for r in records]
+
+    print("Stage 2 — segment ...")
+    silhouettes = [segment(img) for img in raw_images]
+
+    # ---- Step 3: Extract features (only for handynet / both) ----
+    features_arr = None
+    if mode in ("handynet", "both"):
+        print("Stage 3 — extract features ...")
+        feature_list = [extract_features(s) for s in silhouettes]
+        features_arr = np.stack(feature_list, axis=0)   # (N, D)
+
+    # ---- Step 4: Group by participant ----
+    from collections import defaultdict
+    participant_to_indices: dict[str, list[int]] = defaultdict(list)
+    for i, rec in enumerate(records):
+        participant_to_indices[rec["participant_key"]].append(i)
+
+    print(f"\nFound {len(participant_to_indices)} participant(s).\n")
+
+    # ---- Step 5: Per-participant loop ----
+    summary_rows: list[dict] = []
+
+    for p_num, (p_key, p_indices) in enumerate(sorted(participant_to_indices.items())):
+        # Sanitize key for filesystem use
+        safe_key = re.sub(r"[^a-z0-9]+", "_", p_key)
+        if not safe_key:
+            safe_key = f"participant_{p_num}"
+
+        print(f"=== Participant: {p_key!r}  (fs key: {safe_key!r}) ===")
+
+        # Filter out 'unknown' labels
+        known_indices = [i for i in p_indices if records[i]["label"] != "unknown"]
+        if not known_indices:
+            warnings.warn(
+                f"participant {p_key!r}: no known-label samples — skipping.",
+                stacklevel=2,
+            )
+            continue
+
+        p_labels   = [records[i]["label"]    for i in known_indices]
+        p_sort_keys = [records[i]["sort_key"] for i in known_indices]
+
+        # Time-ordered split
+        local_train, local_eval = split_train_eval_indices(
+            p_sort_keys, p_labels, train_frac=train_frac
+        )
+
+        if not local_train:
+            warnings.warn(
+                f"participant {p_key!r}: empty train set — skipping.",
+                stacklevel=2,
+            )
+            continue
+
+        # Check distinct labels in train set
+        train_labels_list = [p_labels[li] for li in local_train]
+        if len(set(train_labels_list)) < 2:
+            warnings.warn(
+                f"participant {p_key!r}: < 2 distinct labels in train set "
+                f"({set(train_labels_list)}) — skipping.",
+                stacklevel=2,
+            )
+            continue
+
+        eval_labels_list = [p_labels[li] for li in local_eval]
+
+        # Absolute indices into the global arrays
+        abs_train = [known_indices[li] for li in local_train]
+        abs_eval  = [known_indices[li] for li in local_eval]
+
+        n_train = len(abs_train)
+        n_eval  = len(abs_eval)
+        print(f"  n_train={n_train}  n_eval={n_eval}")
+
+        p_out_dir = out_dir / safe_key
+        p_out_dir.mkdir(parents=True, exist_ok=True)
+
+        row: dict = {
+            "participant":          p_key,
+            "n_train":              n_train,
+            "n_eval":               n_eval,
+            "handynet_frame_acc":   float("nan"),
+            "handynet_windowed_acc": float("nan"),
+            "centroid_frame_acc":   float("nan"),
+        }
+
+        # ---- Option B: HandyNet ----
+        if mode in ("handynet", "both") and features_arr is not None:
+            train_feats = features_arr[abs_train]
+            model = train(train_feats, train_labels_list, epochs=epochs)
+
+            # Save model + labels
+            unique_labels_p = sorted(set(train_labels_list))
+            labels_path = p_out_dir / "labels.json"
+            with labels_path.open("w", encoding="utf-8") as fh:
+                json.dump(unique_labels_p, fh, indent=2)
+            _save_model(model, p_out_dir)
+
+            if abs_eval:
+                eval_feats  = features_arr[abs_eval]
+                eval_preds  = _predict_labels(model, eval_feats)
+                frame_acc   = float(np.mean(
+                    np.array(eval_preds) == np.array(eval_labels_list)
+                ))
+                win_acc = windowed_accuracy(eval_preds, eval_labels_list,
+                                            window_size=window_size)
+                row["handynet_frame_acc"]    = frame_acc
+                row["handynet_windowed_acc"] = win_acc
+                print(f"  HandyNet  frame-acc={frame_acc:.3f}  "
+                      f"windowed-acc={_fmt(win_acc)}")
+            else:
+                print("  HandyNet  (no eval frames)")
+
+        # ---- Option C: Centroid baseline ----
+        if mode in ("centroid", "both"):
+            eval_sils = [silhouettes[i] for i in abs_eval] if abs_eval else []
+            if eval_sils:
+                c_acc, c_conf = centroid_baseline_eval(eval_sils, eval_labels_list)
+                row["centroid_frame_acc"] = c_acc
+                print(f"  Centroid  frame-acc={c_acc:.3f}  "
+                      f"confusion={c_conf}")
+            else:
+                print("  Centroid  (no eval frames)")
+
+        summary_rows.append(row)
+        print()
+
+    # ---- Step 6: Aggregate summary ----
+    if not summary_rows:
+        print("No participants had sufficient data. Nothing to summarise.")
+        return
+
+    print("=" * 60)
+    print(f"{'Participant':<25} {'n_tr':>5} {'n_ev':>5} "
+          f"{'HN-fr':>7} {'HN-win':>7} {'Cnt-fr':>7}")
+    print("-" * 60)
+    for row in summary_rows:
+        print(
+            f"{row['participant']:<25} "
+            f"{row['n_train']:>5} "
+            f"{row['n_eval']:>5} "
+            f"{_fmt(row['handynet_frame_acc']):>7} "
+            f"{_fmt(row['handynet_windowed_acc']):>7} "
+            f"{_fmt(row['centroid_frame_acc']):>7}"
+        )
+
+    # Mean row (over participants with non-nan values)
+    def _nanmean(vals):
+        v = [x for x in vals if not math.isnan(x)]
+        return sum(v) / len(v) if v else float("nan")
+
+    print("-" * 60)
+    print(
+        f"{'MEAN':<25} "
+        f"{sum(r['n_train'] for r in summary_rows):>5} "
+        f"{sum(r['n_eval']  for r in summary_rows):>5} "
+        f"{_fmt(_nanmean([r['handynet_frame_acc']    for r in summary_rows])):>7} "
+        f"{_fmt(_nanmean([r['handynet_windowed_acc'] for r in summary_rows])):>7} "
+        f"{_fmt(_nanmean([r['centroid_frame_acc']    for r in summary_rows])):>7}"
+    )
+    print("=" * 60)
+
+    summary_path = out_dir / "summary.json"
+    with summary_path.open("w", encoding="utf-8") as fh:
+        json.dump(summary_rows, fh, indent=2, default=str)
+    print(f"\nSummary written to: {summary_path}")
+
+    print("\nFuture work:")
+    print("  - IMU+image multimodal fusion")
+    print("  - On-device Core ML conversion")
+    print("  - Landscape-mode capture")
+
+
+def _fmt(v: float) -> str:
+    """Format float for the summary table; 'nan' if not a number."""
+    return f"{v:.3f}" if not math.isnan(v) else "   nan"
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "manifest",
+        nargs="?",
+        help="Path to the hand manifest CSV. Omit with --demo.",
+    )
+    parser.add_argument(
+        "--images-root",
+        default=".",
+        help="Directory that image_relative_path values are resolved against.",
+    )
+    parser.add_argument(
+        "--out",
+        default="hand_model_out",
+        help="Output directory for the model and labels.json.",
+    )
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="Run end-to-end on synthetic data (no real data needed).",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["handynet", "centroid", "both"],
+        default="both",
+        help="Training mode: handynet (Option B), centroid (Option C), or both. "
+             "Default: both.",
+    )
+    parser.add_argument(
+        "--train-frac",
+        type=float,
+        default=0.8,
+        help="Fraction of each condition's frames used for training (default 0.8).",
+    )
+    parser.add_argument(
+        "--window-size",
+        type=int,
+        default=30,
+        help="Sliding-window size for majority-vote evaluation (default 30).",
+    )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=_DEFAULT_EPOCHS,
+        help=f"Number of HandyNet training epochs (default {_DEFAULT_EPOCHS}, "
+             "paper-faithful).",
+    )
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    main()

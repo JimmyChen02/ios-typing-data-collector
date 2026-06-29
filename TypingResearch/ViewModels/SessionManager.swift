@@ -193,6 +193,8 @@ final class SessionManager {
     var pendingEvents: [InputEventData] = []
     // All events across the session, kept for export
     var allEvents: [InputEventData] = []
+    // Holding-hand samples collected across the study (HandyTrak data collection)
+    var pendingHandSamples: [HandSample] = []
     var isSessionActive: Bool = false
     var isTrialActive: Bool = false
     var isSessionComplete: Bool = false
@@ -284,6 +286,9 @@ final class SessionManager {
         isStudyComplete = false
         studyId = UUID()
         allEvents = []
+        pendingHandSamples = []
+        // IMU seam (decision 6 — OFF by default):
+        // MotionRecorder.shared.start(sessionId: UUID(), studySessionIndex: 0)
         startSession(participant: participant, durationSeconds: 60, mode: currentSessionMode)
     }
 
@@ -379,6 +384,13 @@ final class SessionManager {
                 lastLiveWPMUpdateAt = raw.timestamp
             }
         }
+    }
+
+    /// Record a holding-hand sample for later export.
+    /// Persistence (modelContext.insert) is done by HandCaptureView; this
+    /// mirrors the allEvents pattern for the exporter.
+    func recordHandSample(_ sample: HandSample) {
+        pendingHandSamples.append(sample)
     }
 
     // Compatibility path for callers that still build finalized events eagerly.
@@ -602,6 +614,8 @@ final class SessionManager {
         isTrialActive = false
         isSessionComplete = true
         BackendClient.shared.flush()
+        // IMU seam (decision 6 — OFF by default):
+        // let _ = MotionRecorder.shared.stop()
         try? modelContext?.save()
 
         // Only classic sessions train the model — Gaussian sessions run on the
@@ -674,6 +688,7 @@ final class SessionManager {
         pendingRawEvents = []
         pendingEvents = []
         allEvents = []
+        pendingHandSamples = []
         isSessionActive = false
         isTrialActive = false
         isSessionComplete = false

@@ -42,6 +42,19 @@ Main in-app exports:
 - tap-distribution PDF
 - Gaussian boundary PDF
 - ground-truth loss PDF
+- holding-hand manifest CSV + captured images
+
+### Holding-hand classification (HandyTrak)
+
+The app can collect holding-hand data for offline classification following the
+HandyTrak approach (Lim et al., UIST '21). After each typing session, a sheet
+captures a front-camera upper-body photo and a self-reported holding-hand label
+(Left / Right / Both / Unknown). The label defaults from the participant's
+stated dominant hand but is always editable. Photo capture is optional —
+label-only records are supported. Captured images are stored under
+`Documents/hand_images/` and exported via the "Hand data" button in the summary
+screen alongside a manifest CSV. See `scripts/README_hand.md` for the offline
+training pipeline.
 
 Open the app with:
 
@@ -59,6 +72,8 @@ open TypingResearch.xcodeproj
 - `scripts/plot_cleansing_subset.py`: renders a side-by-side raw-vs-cleaned keyboard view for a chosen session range
 - `scripts/ground_truth_trial_loss.py`: compares trial prefixes against all-trial ground truth
 - `scripts/numpy_analysis_utils.py`: shared histogram and CSV helpers for the analysis scripts
+- `scripts/hand_dataset.py`: reads the holding-hand manifest CSV + images; returns (image_paths, labels) for the training pipeline
+- `scripts/train_hand_classifier.py`: HandyTrak pipeline (preprocess → segment → classify) for holding-hand classification; heavy DL deps optional with lightweight fallbacks
 
 ## Offline Workflow
 

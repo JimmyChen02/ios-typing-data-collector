@@ -11,6 +11,11 @@
 		87AA804C2F6C999900764884 /* KeyReportExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87AA804A2F6C999900764884 /* KeyReportExporter.swift */; };
 		87AA804E2F6C99AA00764884 /* TapDotPlotView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87AA804D2F6C99AA00764884 /* TapDotPlotView.swift */; };
 		AA000000000000000000001 /* TypingResearchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000001 /* TypingResearchApp.swift */; };
+		HC000000000000000000001 /* HandSample.swift in Sources */ = {isa = PBXBuildFile; fileRef = HC000000000000000000002 /* HandSample.swift */; };
+		HC000000000000000000003 /* HandImageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = HC000000000000000000004 /* HandImageStore.swift */; };
+		HC000000000000000000005 /* MotionRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = HC000000000000000000006 /* MotionRecorder.swift */; };
+		HC000000000000000000007 /* HandCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = HC000000000000000000008 /* HandCaptureView.swift */; };
+		HC000000000000000000009 /* HandBurstCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = HC000000000000000000010 /* HandBurstCapture.swift */; };
 		AA000000000000000000002 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000002 /* Models.swift */; };
 		AA000000000000000000003 /* SessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000003 /* SessionManager.swift */; };
 		AA000000000000000000004 /* ParticipantSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000004 /* ParticipantSetupView.swift */; };
@@ -48,6 +53,11 @@
 		BB000000000000000000016 /* GaussianKeyboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaussianKeyboardView.swift; sourceTree = "<group>"; };
 		BB000000000000000000099 /* TypingResearch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TypingResearch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		JJ000000000000000000011 /* CustomKeyboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomKeyboardView.swift; sourceTree = "<group>"; };
+		HC000000000000000000002 /* HandSample.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandSample.swift; sourceTree = "<group>"; };
+		HC000000000000000000004 /* HandImageStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandImageStore.swift; sourceTree = "<group>"; };
+		HC000000000000000000006 /* MotionRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionRecorder.swift; sourceTree = "<group>"; };
+		HC000000000000000000010 /* HandBurstCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandBurstCapture.swift; sourceTree = "<group>"; };
+		HC000000000000000000008 /* HandCaptureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandCaptureView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -95,6 +105,7 @@
 			isa = PBXGroup;
 			children = (
 				BB000000000000000000002 /* Models.swift */,
+				HC000000000000000000002 /* HandSample.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -117,6 +128,7 @@
 				BB000000000000000000007 /* LoggingTextField.swift */,
 				JJ000000000000000000011 /* CustomKeyboardView.swift */,
 				BB000000000000000000016 /* GaussianKeyboardView.swift */,
+				HC000000000000000000008 /* HandCaptureView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -128,6 +140,9 @@
 				BB000000000000000000012 /* KeystrokeCleaner.swift */,
 				BB000000000000000000013 /* GaussianKeyModel.swift */,
 				BB000000000000000000014 /* GaussianModelStore.swift */,
+				HC000000000000000000004 /* HandImageStore.swift */,
+				HC000000000000000000006 /* MotionRecorder.swift */,
+				HC000000000000000000010 /* HandBurstCapture.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -229,6 +244,11 @@
 				AA000000000000000000016 /* GaussianKeyboardView.swift in Sources */,
 				AA000000000000000000009 /* Utilities.swift in Sources */,
 				JJ000000000000000000010 /* CustomKeyboardView.swift in Sources */,
+				HC000000000000000000001 /* HandSample.swift in Sources */,
+				HC000000000000000000003 /* HandImageStore.swift in Sources */,
+				HC000000000000000000005 /* MotionRecorder.swift in Sources */,
+				HC000000000000000000007 /* HandCaptureView.swift in Sources */,
+				HC000000000000000000009 /* HandBurstCapture.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -360,6 +380,9 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 55A7CXN98C;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Capture a front-camera photo of your upper body so we can study which hand is holding the phone.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "Record device motion to study how holding hand affects typing.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Attach a photo for holding-hand classification research.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -388,6 +411,9 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 55A7CXN98C;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Capture a front-camera photo of your upper body so we can study which hand is holding the phone.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "Record device motion to study how holding hand affects typing.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Attach a photo for holding-hand classification research.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
