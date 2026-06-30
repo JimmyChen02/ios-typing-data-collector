@@ -463,6 +463,32 @@ def _predict_labels(model, features: "np.ndarray") -> list[str]:
         return list(preds_arr)
 
 
+def _per_class_and_confusion(
+    true_labels: list[str],
+    pred_labels: list[str],
+    classes: list[str],
+) -> tuple[dict[str, float], dict[tuple[str, str], int]]:
+    """Return (per_class_recall, confusion).
+
+    per_class_recall: {class -> accuracy among frames whose TRUE label is class}.
+    confusion:        {(true_label, pred_label) -> count}.
+    """
+    confusion: dict[tuple[str, str], int] = {}
+    correct = {c: 0 for c in classes}
+    total   = {c: 0 for c in classes}
+    for t, p in zip(true_labels, pred_labels):
+        confusion[(t, p)] = confusion.get((t, p), 0) + 1
+        if t in total:
+            total[t] += 1
+            if t == p:
+                correct[t] += 1
+    per_class = {
+        c: (correct[c] / total[c] if total[c] else float("nan"))
+        for c in classes
+    }
+    return per_class, confusion
+
+
 def _compute_accuracy(model, features: "np.ndarray", labels: list[str]) -> float:
     """Return accuracy for the fitted *model* on the given features/labels."""
     try:
@@ -739,6 +765,7 @@ def main() -> None:
     train_frac  = args.train_frac
     window_size = args.window_size
     epochs      = args.epochs
+    md_out      = args.md_out
 
     # ---- Step 1: Load dataset records ----
     records = load_dataset_records(manifest_path, images_root)
@@ -833,6 +860,7 @@ def main() -> None:
             "participant":          p_key,
             "n_train":              n_train,
             "n_eval":               n_eval,
+            "handynet_train_acc":   float("nan"),
             "handynet_frame_acc":   float("nan"),
             "handynet_windowed_acc": float("nan"),
             "centroid_frame_acc":   float("nan"),
@@ -850,6 +878,15 @@ def main() -> None:
                 json.dump(unique_labels_p, fh, indent=2)
             _save_model(model, p_out_dir)
 
+            # TRAIN accuracy (in-sample) — for the train-vs-test overfitting gap
+            train_preds = _predict_labels(model, train_feats)
+            train_acc = float(np.mean(
+                np.array(train_preds) == np.array(train_labels_list)
+            ))
+            row["handynet_train_acc"] = train_acc
+            print(f"  HandyNet  TRAIN  frame-acc={train_acc:.3f}"
+                  f"  (in-sample, n={n_train})")
+
             if abs_eval:
                 eval_feats  = features_arr[abs_eval]
                 eval_preds  = _predict_labels(model, eval_feats)
@@ -860,8 +897,24 @@ def main() -> None:
                                             window_size=window_size)
                 row["handynet_frame_acc"]    = frame_acc
                 row["handynet_windowed_acc"] = win_acc
-                print(f"  HandyNet  frame-acc={frame_acc:.3f}  "
-                      f"windowed-acc={_fmt(win_acc)}")
+
+                # Per-class accuracy (recall) + confusion on the held-out TEST set
+                per_class, confusion = _per_class_and_confusion(
+                    eval_labels_list, eval_preds, unique_labels_p
+                )
+                row["handynet_per_class_acc"] = per_class
+                row["handynet_confusion"] = {
+                    f"{t}->{p}": n for (t, p), n in confusion.items()
+                }
+
+                print(f"  HandyNet  TEST   frame-acc={frame_acc:.3f}  "
+                      f"windowed-acc={_fmt(win_acc)}  (held-out, n={n_eval})")
+                print("            TEST   per-class acc: " + ", ".join(
+                    f"{c}={_fmt(per_class[c])}" for c in unique_labels_p))
+                print("            TEST   confusion (true->pred): " + ", ".join(
+                    f"{t}->{p}:{n}" for (t, p), n in sorted(confusion.items())))
+                print(f"            overfit gap (train - test frame-acc) = "
+                      f"{train_acc - frame_acc:+.3f}")
             else:
                 print("  HandyNet  (no eval frames)")
 
@@ -884,15 +937,18 @@ def main() -> None:
         print("No participants had sufficient data. Nothing to summarise.")
         return
 
-    print("=" * 60)
-    print(f"{'Participant':<25} {'n_tr':>5} {'n_ev':>5} "
-          f"{'HN-fr':>7} {'HN-win':>7} {'Cnt-fr':>7}")
-    print("-" * 60)
+    # HN-tr = HandyNet train (in-sample) acc; HN-fr/HN-win = held-out TEST acc;
+    # Cnt-fr = centroid baseline (test). Compare HN-tr vs HN-fr for overfitting.
+    print("=" * 72)
+    print(f"{'Participant':<22} {'n_tr':>5} {'n_ev':>5} "
+          f"{'HN-tr':>7} {'HN-fr':>7} {'HN-win':>7} {'Cnt-fr':>7}")
+    print("-" * 72)
     for row in summary_rows:
         print(
-            f"{row['participant']:<25} "
+            f"{row['participant']:<22} "
             f"{row['n_train']:>5} "
             f"{row['n_eval']:>5} "
+            f"{_fmt(row.get('handynet_train_acc', float('nan'))):>7} "
             f"{_fmt(row['handynet_frame_acc']):>7} "
             f"{_fmt(row['handynet_windowed_acc']):>7} "
             f"{_fmt(row['centroid_frame_acc']):>7}"
@@ -903,21 +959,27 @@ def main() -> None:
         v = [x for x in vals if not math.isnan(x)]
         return sum(v) / len(v) if v else float("nan")
 
-    print("-" * 60)
+    print("-" * 72)
     print(
-        f"{'MEAN':<25} "
+        f"{'MEAN':<22} "
         f"{sum(r['n_train'] for r in summary_rows):>5} "
         f"{sum(r['n_eval']  for r in summary_rows):>5} "
+        f"{_fmt(_nanmean([r.get('handynet_train_acc', float('nan')) for r in summary_rows])):>7} "
         f"{_fmt(_nanmean([r['handynet_frame_acc']    for r in summary_rows])):>7} "
         f"{_fmt(_nanmean([r['handynet_windowed_acc'] for r in summary_rows])):>7} "
         f"{_fmt(_nanmean([r['centroid_frame_acc']    for r in summary_rows])):>7}"
     )
-    print("=" * 60)
+    print("=" * 72)
+    print("HN-tr=train(in-sample)  HN-fr/HN-win=held-out TEST  Cnt-fr=centroid baseline")
 
     summary_path = out_dir / "summary.json"
     with summary_path.open("w", encoding="utf-8") as fh:
         json.dump(summary_rows, fh, indent=2, default=str)
     print(f"\nSummary written to: {summary_path}")
+
+    if md_out:
+        _write_markdown_results(Path(md_out), summary_rows, mode, epochs, _nanmean)
+        print(f"Results chart written to: {md_out}")
 
     print("\nFuture work:")
     print("  - IMU+image multimodal fusion")
@@ -928,6 +990,95 @@ def main() -> None:
 def _fmt(v: float) -> str:
     """Format float for the summary table; 'nan' if not a number."""
     return f"{v:.3f}" if not math.isnan(v) else "   nan"
+
+
+def _write_markdown_results(md_path, summary_rows, mode, epochs, nanmean) -> None:
+    """Write/update an auto-generated results chart in a markdown file.
+
+    The chart lives between HTML-comment markers so re-runs replace just that
+    block and leave the rest of the file (hand-written notes) intact. If the
+    markers are absent, the section is appended; if the file does not exist, it
+    is created.
+    """
+    from datetime import datetime, timezone
+
+    START = "<!-- TRAIN_RESULTS_START -->"
+    END   = "<!-- TRAIN_RESULTS_END -->"
+    md_path = Path(md_path)
+
+    def _pct(v: float) -> str:
+        return f"{v * 100:.1f}%" if not math.isnan(v) else "nan"
+
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    L: list[str] = [
+        START,
+        "## Latest training run (auto-generated)",
+        "",
+        f"_Generated {ts} by `train_hand_classifier.py` "
+        f"(mode={mode}, epochs={epochs}). This section is replaced on each run._",
+        "",
+        "| Participant | n_train | n_eval | Train acc | Test frame acc "
+        "| Test windowed acc | Centroid |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for r in summary_rows:
+        L.append(
+            f"| {r['participant']} | {r['n_train']} | {r['n_eval']} | "
+            f"{_fmt(r.get('handynet_train_acc', float('nan')))} | "
+            f"{_fmt(r['handynet_frame_acc'])} | "
+            f"{_fmt(r['handynet_windowed_acc'])} | "
+            f"{_fmt(r['centroid_frame_acc'])} |"
+        )
+    L.append(
+        f"| **MEAN** | {sum(r['n_train'] for r in summary_rows)} | "
+        f"{sum(r['n_eval'] for r in summary_rows)} | "
+        f"{_fmt(nanmean([r.get('handynet_train_acc', float('nan')) for r in summary_rows]))} | "
+        f"{_fmt(nanmean([r['handynet_frame_acc'] for r in summary_rows]))} | "
+        f"{_fmt(nanmean([r['handynet_windowed_acc'] for r in summary_rows]))} | "
+        f"{_fmt(nanmean([r['centroid_frame_acc'] for r in summary_rows]))} |"
+    )
+    L += [
+        "",
+        f"**Headline — held-out windowed test accuracy: "
+        f"{_pct(nanmean([r['handynet_windowed_acc'] for r in summary_rows]))}**"
+        f"  ·  test frame acc "
+        f"{_pct(nanmean([r['handynet_frame_acc'] for r in summary_rows]))}"
+        f"  ·  centroid baseline "
+        f"{_pct(nanmean([r['centroid_frame_acc'] for r in summary_rows]))}",
+        "",
+    ]
+    for r in summary_rows:
+        pc = r.get("handynet_per_class_acc")
+        cf = r.get("handynet_confusion")
+        if pc:
+            L.append(f"**{r['participant']} — per-class test accuracy:** "
+                     + ", ".join(f"{k}={_fmt(v)}" for k, v in pc.items()))
+        if cf:
+            L.append(f"**{r['participant']} — confusion (true→pred):** "
+                     + ", ".join(f"{k}:{v}" for k, v in sorted(cf.items())))
+        if pc or cf:
+            L.append("")
+    L += [
+        "_Train acc = in-sample; Test = held-out 20% (time-ordered split); "
+        "windowed = sliding-window-30 majority vote (HandyTrak metric); "
+        "Centroid = zero-training baseline._",
+        END,
+    ]
+    section = "\n".join(L)
+
+    if md_path.exists():
+        text = md_path.read_text(encoding="utf-8")
+        if START in text and END in text:
+            new_text = (text[: text.index(START)]
+                        + section
+                        + text[text.index(END) + len(END):])
+        else:
+            sep = "" if text.endswith("\n") else "\n"
+            new_text = f"{text}{sep}\n{section}\n"
+    else:
+        new_text = section + "\n"
+
+    md_path.write_text(new_text, encoding="utf-8")
 
 
 def _parse_args() -> argparse.Namespace:
@@ -977,6 +1128,14 @@ def _parse_args() -> argparse.Namespace:
         default=_DEFAULT_EPOCHS,
         help=f"Number of HandyNet training epochs (default {_DEFAULT_EPOCHS}, "
              "paper-faithful).",
+    )
+    parser.add_argument(
+        "--md-out",
+        default=None,
+        help="Optional path to a markdown file (e.g. Model-Training-Test/model.md). "
+             "The final results chart is written into a delimited, auto-updated "
+             "section of that file (replaced on each run; the rest of the file is "
+             "preserved).",
     )
     return parser.parse_args()
 

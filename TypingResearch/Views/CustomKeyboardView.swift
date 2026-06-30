@@ -29,15 +29,18 @@ struct CustomKeyboardView: View {
     private let keyGap:    CGFloat = 6
     private let rowGap:    CGFloat = 11
     private let bottomPad: CGFloat = 3
-    private let keyH:      CGFloat = 42   // Apple uses fixed 42pt — does not scale with screen
 
     var body: some View {
         GeometryReader { geo in
             let kw: CGFloat = (geo.size.width - 2*sidePad - 9*keyGap) / 10
             let sp: CGFloat = (geo.size.width - 2*sidePad - 7*kw - 8*keyGap) / 2
-            // Remaining space after keys + gaps + bottom goes to topPad (matches Apple's layout)
-            let usedH: CGFloat = 4*keyH + 3*rowGap + bottomPad + 38  // 38 = globe/mic row
-            let topPad: CGFloat = max(8, geo.size.height - usedH)
+            // Derive key height so 4 rows fill the available area; clamp to Apple-like proportions.
+            let topInset: CGFloat = 8
+            let fixedOverhead: CGFloat = 3*rowGap + bottomPad + 38 + topInset  // 38 = globe/mic row
+            let rawKeyH = (geo.size.height - fixedOverhead) / 4
+            let keyH = min(max(rawKeyH, 38), kw * 1.45)  // floor 38pt, cap so keys never get absurdly tall
+            let usedH = 4*keyH + fixedOverhead
+            let topPad = max(topInset, geo.size.height - usedH)
 
             ZStack(alignment: .bottom) {
                 // Key rows — aligned to top

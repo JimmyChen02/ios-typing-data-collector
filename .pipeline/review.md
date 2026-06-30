@@ -1,173 +1,108 @@
-# Final Review — Multi-frame HandyTrak burst capture (branch `model`)
+# Review: Smooth progress ring for HandCaptureView (branch `model`)
 
-## VERDICT: APPROVE WITH NITS
+## VERDICT: REQUEST CHANGES
 
-The build is green (BUILD SUCCEEDED, Xcode 26.1.1 / Swift 6.2.1 after the two
-documented post-test fixes). The increment matches the spec, the schema/trainer
-contract is intact, the guided 3-condition flow is correct, and the two
-`nonisolated(unsafe)` fields are genuinely race-free (not merely
-compiler-silenced). The mirroring choice is research-safe for the actual
-trainer (reasoning below). No BLOCKING issues. The nits are real but
-non-corrupting and can ship or be fixed in a follow-up.
+Do NOT merge. The ring smoothness and per-hand color are correctly implemented, but
+the diff is NOT purely additive/visual: it silently changes capture timing and the
+capture-lifecycle teardown, in direct violation of the spec's "do not change" list.
+The requested checkmark also effectively never renders. Both must be addressed.
 
 ---
 
-## 1. AVFoundation lifecycle & mirroring — PASS (with one consistency caveat)
+## Blocking issues
 
-Lifecycle is sound:
-- No force-unwrap on the camera device — `guard let device = AVCaptureDevice.default(...)`
-  (HandBurstCapture.swift:101) returns via `onUnavailable?()` on Simulator / no
-  front cam. Input creation is `try?` + `canAddInput` guarded (114-118); output
-  add is `canAddOutput` guarded (126-129). No crash paths.
-- `startRunning()` (146) and `stopRunning()` (93) both dispatched to the private
-  serial `sessionQueue`, off the main thread, as required.
-- Idempotency: `start()` early-returns on `isConfigured` (61); `stop()` nils the
-  session and is nil-safe (88-95). Both safe to call repeatedly — and the view
-  does call `stop()` redundantly (onDisappear + finishCondition + skip), which
-  is fine.
-- No retain cycles: the `requestAccess` completion and the delegate `Task` both
-  use `[weak self]` (70-71, 188). `onFrame`/`onUnavailable` are plain stored
-  closures cleared when the view's `@State capture` is replaced each condition.
+### B1. Capture duration changed 60s -> 30s (out of scope; alters collected data)
+`HandCaptureView.swift:26`
+```
+-private let captureSeconds: Int  = 60    // seconds per condition (human override: 60s)
++private let captureSeconds: Int  = 30    // seconds per condition (~60 frames @ 2Hz)
+```
+spec.md line 118 explicitly lists `captureSeconds` as out of scope. This halves the
+frames collected per condition (~120 -> ~60). This is a data/behavior change, not a
+visual one, and it was NOT disclosed in changes.md (which claims "purely visual" and
+"capture timing ... completely unchanged"). Either revert to 60, or get explicit human
+sign-off that 30s is intended — but it cannot ride in silently under a visual-ring spec.
 
-**Mirroring (the research-critical point) — research-safe, but note the comment
-is technically wrong.** The code applies `UIImage(... orientation: .upMirrored)`
-(183) with the stated intent "left side of screen = left in image." The
-justification in the code comment is inaccurate: `AVCaptureVideoDataOutput` from
-the front camera delivers RAW, NON-mirrored sensor buffers by default (unlike
-the auto-mirrored on-screen preview and unlike `AVCapturePhotoOutput`), because
-the connection's `isVideoMirrored` is never enabled here. So `.upMirrored` does
-not "undo" a mirror — it *introduces* a horizontal flip. (Note also that
-`jpegData()` bakes UIImage orientation into pixels, so the flag does take effect
-in the saved JPEG — good.)
+### B2. `.onDisappear` teardown removed from `capturingView` (out of scope; lifecycle change)
+`HandCaptureView.swift:~252` (deleted block)
+The per-condition `.onDisappear { capture.stop(); countdownTask?.cancel() }` on
+`capturingView` was deleted, and the stop/cancel was moved into `startCondition`
+(lines 315-316). spec.md lines 17-19 and 118-122 forbid touching `finishCondition`,
+`startCondition`, and `countdownTask`. This rewrites the capture-engine lifecycle:
+previously the AVCaptureSession was torn down when the capturing view disappeared; now
+it is only stopped at the start of the next condition / on sheet dismiss. Functionally
+it may be fine (finishCondition still calls capture.stop()), but it is an undisclosed
+lifecycle change in explicitly-out-of-scope code and needs its own justification + test,
+not a free rider on a visual ring. Note the top-level sheet `.onDisappear` at line
+107-114 still guards early dismiss, so the engine likely still stops on dismiss — but
+the per-condition stop now depends entirely on `finishCondition`/`startCondition`
+running, which is a real behavioral narrowing that must be reviewed deliberately.
 
-Why this is NOT a dataset-corrupting blocker:
-- The flip is applied **identically to every frame of every condition for every
-  participant** — `throttleInterval`/conversion path is unconditional. The
-  HandyNet CNN (the headline `handynet_windowed_acc` classifier) learns whatever
-  consistent orientation it is shown; a globally-consistent horizontal flip does
-  not invert the *label*, it only relabels which silhouette-x corresponds to
-  which class — and the CNN is trained on those same images, so it is invariant
-  to the choice.
-- The centroid baseline explicitly disclaims orientation: its docstring
-  (train_hand_classifier.py:624-628) says "this is a HEURISTIC and the front
-  camera mirrors the image. Do NOT over-invest in which side is which... The
-  baseline's job is a SEPARABILITY SANITY CHECK." A consistent flip preserves
-  separability; only per-frame INCONSISTENT mirroring would corrupt anything,
-  and that cannot happen here.
+### B3. Checkmark requested feature does not render (explicit human request)
+`HandCaptureView.swift:~197-201` and `countdownTask` at lines 352-364.
+The tester is correct. In `countdownTask` the loop writes `secondsRemaining = remaining`
+(reaching 0 on the final iteration), the loop exits, then `finishCondition(hand)` runs
+in the SAME Task continuation with NO intervening `await` or yield. `finishCondition`
+sets `phase = .reviewing` or calls `startCondition(next)`, replacing the capturing view.
+SwiftUI is not guaranteed (in practice, will not get) a render pass between the
+`secondsRemaining == 0` write and the phase change, so the `Image(systemName:
+"checkmark")` branch is never painted. The user EXPLICITLY asked for "seconds, then
+checkmark," so as written the requested feature is non-functional. This is what makes
+the verdict REQUEST CHANGES rather than APPROVE WITH NITS.
 
-NIT (not blocking): the comment at 180-182 misstates the cause (raw buffers
-aren't pre-mirrored). Either drop `.upMirrored` (use `.up`) or fix the comment.
-Because consistency is what matters, leaving it as-is does not harm the dataset.
-
----
-
-## 2. Trainability fidelity — PASS
-
-- Per-frame HandSample, one JPEG + one row (saveFrame, HandCaptureView.swift:387-421),
-  reusing HandImageStore — no new schema/storage.
-- `studySessionIndex = frameIndex` (407), a per-condition counter reset to 0 in
-  `startCondition` (310) and incremented per frame (420). This gives the trainer
-  the tie-free, strictly-increasing primary sort key it wants
-  (hand_dataset.py:198 sorts on `(study_session_index, captured_at_iso,
-  image_relative_path)`). `captured_at: Date()` (408) is the monotonic
-  secondary key. Correct.
-- `holdingHand: hand` per condition (409), `cameraPosition: "front"` (413).
-- saveImage-nil path still inserts a label-only row (389-397) — matches spec
-  edge case 2; frame counter still advances.
-- Manifest is the unchanged 14-column schema: DataExporter.exportHandManifestCSV
-  header (DataExporter.swift:125-130) is byte-for-byte the column set the Python
-  loader reads (hand_dataset.py:10-11, 252-253). Confirmed identical.
-- ~120 frames @ 2 Hz over 60 s: `captureSeconds = 60`, `targetFPS = 2.0`
-  (HandCaptureView.swift:26-27), both one-line tunable. The
-  `throttleInterval = 1.0 / max(targetFPS, 0.1)` (HandBurstCapture.swift:142)
-  enforces 2 Hz by PTS gating (164-170) regardless of the 30 fps source.
+Minimal correct fix (choose the safest that does NOT alter capture timing or drop
+frames):
+- PREFERRED: show the checkmark on the `.reviewing` transition / a dedicated brief
+  "condition complete" state, OR add a `@State var showCheck` set true right before
+  `finishCondition` with a single non-blocking yield (`await Task.yield()` /
+  `try? await Task.sleep(nanoseconds: ~400_000_000)`) inserted AFTER the last frame is
+  captured and AFTER `secondsRemaining = 0` but BEFORE `finishCondition`. Because all
+  frames are gathered during the 30 (or 60) one-second ticks, a short post-countdown
+  pause adds no frames and drops none — capture is already done when the loop exits. It
+  does delay auto-advance by that fraction of a second, which is a product call; if any
+  delay to auto-advance is unacceptable, then move the checkmark to the reviewing screen
+  instead. Do NOT put the delay inside the per-second loop.
+- Either way, confirm with the human whether a ~0.4s pause before auto-advance is
+  acceptable; if not, the reviewing-screen checkmark is the zero-timing-impact option.
 
 ---
 
-## 3. Guided 3-condition flow + SessionView — PASS
+## Out-of-scope / undisclosed changes bundled in the working tree (not this file)
 
-- intro → capturing(.left) → capturing(.right) → capturing(.both) → reviewing,
-  driven by `finishCondition` (HandCaptureView.swift:360-381). Counts recorded
-  per condition for the review screen.
-- `collected` aggregates all frames across conditions (419); review "Save &
-  Continue" calls `onComplete(collected)` (280).
-- Skip / Discard / early sheet-dismiss all call `stop()` + cancel countdown and
-  pass `nil` (skip 425-429; onDisappear 106-113). Non-blocking; "keep nothing on
-  early dismiss" honored.
-- Camera-unavailable path sets `cameraUnavailable`, cancels countdown, shows Skip
-  — no crash, no UIImagePicker fallback (324-332, 214-236).
-- SessionView closure loops `for sample in samples { recordHandSample(sample) }`
-  (SessionView.swift) with no change to SessionManager's method. Export wiring
-  (`exportHandData`, multi-URL ShareItem) is coherent.
+These appear in `git diff HEAD` and are NOT part of a visual-ring increment. They may be
+leftovers from prior work, but they are currently uncommitted in the same tree and would
+be swept into any commit. Flagging so they are not merged blindly:
 
----
-
-## 4. Concurrency soundness of the two `nonisolated(unsafe)` fields — PASS (genuinely sound)
-
-`throttleInterval` (HandBurstCapture.swift:51): written exactly once on the main
-actor in `configureAndStart` (142) BEFORE `session.startRunning()` is dispatched
-to `sessionQueue` (145-147). Frames only flow after `startRunning`, and the
-delegate fires only on `sessionQueue`, which reads it (164). The write
-happens-before the dispatch (same-thread program order), and the dispatched
-block establishes the ordering edge to the queue — so the read on `sessionQueue`
-always sees the written value. After that it is read-only. No race. This is real
-soundness, not compiler-silencing.
-
-`lastEmittedPTS` (45): reset to `.invalid` on the main actor in
-`configureAndStart` (141) before `startRunning` is dispatched; thereafter
-read/written ONLY inside `captureOutput` (167, 185), which runs on the single
-serial `sessionQueue`. A serial queue serializes all accesses — no concurrent
-access. The initial main-actor reset is likewise ordered before any frame via
-the `startRunning` dispatch. Sound.
-
-One subtlety worth noting (not a bug): because `start()` replaces nothing and
-`stop()` nils the session and a NEW `HandBurstCapture()` is constructed per
-condition (HandCaptureView.swift:317), there is never a second concurrent
-producer on a shared instance. Each instance's `sessionQueue` is private and
-serial. Clean.
+- `TypingResearch.xcodeproj/project.pbxproj`: HC* build-file/file-ref entries are only
+  REORDERED (all 5 HandSample/HandImageStore/MotionRecorder/HandCaptureView/
+  HandBurstCapture entries intact, no new files, no corruption — verified). BUT it also
+  changes `DEVELOPMENT_TEAM 55A7CXN98C -> P2LUTF8N6F` and
+  `PRODUCT_BUNDLE_IDENTIFIER com.trantran.typingresearch -> com.jimmychen.typingresearch`
+  in both build configs. These are signing-identity changes; confirm intentional and
+  keep them out of a shared/upstream merge if not.
+- `CustomKeyboardView.swift` and `GaussianKeyboardView.swift`: keyboard key-height is
+  changed from fixed 42pt to a derived/clamped height. Unrelated to this increment and
+  unreviewed here. Should be a separate change with its own spec/tests.
 
 ---
 
-## 5. docs/HAND_DATA_COLLECTION.md — PASS
+## What is correct (no action needed)
 
-End-to-end path is correct and runnable: export ("Hand Manifest CSV + Images")
-→ place CSV beside `hand_images/` → `.venv-ml/bin/python
-scripts/train_hand_classifier.py <manifest> --images-root <dir> --out models/
---mode both` → read `models/summary.json`. The command matches the actual
-argparse (positional `manifest`, `--images-root`, `--out`, `--mode`, `--epochs`,
-`--demo`; train_hand_classifier.py:935-975). summary.json field list matches.
-Numbers are internally consistent with the implemented constants (60 s, 2 Hz,
-~120 frames/condition, ~360/participant).
+- captureProgress (`HandCaptureView.swift:432-438`): derived solely from
+  `secondsRemaining`, clamped 0...1, guard against total==0. No separate timer /
+  TimelineView / Date(). Resets to 0 at condition start (startCondition sets
+  secondsRemaining = captureSeconds at line 318) and reaches 1.0 when secondsRemaining
+  hits 0. Animation keyed on `secondsRemaining` via the unchanged
+  `.animation(.linear(duration: 1), value: secondsRemaining)` (line 192) gives a
+  genuinely smooth, drift-free per-tick sweep. Correct approach.
+- ringColor(for:) (`HandCaptureView.swift:443-450`): exhaustive over HoldingHand
+  (left/right/both/unknown), used consistently for ring stroke (189) and checkmark (201).
+  left=blue / right=green / both=orange / unknown=orange. Tasteful and app-consistent.
+- `.id(hand)` (line 96): correctly forces view recreation per condition so the ring
+  starts clean. Good.
 
-NIT: the doc says tap export on the "Collection Complete / Study Complete"
-summary screen — verify that copy matches the actual SummaryView title string;
-minor wording only.
+## Nits
 
----
-
-## 6. Python / tests / SessionManager — CONFIRMED unchanged this increment
-
-`scripts/` and `tests/` are entirely untracked on this branch (the whole hand
-pipeline was introduced earlier and not yet committed), so there is no in-branch
-modification to them in this increment — consistent with the "Python unchanged"
-claim. pytest (28 passed) and `--demo` (exit 0, summary.json written) both green
-per test-results.
-
-DOC INCONSISTENCY (non-blocking, already flagged by the tester): changes.md says
-SessionManager was "not touched," but it does contain `pendingHandSamples` and
-`recordHandSample`. These are additive and required by this flow; they predate or
-accompany the increment and break nothing. Documentation wording only — no code
-defect.
-
----
-
-## Required fixes for SHIP: NONE (build green, no corrupting issues)
-
-## Recommended (non-blocking) follow-ups
-1. HandBurstCapture.swift:180-183 — fix the misleading mirroring comment, and
-   decide deliberately between `.up` and `.upMirrored`. Either is dataset-safe
-   because the transform is globally consistent and the trainer is
-   orientation-agnostic; just make the comment accurate so a future editor
-   doesn't "correct" it and accidentally introduce per-frame inconsistency.
-2. changes.md — correct the "SessionManager not touched" line.
-3. docs — confirm the summary-screen button/title copy matches SummaryView.
+- N1. checkmark `Image` uses `.font(.system(size: 48, weight: .bold))` without the
+  `design: .monospaced` used by the countdown text — minor inconsistency, irrelevant if
+  the checkmark is reworked per B3.

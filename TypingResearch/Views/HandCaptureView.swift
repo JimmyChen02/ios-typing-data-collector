@@ -23,8 +23,8 @@ import UIKit
 //   onComplete          — ([HandSample]?) -> Void; nil = skipped
 
 // MARK: - Tunable constants (one-line changes to adjust duration / rate)
-private let captureSeconds: Int  = 60    // seconds per condition (human override: 60s)
-private let targetFPS:      Double = 2.0 // frames per second (~120 frames / condition)
+private let captureSeconds: Int  = 30    // seconds per condition (~60 frames @ 2Hz)
+private let targetFPS:      Double = 2.0 // frames per second (~60 frames / condition)
 
 struct HandCaptureView: View {
     @Environment(\.modelContext) private var modelContext
@@ -93,6 +93,7 @@ struct HandCaptureView: View {
                     introView
                 case .capturing(let hand):
                     capturingView(hand: hand)
+                        .id(hand)
                 case .reviewing:
                     reviewingView
                 case .done:
@@ -177,6 +178,16 @@ struct HandCaptureView: View {
                     .foregroundColor(.orange)
             }
 
+            // Look-at-screen prompt: the front camera needs the participant's
+            // upper body / face in frame for HandyTrak segmentation.
+            if !cameraUnavailable {
+                Label("Look at the screen and keep your face and shoulders in view", systemImage: "eyes")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+            }
+
             // Progress ring / countdown
             ZStack {
                 Circle()
@@ -184,19 +195,29 @@ struct HandCaptureView: View {
                     .frame(width: 140, height: 140)
 
                 Circle()
-                    .trim(from: 0, to: CGFloat(captureSeconds - secondsRemaining) / CGFloat(captureSeconds))
-                    .stroke(Color.orange, style: StrokeStyle(lineWidth: 12, lineCap: .round))
+                    .trim(from: 0, to: captureProgress)
+                    .stroke(ringColor(for: hand), style: StrokeStyle(lineWidth: 12, lineCap: .round))
                     .frame(width: 140, height: 140)
                     .rotationEffect(.degrees(-90))
                     .animation(.linear(duration: 1), value: secondsRemaining)
 
-                VStack(spacing: 4) {
-                    Text("\(secondsRemaining)")
-                        .font(.system(size: 48, weight: .bold, design: .monospaced))
-                        .foregroundColor(.primary)
-                    Text("seconds")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                // Center: show remaining seconds during capture; swap to a
+                // checkmark when secondsRemaining hits 0 (ring full). The
+                // checkmark shows during the brief transition before
+                // finishCondition auto-advances — no sleep or delay added.
+                if secondsRemaining == 0 {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 48, weight: .bold))
+                        .foregroundColor(ringColor(for: hand))
+                } else {
+                    VStack(spacing: 4) {
+                        Text("\(secondsRemaining)")
+                            .font(.system(size: 48, weight: .bold, design: .monospaced))
+                            .foregroundColor(.primary)
+                        Text("seconds")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
 
@@ -240,12 +261,6 @@ struct HandCaptureView: View {
         .padding()
         .onAppear {
             beginCapture(for: hand)
-        }
-        .onDisappear {
-            // Only stop if we're not advancing to the next condition (done/reviewing)
-            // onDisappear fires on every phase transition; stop is idempotent.
-            capture.stop()
-            countdownTask?.cancel()
         }
     }
 
@@ -307,7 +322,9 @@ struct HandCaptureView: View {
     // MARK: - Capture logic
 
     private func startCondition(_ hand: HoldingHand) {
-        frameIndex = 0          // reset per-condition frame counter
+        capture.stop()              // stop previous condition's engine deterministically
+        countdownTask?.cancel()     // cancel previous countdown
+        frameIndex = 0
         secondsRemaining = captureSeconds
         cameraUnavailable = false
         phase = .capturing(hand)
@@ -352,7 +369,16 @@ struct HandCaptureView: View {
                 guard !Task.isCancelled else { return }
                 secondsRemaining = remaining
             }
-            // Countdown complete: stop and advance
+            // Countdown complete (secondsRemaining == 0, ring full). End the
+            // capture window now so the pause below adds zero frames, then hold
+            // briefly so SwiftUI renders the checkmark before auto-advancing.
+            capture.stop()
+            do {
+                try await Task.sleep(nanoseconds: 400_000_000)  // ~0.4s: let the checkmark show
+            } catch {
+                return  // task cancelled during the hold
+            }
+            guard !Task.isCancelled else { return }
             finishCondition(hand)
         }
     }
@@ -418,6 +444,29 @@ struct HandCaptureView: View {
         modelContext.insert(sample)
         collected.append(sample)
         frameIndex += 1
+    }
+
+    // MARK: - Ring helpers
+
+    /// 0...1 fill fraction for the capture ring, derived from the real countdown
+    /// so it cannot drift from actual capture timing. Resets to 0 each condition
+    /// because secondsRemaining is reset to captureSeconds in startCondition.
+    private var captureProgress: CGFloat {
+        let total = CGFloat(captureSeconds)
+        guard total > 0 else { return 0 }
+        let elapsed = total - CGFloat(secondsRemaining)
+        return min(max(elapsed / total, 0), 1)
+    }
+
+    /// Distinct ring color per holding-hand condition so the active hand is
+    /// visually obvious. Left = blue, right = green, both = orange (app accent).
+    private func ringColor(for hand: HoldingHand) -> Color {
+        switch hand {
+        case .left:    return .blue
+        case .right:   return .green
+        case .both:    return .orange
+        case .unknown: return .orange
+        }
     }
 
     // MARK: - Skip

@@ -1,0 +1,23 @@
+[
+  {
+    "participant": "jimmy|chen",
+    "n_train": 414,
+    "n_eval": 105,
+    "handynet_train_acc": 0.9347826086956522,
+    "handynet_frame_acc": 0.8,
+    "handynet_windowed_acc": 0.8157894736842105,
+    "centroid_frame_acc": 0.3333333333333333,
+    "handynet_per_class_acc": {
+      "both": 1.0,
+      "left": 0.8285714285714286,
+      "right": 0.5714285714285714
+    },
+    "handynet_confusion": {
+      "left->left": 29,
+      "left->right": 6,
+      "right->both": 15,
+      "right->right": 20,
+      "both->both": 35
+    }
+  }
+]

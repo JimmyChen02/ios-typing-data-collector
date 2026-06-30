@@ -1,122 +1,124 @@
-# Changes — Multi-frame HandyTrak burst capture
+# Changes: Smooth progress ring for HandCaptureView
 
-## Files created or modified
+## File modified
+`TypingResearch/Views/HandCaptureView.swift` — purely visual update to the capture-progress ring: smooth sweep, per-hand color, seconds-to-checkmark center swap.
 
-### NEW: `TypingResearch/Services/HandBurstCapture.swift`
-AVFoundation front-camera burst controller. Owns an `AVCaptureSession` +
-`AVCaptureVideoDataOutput`, throttles frames to `targetFPS` (default 2 Hz)
-via CMTime comparison on the serial session queue, converts each kept buffer
-to a `.upMirrored` `UIImage` (correct L/R orientation for centroid baseline),
-and delivers frames to `onFrame` on the main actor. Requests/observes camera
-authorization gracefully; calls `onUnavailable` on permission denied, no
-front camera, or Simulator. `stop()` calls `session.stopRunning()` off the
-main thread. `nonisolated(unsafe)` guards the timestamp ivar accessed only
-from the serial session queue.
-
-### REWRITE: `TypingResearch/Views/HandCaptureView.swift`
-Replaced the single-still `UIImagePickerController` flow with a guided
-3-condition burst (left → right → both). `captureSeconds = 60` and
-`targetFPS = 2.0` are named top-level constants (one-line tunable). State
-machine (`Phase` enum: intro / capturing(HoldingHand) / reviewing / done)
-drives the flow. Each condition runs `HandBurstCapture` for 60 s, saving
-one JPEG + one `HandSample` per frame via `HandImageStore.shared.saveImage`
-and `modelContext.insert`. `studySessionIndex` is set to the per-frame
-counter (0,1,2,…) reset per condition — critical for the Python trainer's
-time-order sort. Camera unavailable shows a skip path; `onDisappear` calls
-`stop()` and cancels the countdown task (no partial data kept on early
-dismiss). `onComplete` signature changed from `(HandSample?) -> Void` to
-`([HandSample]?) -> Void`.
-
-### EDIT: `TypingResearch/Views/SessionView.swift`
-Updated the `.sheet(isPresented: $showHandCapture)` trailing closure in
-`BetweenSessionView` (~line 631) to match the new `([HandSample]?) -> Void`
-signature: renamed `sample` to `samples`, replaced the single-sample check
-with a `for sample in samples` loop calling `sessionManager.recordHandSample(sample)`
-once per frame. No other changes in this file.
-
-### NEW: `docs/HAND_DATA_COLLECTION.md`
-Researcher-facing collection protocol: conditions (left/right/both),
-60 s/condition at 2 Hz (~120 frames), participant count guidance,
-lighting/pose/framing notes from HandyTrak, export steps from the app,
-the exact `train_hand_classifier.py` command with parameter table, how to
-read `summary.json`, and how `study_session_index` / `captured_at_iso`
-encode time order for the trainer.
+No other files were modified. `project.pbxproj`, `HandBurstCapture.swift`, and all Python/training scripts are untouched.
 
 ---
 
-## Unchanged (confirmed)
+## 1. `captureProgress` computed property (new, lines ~435-440)
 
-- **Python pipeline** (`scripts/train_hand_classifier.py`,
-  `scripts/hand_dataset.py`, `scripts/DataExporter`): not touched.
-  Manifest schema (14-col CSV) unchanged.
-- **Tests**: not touched.
-- **`SessionManager.swift`**: not touched. `recordHandSample(_:)` called in
-  a loop from `SessionView` — no change to the method itself.
-- **`project.pbxproj` permissions**: `NSCameraUsageDescription` already
-  present at lines 379 and 410 (`INFOPLIST_KEY_NSCameraUsageDescription`).
-  AVFoundation reuses the same key — no new pbxproj entry required.
-  `NSPhotoLibraryUsageDescription` left untouched (harmless).
-- **`HandImageStore.swift`**, **`HandSample.swift`**: not touched.
-
----
-
-## Tunable constants
-
-| Constant | Value | File | Effect |
-|----------|-------|------|--------|
-| `captureSeconds` | `60` | `HandCaptureView.swift` line ~28 | Duration per condition (human override: 60 s) |
-| `targetFPS` | `2.0` | `HandCaptureView.swift` line ~29 | Frames per second (~120 frames/condition) |
-
-The `HandBurstCapture.targetFPS` property is set from this constant at
-capture start; the throttle is implemented via CMTime comparison in the
-delegate, so changing `targetFPS` here is the only tuning needed.
-
----
-
-## Note: xcodebuild not run
-
-This implementation was not compiled with `xcodebuild`. The Tester should
-focus the static/code review on:
-
-1. **`HandBurstCapture.swift`**
-   - `nonisolated(unsafe) private var lastEmittedPTS` — valid Swift 5.10+
-     syntax; confirm the project deployment target / toolchain supports it.
-   - `AVCaptureDevice.requestAccess` is called without holding the main
-     actor (it internally dispatches); the completion hops back via
-     `Task { @MainActor in ... }` — confirm no threading warning from the
-     compiler.
-   - `connection.videoRotationAngle = 90` requires iOS 17+. If deployment
-     target is earlier, wrap in `if #available(iOS 17, *) { ... }` or use
-     the deprecated `videoOrientation = .portrait` path.
-   - `CIContext(options: [.useSoftwareRenderer: false])` created per-frame
-     is inefficient for high-fps but correct at 2 Hz. If performance is a
-     concern, cache the context as a stored property (mark
-     `nonisolated(unsafe)` or create on sessionQueue).
-
-2. **`HandCaptureView.swift`**
-   - `@State private var capture = HandBurstCapture()` — `HandBurstCapture`
-     is `@MainActor`; confirm SwiftUI allows this as a `@State` initial
-     value (it should, since views are also `@MainActor`).
-   - `capture.onFrame = { [self] image in saveFrame(image, hand) }` captures
-     `self` (the struct) by copy — confirm `saveFrame` reaches the correct
-     `modelContext` and mutable state through `@State` projected values.
-     If the compiler complains, promote to an explicit `@State` wrapper or
-     pass context explicitly.
-   - `onDisappear` fires on every phase transition (not just sheet dismiss).
-     `capture.stop()` is idempotent, so repeated calls are safe.
-
-3. **`SessionView.swift`** — minimal change; verify closure parameter
-   rename compiled cleanly (`sample` → `samples`).
-
----
-
-## Quick test commands
-
-```bash
-# Python demo (unchanged, confirms Python pipeline still works):
-.venv-ml/bin/python scripts/train_hand_classifier.py --demo
-
-# Static Swift review (no build environment required):
-# Read HandBurstCapture.swift, HandCaptureView.swift, SessionView.swift
-# and check the items listed above.
+**Before:** the trim value was computed inline in the ZStack:
+```swift
+.trim(from: 0, to: CGFloat(captureSeconds - secondsRemaining) / CGFloat(captureSeconds))
 ```
+
+**After:** extracted to a named, clamped helper inside the struct:
+```swift
+private var captureProgress: CGFloat {
+    let total = CGFloat(captureSeconds)
+    guard total > 0 else { return 0 }
+    let elapsed = total - CGFloat(secondsRemaining)
+    return min(max(elapsed / total, 0), 1)
+}
+```
+The `.animation(.linear(duration: 1), value: secondsRemaining)` modifier is unchanged and still keyed on `secondsRemaining`. Each 1-second tick of `secondsRemaining` drives a 1-second linear animation to the next `captureProgress` value, producing a visually continuous sweep without a separate timer.
+
+---
+
+## 2. Ring trim update (capturingView ZStack)
+
+**Before:**
+```swift
+.trim(from: 0, to: CGFloat(captureSeconds - secondsRemaining) / CGFloat(captureSeconds))
+.stroke(Color.orange, style: ...)
+```
+
+**After:**
+```swift
+.trim(from: 0, to: captureProgress)
+.stroke(ringColor(for: hand), style: ...)
+```
+
+Same frame, lineWidth, lineCap, rotationEffect, and animation modifier — only the trim source and stroke color changed.
+
+---
+
+## 3. Per-hand ring color (`ringColor(for:)`)
+
+New private helper at the bottom of the struct, before `// MARK: - Skip`:
+```swift
+private func ringColor(for hand: HoldingHand) -> Color {
+    switch hand {
+    case .left:    return .blue
+    case .right:   return .green
+    case .both:    return .orange
+    case .unknown: return .orange
+    }
+}
+```
+
+Mapping: left = `.blue`, right = `.green`, both = `.orange` (app accent, matches intro/reviewing buttons), unknown = `.orange` (safe fallback). Used for both the ring stroke and the completion checkmark foreground so both are color-consistent per condition.
+
+---
+
+## 4. Seconds-to-checkmark center swap
+
+**Before:** always showed `Text("\(secondsRemaining)")` + `Text("seconds")`.
+
+**After:**
+```swift
+if secondsRemaining == 0 {
+    Image(systemName: "checkmark")
+        .font(.system(size: 48, weight: .bold))
+        .foregroundColor(ringColor(for: hand))
+} else {
+    VStack(spacing: 4) {
+        Text("\(secondsRemaining)")
+            .font(.system(size: 48, weight: .bold, design: .monospaced))
+            .foregroundColor(.primary)
+        Text("seconds")
+            .font(.caption)
+            .foregroundColor(.secondary)
+    }
+}
+```
+
+The checkmark appears when `secondsRemaining` reaches 0 (which `captureProgress` maps to 1.0 = ring full). `finishCondition` is called by the `countdownTask` immediately after setting `secondsRemaining = 0` — the checkmark is visible only for the natural async scheduling gap between the countdown task writing `secondsRemaining = 0` and `finishCondition` transitioning the phase. No `sleep`, `DispatchQueue.asyncAfter`, or any delay was added. Auto-advance timing is completely unchanged.
+
+---
+
+## Tester checklist
+
+**Build**
+- [ ] Project compiles with no errors or warnings in `HandCaptureView.swift`.
+- [ ] No new `.swift` files appear in the project navigator (only the existing file was modified).
+- [ ] `project.pbxproj` diff shows no changes.
+
+**Visual review — run on device or simulator**
+
+Ring smoothness
+- [ ] Start a capture (left hand). Ring sweeps continuously from empty to full over 30 seconds — no visible 1-second jump steps.
+- [ ] Scrubbing (pausing in Xcode) confirms the arc moves smoothly between ticks.
+
+Per-hand color
+- [ ] Left-hand condition: ring stroke is blue.
+- [ ] Right-hand condition: ring stroke is green.
+- [ ] Both-hands condition: ring stroke is orange.
+- [ ] Colors match between the ring arc and the completion checkmark.
+
+Checkmark on completion
+- [ ] When a condition finishes (ring reaches full), the countdown number disappears and a bold checkmark (same color as the ring) briefly appears in the center.
+- [ ] The checkmark is visible for a brief natural moment; it does NOT freeze the screen or block the auto-advance to the next condition.
+
+Reset per condition
+- [ ] When left finishes, the right-hand screen starts with an empty ring (not partially filled).
+- [ ] Same for right → both transition.
+- [ ] The `.id(hand)` modifier on `capturingView` ensures this by forcing a full view re-creation; no extra reset logic was added.
+
+Auto-advance / capture integrity
+- [ ] The sequence left → right → both → reviewing still happens automatically with no user action between conditions.
+- [ ] Frame counts on the reviewing screen are unchanged / reasonable (~60 frames per condition at 2 Hz).
+- [ ] Skip works from any condition.
+- [ ] Camera-unavailable path still shows the Skip button and does not crash.

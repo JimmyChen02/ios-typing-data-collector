@@ -136,7 +136,6 @@ struct GaussianKeyboardView: View {
     private let keyGap:    CGFloat = 6
     private let rowGap:    CGFloat = 11
     private let bottomPad: CGFloat = 3
-    private let keyH:      CGFloat = 42
 
     private var kbBg: Color {
         if overlayMode { return .clear }
@@ -293,8 +292,13 @@ struct GaussianKeyboardView: View {
     private func computeLayout(size: CGSize) -> KeyboardLayout {
         let kw: CGFloat = (size.width - 2 * sidePad - 9 * keyGap) / 10
         let sp: CGFloat = (size.width - 2 * sidePad - 7 * kw - 8 * keyGap) / 2
-        let usedH: CGFloat = 4 * keyH + 3 * rowGap + bottomPad + 38
-        let topPad: CGFloat = max(8, size.height - usedH)
+        // Derive key height so 4 rows fill the available area; clamp to Apple-like proportions.
+        let topInset: CGFloat = 8
+        let fixedOverhead: CGFloat = 3 * rowGap + bottomPad + 38 + topInset  // 38 = globe/mic row
+        let rawKeyH = (size.height - fixedOverhead) / 4
+        let keyH = min(max(rawKeyH, 38), kw * 1.45)  // floor 38pt, cap so keys never get absurdly tall
+        let usedH = 4 * keyH + fixedOverhead
+        let topPad = max(topInset, size.height - usedH)
 
         var layout = KeyboardLayout()
 

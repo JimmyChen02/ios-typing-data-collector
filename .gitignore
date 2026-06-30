@@ -30,3 +30,8 @@ venv/
 .claude/settings.local.json
 build_log.md
 logs/
+
+#Test Data Images
+Model-Training-Test/hand_images
+Model-Training-Test/hand_manifest_Jimmy_Chen.csv
+Model-Training-Test/*.log
