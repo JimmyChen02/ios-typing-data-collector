@@ -155,6 +155,80 @@ final class DataExporter {
         return writeToTempFile(content: csv, filename: name)
     }
 
+    /// Bundles the hand manifest CSV and every captured image into a single
+    /// `.zip`, so the whole camera dataset can be AirDropped as one file
+    /// instead of hundreds of separate images.
+    ///
+    /// Layout inside the archive:
+    ///   - `hand_manifest_<first>_<last>.csv`
+    ///   - `hand_images/<uuid>.jpg` (all captured images)
+    func exportHandDataZip(samples: [HandSample], participant: Participant?) -> URL? {
+        guard !samples.isEmpty else { return nil }
+
+        let fm = FileManager.default
+        let first = participant?.firstName ?? "unknown"
+        let last  = participant?.lastName  ?? "unknown"
+        let stagingName = "hand_export_\(first)_\(last)"
+
+        // Fresh staging directory under tmp/ — remove any leftover from a prior export.
+        let staging = fm.temporaryDirectory.appendingPathComponent(stagingName, isDirectory: true)
+        try? fm.removeItem(at: staging)
+        do {
+            try fm.createDirectory(at: staging, withIntermediateDirectories: true)
+        } catch {
+            print("DataExporter: could not create hand-export staging dir: \(error)")
+            return nil
+        }
+
+        // 1. Manifest CSV.
+        guard let manifestURL = exportHandManifestCSV(samples: samples, participant: participant) else {
+            return nil
+        }
+        try? fm.copyItem(at: manifestURL, to: staging.appendingPathComponent(manifestURL.lastPathComponent))
+
+        // 2. Images into a hand_images/ subfolder.
+        let imagesDest = staging.appendingPathComponent("hand_images", isDirectory: true)
+        try? fm.createDirectory(at: imagesDest, withIntermediateDirectories: true)
+        for imageURL in HandImageStore.shared.allImageURLs() {
+            try? fm.copyItem(at: imageURL, to: imagesDest.appendingPathComponent(imageURL.lastPathComponent))
+        }
+
+        // 3. Zip the staging directory.
+        return zipDirectory(staging, zipName: "\(stagingName).zip")
+    }
+
+    /// Zips `directory` into a single archive named `zipName` under tmp/.
+    /// Uses NSFileCoordinator's `.forUploading` intent, which produces a zipped
+    /// copy of a directory without any third-party dependency.
+    private func zipDirectory(_ directory: URL, zipName: String) -> URL? {
+        let fm = FileManager.default
+        let dest = fm.temporaryDirectory.appendingPathComponent(zipName)
+        try? fm.removeItem(at: dest)
+
+        var coordinatorError: NSError?
+        var resultURL: URL?
+        NSFileCoordinator().coordinate(
+            readingItemAt: directory,
+            options: .forUploading,
+            error: &coordinatorError
+        ) { zippedURL in
+            // `zippedURL` is a temporary archive the coordinator created; copy it
+            // out to a stable location before this block returns.
+            do {
+                try fm.copyItem(at: zippedURL, to: dest)
+                resultURL = dest
+            } catch {
+                print("DataExporter: zip copy failed: \(error)")
+            }
+        }
+
+        if let coordinatorError {
+            print("DataExporter: zip coordination failed: \(coordinatorError)")
+            return nil
+        }
+        return resultURL
+    }
+
     // MARK: - Helpers
 
     private func filename(participant: Participant?, suffix: String, ext: String) -> String {

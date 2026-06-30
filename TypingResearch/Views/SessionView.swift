@@ -40,6 +40,7 @@ struct SummaryView: View {
     @State private var shareItem: ShareItem? = nil
     @State private var showResetConfirm: Bool = false
     @State private var generatingPDF: PDFKind? = nil
+    @State private var zippingHandData: Bool = false
     @State private var plotLayout: TapDotPlotView.LayoutMode = .alpha
     @State private var gaussianPreviewImage: UIImage? = nil
     @State private var isRenderingGaussianPreview = false
@@ -442,11 +443,20 @@ struct SummaryView: View {
                     .foregroundColor(.secondary)
 
                 Button(action: exportHandData) {
-                    Label("Hand Manifest CSV + Images", systemImage: "hand.raised")
-                        .frame(maxWidth: .infinity).padding()
-                        .background(Color(.systemGray5))
-                        .foregroundColor(.primary).cornerRadius(10)
+                    HStack {
+                        if zippingHandData {
+                            ProgressView().padding(.trailing, 4)
+                            Text("Zipping\u{2026}")
+                        } else {
+                            Image(systemName: "hand.raised")
+                            Text("Hand Data Zip (CSV + Images)")
+                        }
+                    }
+                    .frame(maxWidth: .infinity).padding()
+                    .background(Color(.systemGray5))
+                    .foregroundColor(.primary).cornerRadius(10)
                 }
+                .disabled(zippingHandData)
             }
         }
         .sheet(item: $shareItem) { item in
@@ -535,16 +545,17 @@ struct SummaryView: View {
 
     private func exportHandData() {
         let samples = sessionManager.pendingHandSamples
-        guard !samples.isEmpty else { return }
-        let exporter = DataExporter()
-        guard let csvURL = exporter.exportHandManifestCSV(
-            samples: samples,
-            participant: sessionManager.participant
-        ) else { return }
-
-        var urls: [URL] = [csvURL]
-        urls.append(contentsOf: HandImageStore.shared.allImageURLs())
-        shareItem = ShareItem(urls: urls)
+        guard !samples.isEmpty, !zippingHandData else { return }
+        let participant = sessionManager.participant
+        zippingHandData = true
+        Task.detached(priority: .userInitiated) {
+            let exporter = DataExporter()
+            let url = exporter.exportHandDataZip(samples: samples, participant: participant)
+            await MainActor.run {
+                zippingHandData = false
+                if let url { shareItem = ShareItem(url: url) }
+            }
+        }
     }
 
     private func renderGaussianBoundaryPreview(width: CGFloat, height: CGFloat) async {
