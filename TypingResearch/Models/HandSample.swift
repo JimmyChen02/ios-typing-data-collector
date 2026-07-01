@@ -45,6 +45,7 @@ final class HandSample {
     var capturedAt: Date
     var holdingHand: HoldingHand
     var imageRelativePath: String // relative to Documents/; "" if no photo
+    var imuRelativePath: String   // relative to Documents/; "" if no IMU CSV
     var imagePixelWidth: Int
     var imagePixelHeight: Int
     var cameraPosition: String    // "front" (forward-compat for back-cam)
@@ -60,6 +61,7 @@ final class HandSample {
         capturedAt: Date = Date(),
         holdingHand: HoldingHand = .unknown,
         imageRelativePath: String = "",
+        imuRelativePath: String = "",
         imagePixelWidth: Int = 0,
         imagePixelHeight: Int = 0,
         cameraPosition: String = "front",
@@ -75,6 +77,7 @@ final class HandSample {
         self.capturedAt = capturedAt
         self.holdingHand = holdingHand
         self.imageRelativePath = imageRelativePath
+        self.imuRelativePath = imuRelativePath
         self.imagePixelWidth = imagePixelWidth
         self.imagePixelHeight = imagePixelHeight
         self.cameraPosition = cameraPosition

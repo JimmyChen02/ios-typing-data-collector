@@ -267,6 +267,7 @@ final class SessionManager {
 
         let session = Session(participantId: participant.id)
         self.currentSession = session
+        MotionRecorder.shared.start(sessionId: session.id, studySessionIndex: completedStudySessions)
         modelContext?.insert(session)
 
         isSessionActive = true
@@ -287,8 +288,6 @@ final class SessionManager {
         studyId = UUID()
         allEvents = []
         pendingHandSamples = []
-        // IMU seam (decision 6 — OFF by default):
-        // MotionRecorder.shared.start(sessionId: UUID(), studySessionIndex: 0)
         startSession(participant: participant, durationSeconds: 60, mode: currentSessionMode)
     }
 
@@ -614,8 +613,7 @@ final class SessionManager {
         isTrialActive = false
         isSessionComplete = true
         BackendClient.shared.flush()
-        // IMU seam (decision 6 — OFF by default):
-        // let _ = MotionRecorder.shared.stop()
+        let _ = MotionRecorder.shared.stop()
         try? modelContext?.save()
 
         // Only classic sessions train the model — Gaussian sessions run on the

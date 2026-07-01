@@ -125,7 +125,7 @@ final class DataExporter {
         let header = [
             "participant_first", "participant_last", "study_id", "session_id",
             "study_session_index", "captured_at_iso", "holding_hand",
-            "image_relative_path", "image_pixel_width", "image_pixel_height",
+            "image_relative_path", "imu_relative_path", "image_pixel_width", "image_pixel_height",
             "camera_position", "device_model", "system_version", "notes"
         ]
 
@@ -140,6 +140,7 @@ final class DataExporter {
                 csvEscape(iso.string(from: s.capturedAt)),
                 csvEscape(s.holdingHand.rawValue),
                 csvEscape(s.imageRelativePath),
+                csvEscape(s.imuRelativePath),
                 String(s.imagePixelWidth),
                 String(s.imagePixelHeight),
                 csvEscape(s.cameraPosition),
@@ -162,6 +163,7 @@ final class DataExporter {
     /// Layout inside the archive:
     ///   - `hand_manifest_<first>_<last>.csv`
     ///   - `hand_images/<uuid>.jpg` (all captured images)
+    ///   - `imu/<sessionId>.csv` (all session IMU recordings)
     func exportHandDataZip(samples: [HandSample], participant: Participant?) -> URL? {
         guard !samples.isEmpty else { return nil }
 
@@ -193,7 +195,21 @@ final class DataExporter {
             try? fm.copyItem(at: imageURL, to: imagesDest.appendingPathComponent(imageURL.lastPathComponent))
         }
 
-        // 3. Zip the staging directory.
+        // 3. IMU CSVs: Documents/imu/<sessionId>.csv → staging/imu/<sessionId>.csv
+        let imuSrc = FileManager.default
+            .urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("imu", isDirectory: true)
+        if fm.fileExists(atPath: imuSrc.path) {
+            let imuDest = staging.appendingPathComponent("imu", isDirectory: true)
+            try? fm.createDirectory(at: imuDest, withIntermediateDirectories: true)
+            if let files = try? fm.contentsOfDirectory(at: imuSrc, includingPropertiesForKeys: nil) {
+                for f in files where f.pathExtension == "csv" {
+                    try? fm.copyItem(at: f, to: imuDest.appendingPathComponent(f.lastPathComponent))
+                }
+            }
+        }
+
+        // 4. Zip the staging directory.
         return zipDirectory(staging, zipName: "\(stagingName).zip")
     }
 

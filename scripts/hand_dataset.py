@@ -8,11 +8,14 @@ and returns (image_paths, labels) suitable for the training pipeline.
 Manifest CSV schema (one row per HandSample):
     participant_first, participant_last, study_id, session_id,
     study_session_index, captured_at_iso, holding_hand,
-    image_relative_path, image_pixel_width, image_pixel_height,
+    image_relative_path, imu_relative_path, image_pixel_width, image_pixel_height,
     camera_position, device_model, system_version, notes
 
 `holding_hand` values: left | right | both | unknown
 `image_relative_path` is relative to --images-root (e.g. "hand_images/<uuid>.jpg").
+`imu_relative_path` is an OPTIONAL 15th column (relative to --images-root, e.g.
+"imu/<sessionId>.csv"), one IMU CSV per session_id. Older 14-column manifests
+without this column are still fully supported (treated as "no IMU").
 
 Usage:
     python3 scripts/hand_dataset.py <manifest.csv> --images-root <dir>
@@ -27,7 +30,8 @@ Missing images are skipped with a warning — never aborted.
 External dataset layout
 -----------------------
 Any directory of JPEGs + a 14-column manifest in the schema above works
-unchanged.  The participant grouping key is ``participant_first|participant_last``
+unchanged (the optional 15th ``imu_relative_path`` column is not required).
+The participant grouping key is ``participant_first|participant_last``
 (lowercased + stripped).  Time order within a participant is determined by
 ``study_session_index`` (ascending integer), then ``captured_at_iso``, then
 ``image_relative_path`` as stable tiebreakers.
@@ -137,6 +141,12 @@ def load_dataset_records(
         participant_key   (str: f"{first}|{last}" lowercased+stripped)
         sort_key          (tuple: (study_session_index_int, captured_at_iso,
                            image_relative_path))
+        imu_path          (str, absolute) or None — resolved from the optional
+                           `imu_relative_path` column; None when the column is
+                           absent (14-column manifest), empty, or the file does
+                           not exist on disk. A missing/absent IMU path never
+                           causes the row to be skipped — image-only samples
+                           remain valid.
 
     Skips rows with missing/invalid label or missing image file (same rules as
     load_dataset: warn on not-found and bad-label, silent skip on empty
@@ -150,6 +160,7 @@ def load_dataset_records(
 
     records: list[dict] = []
     _warned_parse = False
+    _warned_imu_missing = False
 
     with manifest.open(newline="", encoding="utf-8") as fh:
         reader = csv.DictReader(fh)
@@ -197,11 +208,28 @@ def load_dataset_records(
             captured_at = (row.get("captured_at_iso") or "").strip()
             sort_key = (session_idx, captured_at, rel_path)
 
+            # Optional imu_relative_path column (absent in 14-column manifests).
+            imu_rel = (row.get("imu_relative_path") or "").strip()
+            imu_path: str | None = None
+            if imu_rel:
+                imu_abs = root / imu_rel
+                if imu_abs.exists():
+                    imu_path = str(imu_abs)
+                else:
+                    if not _warned_imu_missing:
+                        warnings.warn(
+                            f"Row {row_num}: IMU CSV not found at {imu_abs} — "
+                            "treating this row as image-only.",
+                            stacklevel=2,
+                        )
+                        _warned_imu_missing = True
+
             records.append({
                 "image_path": str(abs_path),
                 "label": label,
                 "participant_key": participant_key,
                 "sort_key": sort_key,
+                "imu_path": imu_path,
             })
 
     return records
@@ -237,6 +265,12 @@ def _make_demo_manifest_and_images(
     encodes the class (left third / right third / center), giving the centroid
     baseline real separability signal.
 
+    Also writes one synthetic IMU CSV per (participant, condition) block under
+    `<tmp_dir>/imu/<name>.csv`, matching the exact 13-column MotionRecorder
+    header, with values offset per condition so IMU fusion is demonstrably
+    separable. Every row belonging to that block gets
+    `imu_relative_path = imu/<name>.csv`.
+
     Returns (manifest_csv_path, images_root).
     """
     _require_pil()
@@ -246,13 +280,31 @@ def _make_demo_manifest_and_images(
     images_dir = tmp_dir / "hand_images"
     images_dir.mkdir(parents=True, exist_ok=True)
 
+    imu_dir = tmp_dir / "imu"
+    imu_dir.mkdir(parents=True, exist_ok=True)
+
     manifest_path = tmp_dir / "hand_manifest_demo.csv"
     fieldnames = [
         "participant_first", "participant_last", "study_id", "session_id",
         "study_session_index", "captured_at_iso", "holding_hand",
-        "image_relative_path", "image_pixel_width", "image_pixel_height",
+        "image_relative_path", "imu_relative_path", "image_pixel_width",
+        "image_pixel_height",
         "camera_position", "device_model", "system_version", "notes",
     ]
+
+    # 13-column IMU CSV header, exact order from MotionRecorder.swift.
+    _IMU_HEADER = [
+        "t_ms", "attitude_roll", "attitude_pitch", "attitude_yaw",
+        "grav_x", "grav_y", "grav_z", "acc_x", "acc_y", "acc_z",
+        "rot_x", "rot_y", "rot_z",
+    ]
+    # Per-condition offset on one channel (attitude_roll) so fusion has a
+    # class-separable signal distinct from the image signal.
+    _condition_imu_offset = {
+        "left":  -1.0,
+        "right":  1.0,
+        "both":   0.0,
+    }
 
     # 2 participants, 3 conditions, 20 frames each
     participants = [
@@ -289,6 +341,37 @@ def _make_demo_manifest_and_images(
             for cond in conditions:
                 x0, x1 = condition_rect[cond]
                 base_r, base_g, base_b = condition_color[cond]
+
+                # One IMU CSV per (participant, condition) block — matches the
+                # app's one-CSV-per-session_id join key.
+                imu_name = f"{p_first.lower()}_{p_last.lower()}_{cond}"
+                imu_rel_path = f"imu/{imu_name}.csv"
+                imu_csv_path = imu_dir / f"{imu_name}.csv"
+                roll_offset = _condition_imu_offset[cond]
+                with imu_csv_path.open("w", newline="", encoding="utf-8") as imu_fh:
+                    imu_writer = csv.writer(imu_fh)
+                    imu_writer.writerow(_IMU_HEADER)
+                    for imu_row in range(40):
+                        t_ms = imu_row * 20.0  # ~50 Hz
+                        roll = roll_offset + rng.uniform(-0.05, 0.05)
+                        pitch = rng.uniform(-0.05, 0.05)
+                        yaw = rng.uniform(-0.05, 0.05)
+                        grav_x = rng.uniform(-0.1, 0.1)
+                        grav_y = rng.uniform(-0.1, 0.1)
+                        grav_z = -1.0 + rng.uniform(-0.05, 0.05)
+                        acc_x = rng.uniform(-0.1, 0.1)
+                        acc_y = rng.uniform(-0.1, 0.1)
+                        acc_z = rng.uniform(-0.1, 0.1)
+                        rot_x = rng.uniform(-0.1, 0.1)
+                        rot_y = rng.uniform(-0.1, 0.1)
+                        rot_z = rng.uniform(-0.1, 0.1)
+                        imu_writer.writerow([
+                            f"{t_ms:.3f}", f"{roll:.6f}", f"{pitch:.6f}", f"{yaw:.6f}",
+                            f"{grav_x:.6f}", f"{grav_y:.6f}", f"{grav_z:.6f}",
+                            f"{acc_x:.6f}", f"{acc_y:.6f}", f"{acc_z:.6f}",
+                            f"{rot_x:.6f}", f"{rot_y:.6f}", f"{rot_z:.6f}",
+                        ])
+
                 for frame_idx in range(frames_per_condition):
                     img_name = f"demo_{row_idx:04d}.jpg"
                     img_path = images_dir / img_name
@@ -321,6 +404,7 @@ def _make_demo_manifest_and_images(
                         "captured_at_iso":   captured_at,
                         "holding_hand":      cond,
                         "image_relative_path": f"hand_images/{img_name}",
+                        "imu_relative_path": imu_rel_path,
                         "image_pixel_width":  str(img_size),
                         "image_pixel_height": str(img_size),
                         "camera_position":   "front",

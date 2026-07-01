@@ -476,6 +476,7 @@ struct HandCaptureView: View {
             capturedAt: Date(),
             holdingHand: hand,
             imageRelativePath: rel,
+            imuRelativePath: sessionId.map { "imu/\($0.uuidString).csv" } ?? "",
             imagePixelWidth: w,
             imagePixelHeight: h,
             cameraPosition: "front",

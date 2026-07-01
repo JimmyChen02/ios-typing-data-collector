@@ -3,8 +3,7 @@ import CoreMotion
 
 // MARK: - MotionRecorder
 //
-// OFF by default (isEnabled = false). Set isEnabled = true before calling
-// start() to activate IMU recording. While isEnabled = false, start() and
+// ON by default (isEnabled = true). While isEnabled = false, start() and
 // stop() are no-ops so the class is safe to wire up without activating it.
 //
 // When enabled: samples CMDeviceMotion at 50 Hz, buffers frames in memory,
@@ -14,8 +13,8 @@ import CoreMotion
 //   t_ms,attitude_roll,attitude_pitch,attitude_yaw,
 //   grav_x,grav_y,grav_z,acc_x,acc_y,acc_z,rot_x,rot_y,rot_z
 //
-// IMU fusion with hand images is documented as future work (spec decision 6).
-// SessionManager does NOT call start/stop — see the seam comments there.
+// SessionManager calls start() in startSession(...) and stop() in
+// finalizeSession() — see the seam call sites there.
 
 final class MotionRecorder {
 
@@ -23,7 +22,7 @@ final class MotionRecorder {
     private init() {}
 
     // Set to true (and set before calling start) to activate recording.
-    var isEnabled: Bool = false
+    var isEnabled: Bool = true
 
     // MARK: - Private State
 

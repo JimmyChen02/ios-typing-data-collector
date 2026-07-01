@@ -135,6 +135,15 @@ _DEFAULT_EPOCHS = 2
 _CENTROID_LEFT_THRESH  = 0.42
 _CENTROID_RIGHT_THRESH = 0.58
 
+# 12 IMU channels (excludes t_ms), 4 stats each → 48-d summary vector
+_IMU_CHANNELS = [
+    "attitude_roll", "attitude_pitch", "attitude_yaw",
+    "grav_x", "grav_y", "grav_z",
+    "acc_x", "acc_y", "acc_z",
+    "rot_x", "rot_y", "rot_z",
+]
+_IMU_FEATURE_DIM = 48  # 12 channels × {mean, std, min, max}
+
 
 # ---------------------------------------------------------------------------
 # Pipeline stage 1 — preprocess
@@ -309,6 +318,81 @@ def _features_vgg16(silhouette: "np.ndarray", keras) -> "np.ndarray":
     x = preprocess_input(rgb[np.newaxis, ...])  # (1, 224, 224, 3)
     features = backbone.predict(x, verbose=0)  # (1, 7, 7, 512)
     return features.flatten()
+
+
+# ---------------------------------------------------------------------------
+# IMU feature extraction (feature-level fusion, see --use-imu)
+# ---------------------------------------------------------------------------
+
+_warned_imu_reasons: set = set()
+
+
+def imu_summary_features(imu_path: "str | None") -> "np.ndarray":
+    """Return a 48-d float32 vector: [mean,std,min,max] per IMU channel,
+    channels in _IMU_CHANNELS order (stats grouped per channel:
+    ch0_mean,ch0_std,ch0_min,ch0_max, ch1_mean,...).
+
+    imu_path None, missing file, unreadable, or header-only (no data rows)
+    → zeros(48). Warns once per distinct failure reason. Reads the CSV with
+    csv.DictReader; ignores unexpected extra columns; missing expected column
+    → that channel's 4 stats are 0. Non-numeric cells are skipped per-cell.
+    """
+    def _warn_once(reason: str, msg: str) -> None:
+        if reason not in _warned_imu_reasons:
+            warnings.warn(msg, stacklevel=2)
+            _warned_imu_reasons.add(reason)
+
+    if not imu_path:
+        _warn_once("no_path", "imu_summary_features: no IMU path provided for "
+                   "one or more samples — using zeros(48).")
+        return np.zeros(_IMU_FEATURE_DIM, dtype=np.float32)
+
+    path = Path(imu_path)
+    if not path.exists():
+        _warn_once("missing_file", f"imu_summary_features: IMU file not found "
+                   f"({path}) — using zeros(48) for affected samples.")
+        return np.zeros(_IMU_FEATURE_DIM, dtype=np.float32)
+
+    import csv as _csv
+
+    channel_values: dict[str, list[float]] = {ch: [] for ch in _IMU_CHANNELS}
+    try:
+        with path.open(newline="", encoding="utf-8") as fh:
+            reader = _csv.DictReader(fh)
+            for row in reader:
+                for ch in _IMU_CHANNELS:
+                    raw = row.get(ch)
+                    if raw is None:
+                        continue
+                    try:
+                        channel_values[ch].append(float(raw))
+                    except (ValueError, TypeError):
+                        continue  # skip non-numeric cell
+    except Exception as exc:
+        _warn_once("unreadable", f"imu_summary_features: could not read IMU "
+                   f"CSV ({path}): {exc} — using zeros(48).")
+        return np.zeros(_IMU_FEATURE_DIM, dtype=np.float32)
+
+    if all(len(v) == 0 for v in channel_values.values()):
+        _warn_once("header_only", f"imu_summary_features: IMU CSV has no "
+                   f"data rows ({path}) — using zeros(48).")
+        return np.zeros(_IMU_FEATURE_DIM, dtype=np.float32)
+
+    stats: list[float] = []
+    for ch in _IMU_CHANNELS:
+        vals = channel_values[ch]
+        if not vals:
+            stats.extend([0.0, 0.0, 0.0, 0.0])
+            continue
+        arr = np.array(vals, dtype=np.float64)
+        stats.extend([
+            float(np.mean(arr)),
+            float(np.std(arr, ddof=0)),
+            float(np.min(arr)),
+            float(np.max(arr)),
+        ])
+
+    return np.array(stats, dtype=np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -768,6 +852,15 @@ def main() -> None:
         print(f"[FALLBACK — not paper results] Missing: {', '.join(missing)}. "
               "Lightweight substitutes will run.")
 
+    # IMU fusion banner. NOTE: `_write_markdown_results` keeps only the single
+    # BEST run by windowed accuracy — an image+IMU run and an image-only run
+    # compete for the same block. To compare both, use DIFFERENT --md-out
+    # paths (or --out dirs) for the two runs.
+    if args.use_imu:
+        print(f"IMU fusion: ON ({_IMU_FEATURE_DIM}-d)")
+    else:
+        print("IMU fusion: OFF")
+
     if args.demo:
         print("\n-- demo mode: generating synthetic manifest and images --")
         tmp = Path(tempfile.mkdtemp(prefix="train_hand_demo_"))
@@ -821,7 +914,13 @@ def main() -> None:
         if need_silhouettes:
             silhouettes.append(sil)
         if need_features:
-            feature_list.append(extract_features(sil))
+            img_feat = extract_features(sil)
+            if args.use_imu:
+                imu_feat = imu_summary_features(r.get("imu_path"))
+                feat = np.concatenate([img_feat, imu_feat])
+            else:
+                feat = img_feat
+            feature_list.append(feat)
         if (i + 1) % 50 == 0 or (i + 1) == n_records:
             print(f"  processed {i + 1}/{n_records} frames", flush=True)
 
@@ -901,6 +1000,7 @@ def main() -> None:
             "handynet_frame_acc":   float("nan"),
             "handynet_windowed_acc": float("nan"),
             "centroid_frame_acc":   float("nan"),
+            "imu_fusion":           bool(args.use_imu),
         }
 
         # ---- Option B: HandyNet ----
@@ -1015,11 +1115,11 @@ def main() -> None:
     print(f"\nSummary written to: {summary_path}")
 
     if md_out:
-        if _write_markdown_results(Path(md_out), summary_rows, mode, epochs, _nanmean):
+        if _write_markdown_results(Path(md_out), summary_rows, mode, epochs, _nanmean,
+                                   imu_fusion=args.use_imu):
             print(f"Results chart written to: {md_out}")
 
     print("\nFuture work:")
-    print("  - IMU+image multimodal fusion")
     print("  - On-device Core ML conversion")
     print("  - Landscape-mode capture")
 
@@ -1029,7 +1129,8 @@ def _fmt(v: float) -> str:
     return f"{v:.3f}" if not math.isnan(v) else "   nan"
 
 
-def _write_markdown_results(md_path, summary_rows, mode, epochs, nanmean) -> None:
+def _write_markdown_results(md_path, summary_rows, mode, epochs, nanmean,
+                            imu_fusion: bool = False) -> None:
     """Write/update an auto-generated results chart in a markdown file.
 
     Only the single BEST run is kept: the section records the run with the
@@ -1039,6 +1140,10 @@ def _write_markdown_results(md_path, summary_rows, mode, epochs, nanmean) -> Non
     markers so the rest of the file (hand-written notes) stays intact. If the
     markers are absent, the section is appended; if the file does not exist, it
     is created.
+
+    NOTE: because only the single best run is kept, an image+IMU run and an
+    image-only run compete for the same block — use different --md-out paths
+    (or --out dirs) to compare both (see the fusion banner comment in main()).
     """
     import re
     from datetime import datetime, timezone
@@ -1073,7 +1178,8 @@ def _write_markdown_results(md_path, summary_rows, mode, epochs, nanmean) -> Non
         "## Best training run so far (auto-generated)",
         "",
         f"_Generated {ts} by `train_hand_classifier.py` "
-        f"(mode={mode}, epochs={epochs}). This section keeps the BEST run "
+        f"(mode={mode}, epochs={epochs}, imu={'on' if imu_fusion else 'off'}). "
+        f"This section keeps the BEST run "
         f"(highest mean held-out windowed accuracy); it is overwritten only "
         f"when a later run beats it._",
         "",
@@ -1197,6 +1303,13 @@ def _parse_args() -> argparse.Namespace:
              "The final results chart is written into a delimited, auto-updated "
              "section of that file (replaced on each run; the rest of the file is "
              "preserved).",
+    )
+    parser.add_argument(
+        "--use-imu",
+        action="store_true",
+        help="Concatenate a 48-d IMU summary vector onto the image features "
+             "before the softmax head (feature-level fusion). Requires "
+             "imu_relative_path in the manifest.",
     )
     return parser.parse_args()
 

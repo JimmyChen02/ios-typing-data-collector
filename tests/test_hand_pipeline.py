@@ -19,6 +19,7 @@ import csv
 import json
 import os
 import pickle
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -646,6 +647,483 @@ class TestLoadDatasetRecords(unittest.TestCase):
             for sk in sort_keys:
                 self.assertIsInstance(sk, tuple)
                 self.assertEqual(len(sk), 3)
+
+
+# ---------------------------------------------------------------------------
+# NEW: IMU + image fusion (spec.md Part B)
+# ---------------------------------------------------------------------------
+
+# Exact 13-column MotionRecorder.swift CSV header (t_ms + 12 channels).
+_IMU_HEADER = [
+    "t_ms", "attitude_roll", "attitude_pitch", "attitude_yaw",
+    "grav_x", "grav_y", "grav_z", "acc_x", "acc_y", "acc_z",
+    "rot_x", "rot_y", "rot_z",
+]
+
+
+def _write_imu_csv(path: Path, rows: list[list[float]]) -> None:
+    """Write an IMU CSV with the exact 13-column MotionRecorder header."""
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(_IMU_HEADER)
+        for row in rows:
+            writer.writerow(row)
+
+
+class TestImuSummaryFeatures(unittest.TestCase):
+    """scripts/train_hand_classifier.py::imu_summary_features"""
+
+    # -----------------------------------------------------------------------
+    # Happy path: layout is mean/std/min/max per channel, in MotionRecorder
+    # column order (t_ms excluded), deterministic values.
+    # -----------------------------------------------------------------------
+    def test_happy_path_layout_and_values(self):
+        """Two known data rows produce exact mean/std/min/max per channel."""
+        import numpy as np
+        with tempfile.TemporaryDirectory(prefix="imu_test_") as tmp:
+            csv_path = Path(tmp) / "sess.csv"
+            # channel values: row1 = i, row2 = i+10 for the i-th channel (0-indexed
+            # over the 12 channels, t_ms is channel-agnostic/ignored).
+            row1 = [0.0] + [float(i) for i in range(12)]
+            row2 = [20.0] + [float(i) + 10.0 for i in range(12)]
+            _write_imu_csv(csv_path, [row1, row2])
+
+            feat = thc.imu_summary_features(str(csv_path))
+
+        self.assertEqual(feat.shape, (48,))
+        self.assertEqual(feat.dtype, np.float32)
+
+        for i, ch in enumerate(thc._IMU_CHANNELS):
+            lo = float(i)
+            hi = float(i) + 10.0
+            mean, std, mn, mx = feat[i * 4: i * 4 + 4]
+            self.assertAlmostEqual(float(mean), (lo + hi) / 2.0, places=4)
+            self.assertAlmostEqual(float(std), abs(hi - lo) / 2.0, places=4)  # ddof=0, n=2
+            self.assertAlmostEqual(float(mn), lo, places=4)
+            self.assertAlmostEqual(float(mx), hi, places=4)
+
+    # -----------------------------------------------------------------------
+    # 48-d layout matches _IMU_CHANNELS order / _IMU_FEATURE_DIM constant
+    # -----------------------------------------------------------------------
+    def test_channel_order_and_dim_constants(self):
+        """_IMU_CHANNELS has 12 entries (t_ms excluded); _IMU_FEATURE_DIM == 48."""
+        self.assertEqual(len(thc._IMU_CHANNELS), 12)
+        self.assertNotIn("t_ms", thc._IMU_CHANNELS)
+        self.assertEqual(thc._IMU_CHANNELS, [
+            "attitude_roll", "attitude_pitch", "attitude_yaw",
+            "grav_x", "grav_y", "grav_z",
+            "acc_x", "acc_y", "acc_z",
+            "rot_x", "rot_y", "rot_z",
+        ])
+        self.assertEqual(thc._IMU_FEATURE_DIM, 48)
+
+    # -----------------------------------------------------------------------
+    # Edge case: single data row → std == 0 for every channel
+    # -----------------------------------------------------------------------
+    def test_single_frame_std_is_zero(self):
+        """A single data row yields std=0 (population std, n=1) for every channel."""
+        import numpy as np
+        with tempfile.TemporaryDirectory(prefix="imu_test_") as tmp:
+            csv_path = Path(tmp) / "sess.csv"
+            row = [0.0] + [float(i) for i in range(12)]
+            _write_imu_csv(csv_path, [row])
+
+            feat = thc.imu_summary_features(str(csv_path))
+
+        for i, ch in enumerate(thc._IMU_CHANNELS):
+            std = feat[i * 4 + 1]
+            self.assertEqual(float(std), 0.0, f"channel {ch}: expected std=0, got {std}")
+            mean, _, mn, mx = feat[i * 4], feat[i * 4 + 1], feat[i * 4 + 2], feat[i * 4 + 3]
+            self.assertAlmostEqual(float(mean), float(i), places=4)
+            self.assertAlmostEqual(float(mn), float(i), places=4)
+            self.assertAlmostEqual(float(mx), float(i), places=4)
+
+    # -----------------------------------------------------------------------
+    # Edge case: None path → zeros(48), NaN-safe (no exception)
+    # -----------------------------------------------------------------------
+    def test_none_path_returns_zeros(self):
+        """imu_summary_features(None) returns an all-zero 48-d vector, no crash."""
+        import numpy as np
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            feat = thc.imu_summary_features(None)
+        self.assertEqual(feat.shape, (48,))
+        self.assertTrue(np.all(feat == 0.0))
+
+    # -----------------------------------------------------------------------
+    # Edge case: nonexistent file → zeros(48), warns, no crash
+    # -----------------------------------------------------------------------
+    def test_missing_file_returns_zeros(self):
+        """A non-existent IMU path returns zeros(48) with a warning, no exception."""
+        import numpy as np
+        # Use a fresh reason so this test doesn't depend on warning dedup state
+        # from other tests (module-level _warned_imu_reasons is a shared set).
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            feat = thc.imu_summary_features("/nonexistent/does_not_exist_xyzzy.csv")
+        self.assertEqual(feat.shape, (48,))
+        self.assertTrue(np.all(feat == 0.0))
+
+    # -----------------------------------------------------------------------
+    # Edge case: header-only CSV (empty session) → zeros(48)
+    # -----------------------------------------------------------------------
+    def test_header_only_csv_returns_zeros(self):
+        """A header-only IMU CSV (zero data rows) returns zeros(48), no crash."""
+        import numpy as np
+        with tempfile.TemporaryDirectory(prefix="imu_test_") as tmp:
+            csv_path = Path(tmp) / "empty_session.csv"
+            _write_imu_csv(csv_path, [])  # header only, no rows
+
+            with warnings.catch_warnings(record=True):
+                warnings.simplefilter("always")
+                feat = thc.imu_summary_features(str(csv_path))
+
+        self.assertEqual(feat.shape, (48,))
+        self.assertTrue(np.all(feat == 0.0))
+
+    # -----------------------------------------------------------------------
+    # NaN-safety: non-numeric cells are skipped per-cell, not fatal
+    # -----------------------------------------------------------------------
+    def test_non_numeric_cells_skipped_not_fatal(self):
+        """Non-numeric cell values are skipped per-cell; the row/file is not fatal."""
+        import numpy as np
+        with tempfile.TemporaryDirectory(prefix="imu_test_") as tmp:
+            csv_path = Path(tmp) / "sess.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(_IMU_HEADER)
+                # attitude_roll has a garbage value on row 1 but a valid one on row 2
+                writer.writerow([0.0, "NaN_GARBAGE", 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+                writer.writerow([20.0, 5.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+
+            feat = thc.imu_summary_features(str(csv_path))
+
+        # No exception; result is finite everywhere
+        self.assertTrue(np.all(np.isfinite(feat)))
+        # attitude_roll (channel 0): only the valid 5.0 value should count
+        roll_mean = feat[0]
+        self.assertAlmostEqual(float(roll_mean), 5.0, places=4)
+
+    # -----------------------------------------------------------------------
+    # Edge case: missing expected column → that channel's 4 stats are 0
+    # -----------------------------------------------------------------------
+    def test_missing_expected_column_zeros_that_channel(self):
+        """A CSV missing one expected IMU column yields zeros for that channel only."""
+        import numpy as np
+        with tempfile.TemporaryDirectory(prefix="imu_test_") as tmp:
+            csv_path = Path(tmp) / "sess.csv"
+            header = [h for h in _IMU_HEADER if h != "rot_z"]  # drop rot_z
+            with csv_path.open("w", newline="", encoding="utf-8") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(header)
+                writer.writerow([0.0] + [1.0] * (len(header) - 1))
+                writer.writerow([20.0] + [3.0] * (len(header) - 1))
+
+            feat = thc.imu_summary_features(str(csv_path))
+
+        rot_z_idx = thc._IMU_CHANNELS.index("rot_z")
+        rot_z_stats = feat[rot_z_idx * 4: rot_z_idx * 4 + 4]
+        self.assertTrue(np.all(rot_z_stats == 0.0))
+        # A present channel should have picked up real values
+        roll_idx = thc._IMU_CHANNELS.index("attitude_roll")
+        self.assertAlmostEqual(float(feat[roll_idx * 4]), 2.0, places=4)  # mean(1,3)
+
+
+class TestUseImuFusion(unittest.TestCase):
+    """--use-imu concatenation / feature-dim / centroid-mode-ignore behavior."""
+
+    def test_use_imu_concatenation_adds_exactly_48_dims(self):
+        """img_feat concatenated with imu_summary_features grows dim by exactly 48."""
+        import numpy as np
+        mask = (np.random.rand(224, 224) > 0.5).astype("uint8") * 255
+        img_feat = thc.extract_features(mask)
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            imu_feat = thc.imu_summary_features(None)
+        fused = np.concatenate([img_feat, imu_feat])
+        self.assertEqual(len(fused), len(img_feat) + 48)
+
+    def test_demo_train_hand_classifier_use_imu_flag_cli(self):
+        """`train_hand_classifier.py --demo --use-imu` runs end-to-end via CLI,
+        printing the ON banner and completing without error."""
+        script = SCRIPTS_DIR / "train_hand_classifier.py"
+        result = subprocess.run(
+            [sys.executable, str(script), "--demo", "--use-imu", "--epochs", "1"],
+            capture_output=True, text=True, timeout=300,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("IMU fusion: ON (48-d)", result.stdout)
+
+    def test_demo_train_hand_classifier_without_use_imu_flag_cli(self):
+        """Without --use-imu, the OFF banner prints and the run still succeeds."""
+        script = SCRIPTS_DIR / "train_hand_classifier.py"
+        result = subprocess.run(
+            [sys.executable, str(script), "--demo", "--epochs", "1"],
+            capture_output=True, text=True, timeout=300,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("IMU fusion: OFF", result.stdout)
+
+    def test_use_imu_with_centroid_mode_ignored_no_error(self):
+        """--use-imu with --mode centroid completes normally; IMU has no effect
+        (centroid path doesn't use `features_arr` at all).
+
+        Note: stderr may contain a benign, internally-caught traceback from the
+        optional tensorflow/keras import probe (`_try_import_keras`, which
+        catches all exceptions and returns None on failure) — that is a
+        pre-existing environment quirk unrelated to --use-imu, so we assert on
+        exit code and stdout content rather than stderr being clean.
+        """
+        script = SCRIPTS_DIR / "train_hand_classifier.py"
+        result = subprocess.run(
+            [sys.executable, str(script), "--demo", "--use-imu",
+             "--mode", "centroid", "--epochs", "1"],
+            capture_output=True, text=True, timeout=300,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("IMU fusion: ON (48-d)", result.stdout)
+        # Centroid summary must still be produced (proves the run reached the end)
+        self.assertIn("Summary written to:", result.stdout)
+
+    def test_summary_rows_record_fusion_flag(self):
+        """summary.json rows include imu_fusion: true/false matching the CLI flag."""
+        with tempfile.TemporaryDirectory(prefix="thc_cli_") as tmp:
+            script = SCRIPTS_DIR / "train_hand_classifier.py"
+            out_dir = Path(tmp) / "out"
+            result = subprocess.run(
+                [sys.executable, str(script), "--demo", "--use-imu",
+                 "--epochs", "1", "--out", str(out_dir)],
+                capture_output=True, text=True, timeout=300,
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+            # --demo overrides --out with its own tmp dir per main(); locate the
+            # summary.json path the run actually reported instead of assuming out_dir.
+            m = None
+            for line in result.stdout.splitlines():
+                if line.startswith("Summary written to:"):
+                    m = line.split("Summary written to:", 1)[1].strip()
+            self.assertIsNotNone(m, msg=result.stdout)
+            with open(m, encoding="utf-8") as fh:
+                summary = json.load(fh)
+        self.assertTrue(len(summary) > 0)
+        for row in summary:
+            self.assertIn("imu_fusion", row)
+            self.assertTrue(row["imu_fusion"] is True)
+
+
+class TestHandDatasetImuColumn(unittest.TestCase):
+    """scripts/hand_dataset.py::load_dataset_records imu_path handling."""
+
+    # -----------------------------------------------------------------------
+    # Happy path: 15-column manifest with a real IMU CSV → imu_path resolved
+    # -----------------------------------------------------------------------
+    def test_imu_path_resolved_when_present_and_exists(self):
+        with tempfile.TemporaryDirectory(prefix="hd_imu_") as tmp:
+            tmp_path = Path(tmp)
+            img_dir = tmp_path / "hand_images"
+            img_dir.mkdir()
+            imu_dir = tmp_path / "imu"
+            imu_dir.mkdir()
+
+            _make_solid_image(img_dir / "img.jpg")
+            imu_csv = imu_dir / "session-1.csv"
+            _write_imu_csv(imu_csv, [[0.0] + [1.0] * 12])
+
+            fieldnames = [
+                "participant_first", "participant_last", "study_id", "session_id",
+                "study_session_index", "captured_at_iso", "holding_hand",
+                "image_relative_path", "imu_relative_path", "image_pixel_width",
+                "image_pixel_height", "camera_position", "device_model",
+                "system_version", "notes",
+            ]
+            manifest_path = tmp_path / "manifest.csv"
+            with manifest_path.open("w", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(fh, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerow({
+                    "holding_hand": "left",
+                    "image_relative_path": "hand_images/img.jpg",
+                    "imu_relative_path": "imu/session-1.csv",
+                })
+
+            records = hd.load_dataset_records(str(manifest_path), str(tmp_path))
+
+        self.assertEqual(len(records), 1)
+        self.assertIsNotNone(records[0]["imu_path"])
+        self.assertEqual(Path(records[0]["imu_path"]), imu_csv)
+
+    # -----------------------------------------------------------------------
+    # Backward compatibility: legacy 14-column manifest (no imu_relative_path
+    # header at all) → imu_path=None for every row, no warning, no crash, row
+    # not skipped.
+    # -----------------------------------------------------------------------
+    def test_legacy_14_column_manifest_backward_compatible(self):
+        with tempfile.TemporaryDirectory(prefix="hd_imu_legacy_") as tmp:
+            tmp_path = Path(tmp)
+            img_dir = tmp_path / "hand_images"
+            img_dir.mkdir()
+            _make_solid_image(img_dir / "img.jpg")
+
+            rows = [{
+                "holding_hand": "left",
+                "image_relative_path": "hand_images/img.jpg",
+            }]
+            manifest_path = tmp_path / "manifest.csv"
+            _write_manifest(manifest_path, rows)  # 14-column writer (no imu column)
+
+            with open(manifest_path, encoding="utf-8") as fh:
+                header_line = fh.readline().strip()
+            self.assertNotIn("imu_relative_path", header_line)
+
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                records = hd.load_dataset_records(str(manifest_path), str(tmp_path))
+
+        self.assertEqual(len(records), 1, "row must not be skipped")
+        self.assertIsNone(records[0]["imu_path"])
+        imu_warnings = [str(w.message) for w in caught if "imu" in str(w.message).lower()]
+        self.assertEqual(imu_warnings, [], f"expected no IMU warnings, got: {imu_warnings}")
+
+    # -----------------------------------------------------------------------
+    # Edge case: imu_relative_path column present but file missing on disk
+    # → imu_path=None, row NOT skipped (image-only sample remains valid)
+    # -----------------------------------------------------------------------
+    def test_missing_imu_file_on_disk_not_skipped(self):
+        with tempfile.TemporaryDirectory(prefix="hd_imu_missing_") as tmp:
+            tmp_path = Path(tmp)
+            img_dir = tmp_path / "hand_images"
+            img_dir.mkdir()
+            _make_solid_image(img_dir / "img.jpg")
+
+            fieldnames = [
+                "participant_first", "participant_last", "study_id", "session_id",
+                "study_session_index", "captured_at_iso", "holding_hand",
+                "image_relative_path", "imu_relative_path", "image_pixel_width",
+                "image_pixel_height", "camera_position", "device_model",
+                "system_version", "notes",
+            ]
+            manifest_path = tmp_path / "manifest.csv"
+            with manifest_path.open("w", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(fh, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerow({
+                    "holding_hand": "right",
+                    "image_relative_path": "hand_images/img.jpg",
+                    "imu_relative_path": "imu/NONEXISTENT.csv",
+                })
+
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                records = hd.load_dataset_records(str(manifest_path), str(tmp_path))
+
+        self.assertEqual(len(records), 1, "row must not be skipped for missing IMU file")
+        self.assertIsNone(records[0]["imu_path"])
+        self.assertEqual(records[0]["label"], "right")
+
+    # -----------------------------------------------------------------------
+    # Mixed manifest: some rows have IMU, some don't (empty column value)
+    # -----------------------------------------------------------------------
+    def test_mixed_manifest_some_rows_have_imu(self):
+        with tempfile.TemporaryDirectory(prefix="hd_imu_mixed_") as tmp:
+            tmp_path = Path(tmp)
+            img_dir = tmp_path / "hand_images"
+            img_dir.mkdir()
+            imu_dir = tmp_path / "imu"
+            imu_dir.mkdir()
+
+            _make_solid_image(img_dir / "a.jpg")
+            _make_solid_image(img_dir / "b.jpg")
+            imu_csv = imu_dir / "sess.csv"
+            _write_imu_csv(imu_csv, [[0.0] + [1.0] * 12])
+
+            fieldnames = [
+                "participant_first", "participant_last", "study_id", "session_id",
+                "study_session_index", "captured_at_iso", "holding_hand",
+                "image_relative_path", "imu_relative_path", "image_pixel_width",
+                "image_pixel_height", "camera_position", "device_model",
+                "system_version", "notes",
+            ]
+            manifest_path = tmp_path / "manifest.csv"
+            with manifest_path.open("w", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(fh, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerow({
+                    "holding_hand": "left",
+                    "image_relative_path": "hand_images/a.jpg",
+                    "imu_relative_path": "imu/sess.csv",
+                })
+                writer.writerow({
+                    "holding_hand": "right",
+                    "image_relative_path": "hand_images/b.jpg",
+                    "imu_relative_path": "",
+                })
+
+            records = hd.load_dataset_records(str(manifest_path), str(tmp_path))
+
+        self.assertEqual(len(records), 2)
+        by_label = {r["label"]: r for r in records}
+        self.assertIsNotNone(by_label["left"]["imu_path"])
+        self.assertIsNone(by_label["right"]["imu_path"])
+
+    # -----------------------------------------------------------------------
+    # Demo end-to-end: --demo produces a 15-column manifest with real IMU CSVs
+    # -----------------------------------------------------------------------
+    def test_demo_manifest_has_imu_column_and_files(self):
+        with tempfile.TemporaryDirectory(prefix="hd_imu_demo_") as tmp:
+            tmp_path = Path(tmp)
+            manifest_path, images_root = hd._make_demo_manifest_and_images(tmp_path)
+
+            with open(manifest_path, encoding="utf-8") as fh:
+                header = fh.readline().strip().split(",")
+            self.assertIn("imu_relative_path", header)
+            self.assertEqual(len(header), 15)
+
+            records = hd.load_dataset_records(manifest_path, images_root)
+
+        self.assertEqual(len(records), 120)
+        # All demo rows reference an IMU CSV that exists on disk
+        self.assertTrue(all(r["imu_path"] is not None for r in records))
+        # Exactly 6 distinct IMU CSVs (2 participants x 3 conditions)
+        distinct_imu = set(r["imu_path"] for r in records)
+        self.assertEqual(len(distinct_imu), 6)
+
+
+class TestExistingManifestsBackwardCompat(unittest.TestCase):
+    """Regression: real 14-column manifests under Model-Training-Test/ must
+    still load unchanged (imu_path=None, no crash, no row loss)."""
+
+    _MANIFEST_ROOT = REPO_ROOT / "Model-Training-Test"
+
+    def _check_manifest(self, name: str, expected_min_rows: int):
+        manifest_path = self._MANIFEST_ROOT / name
+        if not manifest_path.exists():
+            self.skipTest(f"{manifest_path} not present in this checkout")
+
+        with open(manifest_path, encoding="utf-8") as fh:
+            header = fh.readline().strip().split(",")
+        self.assertNotIn(
+            "imu_relative_path", header,
+            f"{name} unexpectedly already has imu_relative_path — "
+            "update this test's assumptions",
+        )
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            records = hd.load_dataset_records(str(manifest_path), str(self._MANIFEST_ROOT))
+
+        self.assertGreaterEqual(len(records), expected_min_rows)
+        self.assertTrue(all(r["imu_path"] is None for r in records))
+        imu_warnings = [str(w.message) for w in caught if "imu" in str(w.message).lower()]
+        self.assertEqual(imu_warnings, [], f"{name}: unexpected IMU warnings: {imu_warnings}")
+
+    def test_hand_manifest_combined(self):
+        self._check_manifest("hand_manifest_combined.csv", expected_min_rows=100)
+
+    def test_hand_manifest_tran(self):
+        self._check_manifest("hand_manifest_Tran_.csv", expected_min_rows=50)
+
+    def test_hand_manifest_jimmy_chen(self):
+        self._check_manifest("hand_manifest_Jimmy_Chen.csv", expected_min_rows=50)
 
 
 # ---------------------------------------------------------------------------

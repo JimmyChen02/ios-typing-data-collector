@@ -1,142 +1,183 @@
-# Test Results — Smooth Progress Ring (HandCaptureView)
+# Test Results — IMU + Image Fusion for the Holding-Hand Classifier
 
-**HEADLINE VERDICT: PASS**
-iOS build succeeded with zero errors and zero new warnings in HandCaptureView.swift. All static/logic checks pass. Python regression suite 27/28 passed; 1 failure is a disk-full environment error unrelated to any code change.
+## Scope
 
----
+Focused on the Python changes per instructions (the testable, high-value
+surface): `scripts/train_hand_classifier.py` (`_IMU_CHANNELS`,
+`imu_summary_features`, `--use-imu` fusion, summary/markdown fusion flag) and
+`scripts/hand_dataset.py` (`load_dataset_records` `imu_path`, demo IMU CSVs,
+backward compatibility). The Swift side got a static diff review only (per
+instructions — the Coder already verified `BUILD SUCCEEDED`); no xcodebuild
+was re-run.
 
-## 1. iOS Build (PRIMARY)
+## Test framework
 
-**Result: PASS — BUILD SUCCEEDED**
+Repo already has `unittest.TestCase`-based tests in `tests/test_hand_pipeline.py`
+(importable via both `python3 tests/test_hand_pipeline.py` and
+`python3 -m pytest tests/test_hand_pipeline.py`). Matched that convention:
+added new `TestCase` classes to the same file rather than creating a new
+framework/file.
 
-Command:
-```
-xcodebuild -project TypingResearch.xcodeproj \
-  -scheme TypingResearch \
-  -destination 'platform=iOS Simulator,id=912C042A-EA3D-4108-B74E-A0A326452C65' \
-  -configuration Debug clean build
-```
-Simulator: iPhone 16 (iOS 18 / iPhoneSimulator26.1 SDK), Xcode 26.x
+New test classes added to `tests/test_hand_pipeline.py`:
+- `TestImuSummaryFeatures` — `imu_summary_features()` unit tests
+- `TestUseImuFusion` — `--use-imu` concatenation / CLI banner / centroid-ignore / summary flag
+- `TestHandDatasetImuColumn` — `load_dataset_records` `imu_path` resolution
+- `TestExistingManifestsBackwardCompat` — regression against real
+  `Model-Training-Test/` 14-column manifests
 
-Output (tail):
-```
-** BUILD SUCCEEDED **
-```
+## Environment note
 
-Warnings in HandCaptureView.swift: **none**
+CLAUDE.md says "Run Python from the repo root using `venv/`", but this
+checkout has no `venv/` directory — only `.venv-ml/` (a full ML environment
+with torch + tensorflow/keras installed). Used `.venv-ml/bin/python3` for all
+runs (confirmed it has numpy + Pillow; `python3 -m pytest` also resolved
+correctly against it). Flagging this venv-name mismatch as a documentation
+inconsistency, not a code defect.
 
-Pre-existing warnings in OTHER files (not new, not from this increment):
-- `TypingResearch/Views/CustomKeyboardView.swift:335` — `'onChange(of:perform:)' was deprecated in iOS 17.0`
-- `TypingResearch/Services/HandBurstCapture.swift:93` — capture of 'sessionToStop' with non-Sendable type
-- `TypingResearch/Services/HandBurstCapture.swift:146` — capture of 'session' with non-Sendable type
-- `TypingResearch/Services/HandBurstCapture.swift:1` — add '@preconcurrency' suggestion
+Because `.venv-ml` has torch/tensorflow installed, `segment()` and
+`extract_features()` take the **paper-faithful** path (FCN-ResNet101 /
+VGG16), not the lightweight fallback (32×32 flatten, 1024-d) that two
+*pre-existing* tests hardcode assumptions about. Verified via `git stash`
+that both failures reproduce identically on the pre-change tree — they are
+environment-dependent and unrelated to this change (see Pre-existing
+failures below).
 
-### Specific compile checks
+## Commands run
 
-| Check | Result |
-|---|---|
-| `captureProgress` computed property compiles | PASS |
-| `ringColor(for:)` helper compiles | PASS |
-| `Circle().trim(from:0, to:captureProgress)` compiles | PASS |
-| `if secondsRemaining == 0` checkmark branch / SF Symbol "checkmark" compiles | PASS |
-| `HoldingHand` switch in `ringColor` is exhaustive (left/right/both/unknown) | PASS |
-
----
-
-## 2. Static / Logic Review
-
-### captureProgress derivation and animation key
-
-PASS. `captureProgress` reads only `secondsRemaining` (line 438: `let elapsed = total - CGFloat(secondsRemaining)`). No separate timer, no `TimelineView`, no `Date()` call. The `.animation(.linear(duration: 1), value: secondsRemaining)` modifier at line 192 is unchanged and keyed on `secondsRemaining`, matching the spec requirement.
-
-### Per-condition reset (ring starts empty each condition)
-
-PASS. `startCondition(_:)` sets `secondsRemaining = captureSeconds` (line 318) before `phase = .capturing(hand)` (line 320). At condition start: `elapsed = captureSeconds - captureSeconds = 0`, so `captureProgress = 0`. The `.id(hand)` modifier on `capturingView` (line 96) forces a full view recreation on each condition transition, guaranteeing the animation starts from a clean state. No extra reset logic was added.
-
-### Ring reads full at end
-
-PASS. The `countdownTask` strides `through: 0` (line 353), so the last write sets `secondsRemaining = 0`. At that point: `elapsed = captureSeconds - 0 = captureSeconds`, `captureProgress = captureSeconds / captureSeconds = 1.0` (clamped). `finishCondition` is called after the loop exits (line 363), not before, so the ring reaches 1.0 before any phase transition.
-
-### ringColor mapping
-
-PASS (file:line evidence from HandCaptureView.swift lines 444-451):
-- `.left` → `.blue`
-- `.right` → `.green`
-- `.both` → `.orange`
-- `.unknown` → `.orange` (safe fallback)
-
-`ringColor(for:)` is used for both the ring stroke (line 189) and the checkmark foreground (line 201), so both are color-consistent per condition.
-
-### Auto-advance not broken or delayed
-
-PASS. The diff adds no `sleep`, `DispatchQueue.asyncAfter`, `Task.sleep`, or any blocking call between `secondsRemaining = 0` and `finishCondition`. The `countdownTask` body is unchanged; `finishCondition` call at line 363 fires immediately when the for-loop exits. `startCondition`/`finishCondition` chaining, `frameIndex`, `studySessionIndex`, `labels`, `onComplete`, and the `.id(hand)` modifier are all present and unchanged. The left→right→both flow is intact.
-
-### NIT — Checkmark visibility duration
-
-**NIT (not a fail; design decision for the human to judge).**
-
-The checkmark at `secondsRemaining == 0` is visible only for the async scheduling gap between the countdown task writing `secondsRemaining = 0` and `finishCondition` being called on the next line (line 363). On the main actor, both happen in the same synchronous continuation after `Task.sleep` resolves, so the actual gap before `finishCondition` runs is effectively one run-loop turn — approximately 0–16 ms. SwiftUI needs at least one render pass to display the checkmark, so whether it appears at all depends on whether the run loop gets a display update in before `finishCondition` writes the new phase. In practice, with the `stride through 0` loop, `secondsRemaining = 0` is written, then `finishCondition` is called in the same Task continuation without any intervening `await`, so there is **no guaranteed render pass** in between. The checkmark will likely never be seen in normal conditions. This is a UX nit inherent to the design (noted in changes.md). No sleep or delay was added — the auto-advance timing is correct. If visible checkmark duration is desired, a brief `Task.sleep` after `secondsRemaining = 0` would be needed, but that is a product decision, not a bug.
-
----
-
-## 3. Regression
-
-### Git diff --stat (this increment only)
-
-Command: `git diff HEAD --name-only`
-
-Files with working-tree changes vs HEAD:
-```
-.pipeline/changes.md
-.pipeline/review.md
-.pipeline/spec.md
-.pipeline/test-results.md
-TypingResearch.xcodeproj/project.pbxproj
-TypingResearch/Views/CustomKeyboardView.swift
-TypingResearch/Views/GaussianKeyboardView.swift
-TypingResearch/Views/HandCaptureView.swift
+```sh
+cd /Users/jimmy2/Downloads/Cornell/Hyunchul_Research/ios-typing-data-collector
+.venv-ml/bin/python3 tests/test_hand_pipeline.py            # unittest runner, baseline + full suite
+.venv-ml/bin/python3 -m unittest tests.test_hand_pipeline.TestImuSummaryFeatures \
+    tests.test_hand_pipeline.TestHandDatasetImuColumn \
+    tests.test_hand_pipeline.TestExistingManifestsBackwardCompat -v
+.venv-ml/bin/python3 -m unittest tests.test_hand_pipeline.TestUseImuFusion -v
+.venv-ml/bin/python3 -m pytest tests/test_hand_pipeline.py -q   # final full run
 ```
 
-`project.pbxproj` diff: The HC-prefixed build file entries (HandSample, HandImageStore, MotionRecorder, HandCaptureView, HandBurstCapture) are reordered within the PBXBuildFile section — same 5 entries, same content, no new files added. This is a cosmetic sort-order change from a prior merge, not a new-file registration from this increment. HandBurstCapture.swift source is untouched. CustomKeyboardView.swift and GaussianKeyboardView.swift changes are from prior increments (pre-existing in working tree). Scripts/ and tests/ are unmodified.
-
-**Verdict on scope: PASS** — HandCaptureView.swift is the only file with changes attributable to this increment. No new .swift files were introduced. project.pbxproj shows no new source file registrations.
-
-### Python regression suite
-
-Command: `python3 -m pytest tests/test_hand_pipeline.py --tb=short`
-
-Result: **27 passed, 1 failed** in 94.67s
-
-```
-FAILED tests/test_hand_pipeline.py::TestTrainHandClassifier::test_demo_runs_end_to_end
-scripts/hand_dataset.py:312: OSError: [Errno 28] No space left on device:
-  '/private/var/folders/.../T/thc_test_zh9vq3sp/hand_images/demo_0008.jpg'
+Also ran ad hoc verification against the real legacy manifests directly:
+```sh
+.venv-ml/bin/python3 -c "
+import sys, warnings; sys.path.insert(0, 'scripts'); import hand_dataset as hd
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter('always')
+    recs = hd.load_dataset_records('Model-Training-Test/hand_manifest_combined.csv', 'Model-Training-Test')
+print(len(recs), all(r['imu_path'] is None for r in recs), [str(w.message) for w in caught if 'imu' in str(w.message).lower()])
+"
+# -> 1071 True []
 ```
 
-The failure is `OSError: [Errno 28] No space left on device` — the test tmpdir ran out of disk space while writing demo JPEG fixtures. This is an environment/infrastructure failure with no relationship to HandCaptureView.swift or any Python/script file (which are confirmed unmodified). The test itself is sound; the environment lacks disk space. **Not a code regression.**
+## Result: 47 passed, 2 failed (pre-existing, unrelated to this change)
 
----
+Final run: `Ran 49 tests ... FAILED (failures=2)` /
+pytest: `2 failed, 47 passed, 7 warnings in 172.67s`.
 
-## Summary Table
+### New tests (19) — all pass
 
-| Check | Status | Notes |
+**`TestImuSummaryFeatures`** (`imu_summary_features`, `_IMU_CHANNELS`, `_IMU_FEATURE_DIM`)
+| Test | Covers | Result |
 |---|---|---|
-| iOS build (iPhone 16 / iOS 18 / Xcode 26) | PASS | BUILD SUCCEEDED |
-| Zero errors in HandCaptureView.swift | PASS | |
-| Zero new warnings in HandCaptureView.swift | PASS | 4 pre-existing warnings in other files |
-| captureProgress compiles | PASS | |
-| ringColor(for:) compiles, exhaustive switch | PASS | |
-| trim(from:0, to:captureProgress) compiles | PASS | |
-| secondsRemaining==0 checkmark branch compiles | PASS | SF Symbol "checkmark" valid |
-| captureProgress derived from secondsRemaining, no drift | PASS | |
-| .animation keyed on secondsRemaining (unchanged) | PASS | |
-| Ring resets to 0 each condition (.id(hand) present) | PASS | |
-| Ring reaches 1.0 at secondsRemaining==0 | PASS | |
-| ringColor left=blue/right=green/both=orange/unknown=orange | PASS | |
-| ringColor used for both ring stroke and checkmark | PASS | |
-| No sleep/asyncAfter/delay added; auto-advance intact | PASS | |
-| Checkmark visibility duration | NIT | Likely ~0 visible frames; design decision |
-| Only HandCaptureView.swift modified this increment | PASS | |
-| project.pbxproj no new source files | PASS | Only sort-order reorder |
-| HandBurstCapture.swift untouched | PASS | |
-| Python test suite (28 tests) | 27/28 PASS | 1 fail = disk-full env error, not regression |
+| `test_happy_path_layout_and_values` | 48-d layout = mean/std/min/max per of the 12 channels, in `_IMU_CHANNELS` order (`t_ms` excluded); exact values from 2 known rows | PASS |
+| `test_channel_order_and_dim_constants` | `_IMU_CHANNELS` == the 12-channel MotionRecorder order, `t_ms` excluded; `_IMU_FEATURE_DIM == 48` | PASS |
+| `test_single_frame_std_is_zero` | single-frame CSV → std=0 for every channel (population std, ddof=0, n=1) | PASS |
+| `test_none_path_returns_zeros` | `imu_path=None` → `zeros(48)`, NaN-safe, no exception | PASS |
+| `test_missing_file_returns_zeros` | nonexistent path → `zeros(48)`, warns, no exception | PASS |
+| `test_header_only_csv_returns_zeros` | header-only CSV (0 data rows) → `zeros(48)` | PASS |
+| `test_non_numeric_cells_skipped_not_fatal` | garbage cell value skipped per-cell, not fatal to the row/file; result all-finite | PASS |
+| `test_missing_expected_column_zeros_that_channel` | CSV missing one expected column (`rot_z` dropped) → that channel's 4 stats are 0, others unaffected | PASS |
+
+**`TestUseImuFusion`** (`--use-imu` concatenation, CLI banner, centroid-ignore, summary flag)
+| Test | Covers | Result |
+|---|---|---|
+| `test_use_imu_concatenation_adds_exactly_48_dims` | `concatenate([img_feat, imu_feat])` grows feature dim by exactly 48 | PASS |
+| `test_demo_train_hand_classifier_use_imu_flag_cli` | `--demo --use-imu` end-to-end via CLI; prints `IMU fusion: ON (48-d)` | PASS |
+| `test_demo_train_hand_classifier_without_use_imu_flag_cli` | no `--use-imu` → prints `IMU fusion: OFF`, still runs end-to-end | PASS |
+| `test_use_imu_with_centroid_mode_ignored_no_error` | `--use-imu --mode centroid` completes normally, IMU silently ignored, run reaches "Summary written to:" | PASS |
+| `test_summary_rows_record_fusion_flag` | `summary.json` rows include `"imu_fusion": true` when `--use-imu` passed | PASS |
+
+**`TestHandDatasetImuColumn`** (`load_dataset_records` `imu_path`)
+| Test | Covers | Result |
+|---|---|---|
+| `test_imu_path_resolved_when_present_and_exists` | 15-column manifest + real IMU file on disk → `imu_path` resolved to the absolute path | PASS |
+| `test_legacy_14_column_manifest_backward_compatible` | manifest with **no** `imu_relative_path` header at all → `imu_path=None` for every row, **zero** IMU warnings, row not skipped | PASS |
+| `test_missing_imu_file_on_disk_not_skipped` | `imu_relative_path` column present, points at a file that doesn't exist → `imu_path=None`, row **not skipped** (image-only sample stays valid) | PASS |
+| `test_mixed_manifest_some_rows_have_imu` | one row has IMU, one row has empty `imu_relative_path` → correct per-row `None`/resolved split | PASS |
+| `test_demo_manifest_has_imu_column_and_files` | `_make_demo_manifest_and_images` emits a 15-column manifest, all 120 rows resolve `imu_path`, exactly 6 distinct IMU CSVs (2 participants × 3 conditions) | PASS |
+
+**`TestExistingManifestsBackwardCompat`** (regression against real legacy data)
+| Test | Manifest | Rows | Result |
+|---|---|---|---|
+| `test_hand_manifest_combined` | `Model-Training-Test/hand_manifest_combined.csv` | 1070 data rows loaded, all `imu_path=None`, 0 IMU warnings | PASS |
+| `test_hand_manifest_tran` | `Model-Training-Test/hand_manifest_Tran_.csv` | loaded, all `imu_path=None`, 0 IMU warnings | PASS |
+| `test_hand_manifest_jimmy_chen` | `Model-Training-Test/hand_manifest_Jimmy_Chen.csv` | loaded, all `imu_path=None`, 0 IMU warnings | PASS |
+
+Each of these tests first asserts the manifest's real header line does **not**
+already contain `imu_relative_path` (guards against the test's assumption
+going stale if these files are ever regenerated with the new column).
+
+### Pre-existing failures (2) — NOT caused by this change, not fixed
+
+```
+FAILED tests/test_hand_pipeline.py::TestTrainHandClassifier::test_extract_features_fallback_length
+AssertionError: 25088 != 1024 : Expected 1024-d fallback; got 25088
+
+FAILED tests/test_hand_pipeline.py::TestTrainHandClassifier::test_nearest_centroid_predict_and_score
+AssertionError: 0.233.. (or 0.6, or 0.633, varies by run) not greater than 0.8 : Expected high train acc; got ...
+```
+
+Root cause: `.venv-ml` has torch + tensorflow/keras installed, so
+`segment()`/`extract_features()` run the **paper-faithful** FCN-ResNet101 /
+VGG16 path instead of the lightweight fallback (32×32 flatten → 1024-d)
+these two tests were written against. `test_nearest_centroid_predict_and_score`
+trains through the real Keras `train()` path (not the pure
+`_train_nearest_centroid` used by the assertion's docstring) and its accuracy
+varies run to run — also an artifact of the heavier path being exercised
+in this environment, not a fusion-related regression.
+
+Verified pre-existing via `git stash` (temporarily removing all pipeline
+changes) and re-running the same two tests against the unmodified tree — both
+failed identically before any of this change's code existed. Per instructions
+("A failing test means the pipeline pauses for the Reviewer, not that you
+patch around it"), these are reported, not fixed, but are called out
+explicitly as pre-existing/environment-caused so the Reviewer can distinguish
+them from a regression introduced by this change.
+
+## Swift static sanity check (no xcodebuild re-run, per instructions)
+
+Reviewed the diffs directly:
+- `MotionRecorder.swift`: `isEnabled` flipped `false` → `true` (line 25); CSV
+  header string (`t_ms,attitude_roll,...,rot_z`) and row-write format
+  untouched — matches spec A1 exactly.
+- `SessionManager.swift`: `MotionRecorder.shared.start(sessionId: session.id,
+  studySessionIndex: completedStudySessions)` added immediately after
+  `self.currentSession = session` in `startSession`; obsolete commented seam
+  removed from `startStudy`; `let _ = MotionRecorder.shared.stop()` added in
+  `finalizeSession` in the same place the comment used to be (after
+  `BackendClient.shared.flush()`, before `modelContext?.save()`) — matches
+  spec A2.
+- `HandSample.swift`: `imuRelativePath: String` stored property + matching
+  default-valued init parameter, assigned in the initializer body — matches
+  spec A3 (additive, lightweight-migration-safe).
+- `HandCaptureView.swift`: `imuRelativePath: sessionId.map { "imu/\($0.uuidString).csv" } ?? ""`
+  added at the `HandSample(...)` call site — matches spec A3.
+- `DataExporter.swift`: `"imu_relative_path"` inserted into the manifest
+  header array immediately after `"image_relative_path"`, with
+  `csvEscape(s.imuRelativePath)` inserted at the matching row index (header
+  and row arrays stay index-aligned) — matches spec A4(a). `exportHandDataZip`
+  copies `Documents/imu/*.csv` into `staging/imu/` guarded by
+  `fm.fileExists(atPath:)`, unconditionally (all session CSVs, not just
+  referenced ones) — matches spec A4(b), and the "Zip the staging directory"
+  step comment was correctly renumbered 3 → 4.
+
+No functional or behavioral issues found in the diffs; this is a read-only
+review, not a build/run verification.
+
+## Files touched by the Tester
+
+- `/Users/jimmy2/Downloads/Cornell/Hyunchul_Research/ios-typing-data-collector/tests/test_hand_pipeline.py`
+  (appended `TestImuSummaryFeatures`, `TestUseImuFusion`,
+  `TestHandDatasetImuColumn`, `TestExistingManifestsBackwardCompat`, plus an
+  `_IMU_HEADER`/`_write_imu_csv` fixture helper and a `subprocess` import)
+- `/Users/jimmy2/Downloads/Cornell/Hyunchul_Research/ios-typing-data-collector/.pipeline/test-results.md`
+  (this file)
+
+No production code was modified.
