@@ -39,6 +39,7 @@ struct HandCaptureView: View {
 
     private enum Phase: Equatable {
         case intro
+        case paused(HoldingHand)     // pause between conditions, waiting for user to tap Start
         case capturing(HoldingHand)
         case reviewing
         case done
@@ -91,6 +92,8 @@ struct HandCaptureView: View {
                 switch phase {
                 case .intro:
                     introView
+                case .paused(let hand):
+                    pausedView(hand: hand)
                 case .capturing(let hand):
                     capturingView(hand: hand)
                         .id(hand)
@@ -135,7 +138,7 @@ struct HandCaptureView: View {
             }
 
             Section {
-                Button(action: { startCondition(.left) }) {
+                Button(action: { pauseBeforeCondition(.left) }) {
                     HStack {
                         Spacer()
                         Text("Start Capture")
@@ -159,6 +162,41 @@ struct HandCaptureView: View {
                 .listRowBackground(Color(.systemGray6))
             }
         }
+    }
+
+    // MARK: - Paused screen (between conditions)
+
+    private func pausedView(hand: HoldingHand) -> some View {
+        VStack(spacing: 32) {
+            Spacer()
+
+            VStack(spacing: 12) {
+                Text("Hold the phone with your")
+                    .font(.title3)
+                    .foregroundColor(.secondary)
+
+                Text(hand.displayName.uppercased())
+                    .font(.system(size: 40, weight: .bold, design: .rounded))
+                    .foregroundColor(ringColor(for: hand))
+            }
+
+            Spacer()
+
+            Button(action: { startCondition(hand) }) {
+                HStack {
+                    Spacer()
+                    Text("Start")
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .padding(.vertical, 12)
+                    Spacer()
+                }
+            }
+            .background(Color(ringColor(for: hand)))
+            .cornerRadius(14)
+            .padding(.horizontal, 24)
+        }
+        .padding()
     }
 
     // MARK: - Capturing screen
@@ -321,6 +359,10 @@ struct HandCaptureView: View {
 
     // MARK: - Capture logic
 
+    private func pauseBeforeCondition(_ hand: HoldingHand) {
+        phase = .paused(hand)
+    }
+
     private func startCondition(_ hand: HoldingHand) {
         capture.stop()              // stop previous condition's engine deterministically
         countdownTask?.cancel()     // cancel previous countdown
@@ -395,12 +437,12 @@ struct HandCaptureView: View {
         case .unknown: break
         }
 
-        // Advance to next condition or to reviewing
+        // Pause before next condition or go to reviewing
         switch hand {
         case .left:
-            startCondition(.right)
+            pauseBeforeCondition(.right)
         case .right:
-            startCondition(.both)
+            pauseBeforeCondition(.both)
         case .both, .unknown:
             phase = .reviewing
         }

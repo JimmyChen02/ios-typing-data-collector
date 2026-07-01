@@ -7,10 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		87AA80522F6DB50D00764884 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 87AA80512F6DB50D00764884 /* Assets.xcassets */; };
 		87AA804B2F6C999900764884 /* BackendClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87AA80492F6C999900764884 /* BackendClient.swift */; };
 		87AA804C2F6C999900764884 /* KeyReportExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87AA804A2F6C999900764884 /* KeyReportExporter.swift */; };
 		87AA804E2F6C99AA00764884 /* TapDotPlotView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87AA804D2F6C99AA00764884 /* TapDotPlotView.swift */; };
+		87AA80522F6DB50D00764884 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 87AA80512F6DB50D00764884 /* Assets.xcassets */; };
 		AA000000000000000000001 /* TypingResearchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000001 /* TypingResearchApp.swift */; };
 		AA000000000000000000002 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000002 /* Models.swift */; };
 		AA000000000000000000003 /* SessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000003 /* SessionManager.swift */; };
@@ -380,7 +380,7 @@
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = P2LUTF8N6F;
+				DEVELOPMENT_TEAM = 55A7CXN98C;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Capture a front-camera photo of your upper body so we can study which hand is holding the phone.";
 				INFOPLIST_KEY_NSMotionUsageDescription = "Record device motion to study how holding hand affects typing.";
@@ -395,7 +395,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.jimmychen.typingresearch;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tnt54.typingresearch;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
