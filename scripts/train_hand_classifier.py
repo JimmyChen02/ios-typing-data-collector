@@ -196,24 +196,37 @@ def segment(image: "np.ndarray") -> "np.ndarray":
     return mask
 
 
+# Cache the heavy FCN-ResNet101 model + transform so they are built ONCE and
+# reused across every frame (rebuilding per image was the main RAM/speed sink).
+_FCN_CACHE: dict = {}
+
+
+def _get_fcn_model(torch, torchvision):
+    """Lazily build and cache the FCN-ResNet101 segmentation model + transform."""
+    if "model" not in _FCN_CACHE:
+        from torchvision import transforms
+        from torchvision.models.segmentation import (
+            fcn_resnet101, FCN_ResNet101_Weights,
+        )
+        weights = FCN_ResNet101_Weights.DEFAULT
+        model = fcn_resnet101(weights=weights)
+        model.eval()
+        _FCN_CACHE["model"] = model
+        _FCN_CACHE["transform"] = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225]),
+        ])
+    return _FCN_CACHE["model"], _FCN_CACHE["transform"]
+
+
 def _segment_fcn(
     image: "np.ndarray",
     torch,
     torchvision,
 ) -> "np.ndarray":
     """FCN-ResNet101 segmentation (paper-faithful, requires torch/torchvision)."""
-    from torchvision import transforms
-    from torchvision.models.segmentation import fcn_resnet101, FCN_ResNet101_Weights
-
-    weights = FCN_ResNet101_Weights.DEFAULT
-    model = fcn_resnet101(weights=weights)
-    model.eval()
-
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                             std=[0.229, 0.224, 0.225]),
-    ])
+    model, transform = _get_fcn_model(torch, torchvision)
 
     pil_image = Image.fromarray((image * 255).astype(np.uint8))
     tensor = transform(pil_image).unsqueeze(0)
@@ -261,14 +274,29 @@ def extract_features(silhouette: "np.ndarray") -> "np.ndarray":
     return arr.flatten()
 
 
+# Cache the VGG16 backbone so it is built ONCE and reused across every frame
+# (rebuilding a ~500 MB network per image was catastrophic for RAM and speed).
+_VGG16_CACHE: dict = {}
+
+
+def _get_vgg16_backbone():
+    """Lazily build and cache the frozen VGG16 backbone + preprocess_input."""
+    if "backbone" not in _VGG16_CACHE:
+        try:
+            from tensorflow.keras.applications import VGG16
+            from tensorflow.keras.applications.vgg16 import preprocess_input
+        except ImportError:
+            from keras.applications import VGG16
+            from keras.applications.vgg16 import preprocess_input
+        _VGG16_CACHE["backbone"] = VGG16(
+            weights="imagenet", include_top=False, input_shape=(224, 224, 3))
+        _VGG16_CACHE["preprocess_input"] = preprocess_input
+    return _VGG16_CACHE["backbone"], _VGG16_CACHE["preprocess_input"]
+
+
 def _features_vgg16(silhouette: "np.ndarray", keras) -> "np.ndarray":
     """VGG16 backbone features (paper-faithful, requires keras/tensorflow)."""
-    try:
-        from tensorflow.keras.applications import VGG16
-        from tensorflow.keras.applications.vgg16 import preprocess_input
-    except ImportError:
-        from keras.applications import VGG16
-        from keras.applications.vgg16 import preprocess_input
+    backbone, preprocess_input = _get_vgg16_backbone()
 
     # Replicate single-channel silhouette to 3 channels (VGG16 expects RGB)
     rgb = np.stack([silhouette, silhouette, silhouette], axis=-1).astype(np.float32)
@@ -279,9 +307,6 @@ def _features_vgg16(silhouette: "np.ndarray", keras) -> "np.ndarray":
         rgb = np.array(pil, dtype=np.float32)
 
     x = preprocess_input(rgb[np.newaxis, ...])  # (1, 224, 224, 3)
-
-    # Build backbone once (no caching across calls — acceptable for offline use)
-    backbone = VGG16(weights="imagenet", include_top=False, input_shape=(224, 224, 3))
     features = backbone.predict(x, verbose=0)  # (1, 7, 7, 512)
     return features.flatten()
 
@@ -776,19 +801,31 @@ def main() -> None:
 
     print(f"\nLoaded {len(records)} records from manifest")
 
-    # ---- Step 2: Preprocess + segment ALL samples (cached) ----
-    print("Stage 1 — preprocess ...")
-    raw_images = [preprocess(r["image_path"]) for r in records]
+    # ---- Steps 2+3: preprocess -> segment -> features, streamed per frame ----
+    # Each frame is processed end-to-end and its large float image discarded
+    # immediately, so peak RAM holds only the compact silhouettes/features —
+    # not all raw 224x224x3 float arrays at once. Silhouettes are kept only when
+    # the centroid baseline needs them; features only for the HandyNet path.
+    need_features = mode in ("handynet", "both")
+    need_silhouettes = mode in ("centroid", "both")
+    print("Stage 1-3 — preprocess, segment"
+          + (", extract features" if need_features else "") + " ...")
 
-    print("Stage 2 — segment ...")
-    silhouettes = [segment(img) for img in raw_images]
+    silhouettes: list = []
+    feature_list: list = []
+    n_records = len(records)
+    for i, r in enumerate(records):
+        img = preprocess(r["image_path"])
+        sil = segment(img)
+        del img
+        if need_silhouettes:
+            silhouettes.append(sil)
+        if need_features:
+            feature_list.append(extract_features(sil))
+        if (i + 1) % 50 == 0 or (i + 1) == n_records:
+            print(f"  processed {i + 1}/{n_records} frames", flush=True)
 
-    # ---- Step 3: Extract features (only for handynet / both) ----
-    features_arr = None
-    if mode in ("handynet", "both"):
-        print("Stage 3 — extract features ...")
-        feature_list = [extract_features(s) for s in silhouettes]
-        features_arr = np.stack(feature_list, axis=0)   # (N, D)
+    features_arr = np.stack(feature_list, axis=0) if need_features else None
 
     # ---- Step 4: Group by participant ----
     from collections import defaultdict
@@ -978,8 +1015,8 @@ def main() -> None:
     print(f"\nSummary written to: {summary_path}")
 
     if md_out:
-        _write_markdown_results(Path(md_out), summary_rows, mode, epochs, _nanmean)
-        print(f"Results chart written to: {md_out}")
+        if _write_markdown_results(Path(md_out), summary_rows, mode, epochs, _nanmean):
+            print(f"Results chart written to: {md_out}")
 
     print("\nFuture work:")
     print("  - IMU+image multimodal fusion")
@@ -995,27 +1032,50 @@ def _fmt(v: float) -> str:
 def _write_markdown_results(md_path, summary_rows, mode, epochs, nanmean) -> None:
     """Write/update an auto-generated results chart in a markdown file.
 
-    The chart lives between HTML-comment markers so re-runs replace just that
-    block and leave the rest of the file (hand-written notes) intact. If the
+    Only the single BEST run is kept: the section records the run with the
+    highest mean held-out windowed accuracy. A new run overwrites the block
+    only when it beats the recorded best (parsed from an embedded score tag);
+    otherwise the file is left untouched. The chart lives between HTML-comment
+    markers so the rest of the file (hand-written notes) stays intact. If the
     markers are absent, the section is appended; if the file does not exist, it
     is created.
     """
+    import re
     from datetime import datetime, timezone
 
     START = "<!-- TRAIN_RESULTS_START -->"
     END   = "<!-- TRAIN_RESULTS_END -->"
+    SCORE_TAG = "BEST_WINDOWED_ACC="
     md_path = Path(md_path)
 
     def _pct(v: float) -> str:
         return f"{v * 100:.1f}%" if not math.isnan(v) else "nan"
 
+    cur_score = nanmean([r['handynet_windowed_acc'] for r in summary_rows])
+
+    # Compare against the previously recorded best (if any) and bail out early
+    # when the current run does not improve on it — keep the best, not the last.
+    existing_text = md_path.read_text(encoding="utf-8") if md_path.exists() else None
+    if existing_text and START in existing_text and END in existing_text:
+        block = existing_text[existing_text.index(START):existing_text.index(END)]
+        m = re.search(re.escape(SCORE_TAG) + r"([0-9.]+)", block)
+        prev_score = float(m.group(1)) if m else None
+        if prev_score is not None and (math.isnan(cur_score) or cur_score <= prev_score):
+            print(f"{md_path}: kept existing best run "
+                  f"(best windowed {_pct(prev_score)} >= this run {_pct(cur_score)}); "
+                  "not overwriting.")
+            return False
+
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     L: list[str] = [
         START,
-        "## Latest training run (auto-generated)",
+        f"<!-- {SCORE_TAG}{cur_score:.6f} -->",
+        "## Best training run so far (auto-generated)",
         "",
         f"_Generated {ts} by `train_hand_classifier.py` "
-        f"(mode={mode}, epochs={epochs}). This section is replaced on each run._",
+        f"(mode={mode}, epochs={epochs}). This section keeps the BEST run "
+        f"(highest mean held-out windowed accuracy); it is overwritten only "
+        f"when a later run beats it._",
         "",
         "| Participant | n_train | n_eval | Train acc | Test frame acc "
         "| Test windowed acc | Centroid |",
@@ -1066,8 +1126,8 @@ def _write_markdown_results(md_path, summary_rows, mode, epochs, nanmean) -> Non
     ]
     section = "\n".join(L)
 
-    if md_path.exists():
-        text = md_path.read_text(encoding="utf-8")
+    if existing_text is not None:
+        text = existing_text
         if START in text and END in text:
             new_text = (text[: text.index(START)]
                         + section
@@ -1079,6 +1139,7 @@ def _write_markdown_results(md_path, summary_rows, mode, epochs, nanmean) -> Non
         new_text = section + "\n"
 
     md_path.write_text(new_text, encoding="utf-8")
+    return True
 
 
 def _parse_args() -> argparse.Namespace:

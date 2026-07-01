@@ -159,19 +159,24 @@ In rough priority:
   and `hand_images/` folder together; train.
 
 <!-- TRAIN_RESULTS_START -->
-## Latest training run (auto-generated)
+<!-- BEST_WINDOWED_ACC=0.836650 -->
+## Best training run so far (auto-generated)
 
-_Generated 2026-06-30 04:39 UTC by `train_hand_classifier.py` (mode=both, epochs=2). This section is replaced on each run._
+_Generated 2026-07-01 16:11 UTC by `train_hand_classifier.py` (mode=both, epochs=2). This section keeps the BEST run (highest mean held-out windowed accuracy); it is overwritten only when a later run beats it._
 
 | Participant | n_train | n_eval | Train acc | Test frame acc | Test windowed acc | Centroid |
 |---|---|---|---|---|---|---|
-| jimmy|chen | 414 | 105 | 0.935 | 0.800 | 0.816 | 0.333 |
-| **MEAN** | 414 | 105 | 0.935 | 0.800 | 0.816 | 0.333 |
+| jimmy|chen | 439 | 111 | 0.866 | 0.649 | 0.805 | 0.333 |
+| tran| | 416 | 105 | 0.974 | 0.914 | 0.868 | 0.562 |
+| **MEAN** | 855 | 216 | 0.920 | 0.781 | 0.837 | 0.448 |
 
-**Headline — held-out windowed test accuracy: 81.6%**  ·  test frame acc 80.0%  ·  centroid baseline 33.3%
+**Headline — held-out windowed test accuracy: 83.7%**  ·  test frame acc 78.1%  ·  centroid baseline 44.8%
 
-**jimmy|chen — per-class test accuracy:** both=1.000, left=0.829, right=0.571
-**jimmy|chen — confusion (true→pred):** both->both:35, left->left:29, left->right:6, right->both:15, right->right:20
+**jimmy|chen — per-class test accuracy:** both=0.405, left=0.541, right=1.000
+**jimmy|chen — confusion (true→pred):** both->both:15, both->left:14, both->right:8, left->both:8, left->left:20, left->right:9, right->right:37
+
+**tran| — per-class test accuracy:** both=1.000, left=1.000, right=0.743
+**tran| — confusion (true→pred):** both->both:35, left->left:35, right->both:9, right->right:26
 
 _Train acc = in-sample; Test = held-out 20% (time-ordered split); windowed = sliding-window-30 majority vote (HandyTrak metric); Centroid = zero-training baseline._
 <!-- TRAIN_RESULTS_END -->
