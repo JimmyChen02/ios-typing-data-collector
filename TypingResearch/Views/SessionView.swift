@@ -41,6 +41,7 @@ struct SummaryView: View {
     @State private var showResetConfirm: Bool = false
     @State private var generatingPDF: PDFKind? = nil
     @State private var zippingHandData: Bool = false
+    @State private var showPostureSelect: Bool = false
     @State private var plotLayout: TapDotPlotView.LayoutMode = .alpha
     @State private var gaussianPreviewImage: UIImage? = nil
     @State private var isRenderingGaussianPreview = false
@@ -59,6 +60,10 @@ struct SummaryView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 24) {
+                    if sessionManager.isPostureTrainingRun {
+                        postureContinueSection
+                        Divider()
+                    }
                     if sessionManager.studyDesign == .classicAndAdaptive {
                         studyComparison
                         Divider()
@@ -94,6 +99,64 @@ struct SummaryView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             }
+            .sheet(isPresented: $showPostureSelect) {
+                PostureSelectView(
+                    onSelect: { posture in
+                        showPostureSelect = false
+                        sessionManager.startNextPostureRun(posture: posture)
+                    },
+                    onCancel: { showPostureSelect = false }
+                )
+            }
+        }
+    }
+
+    // MARK: - Posture Training Run — collect next posture
+    //
+    // Shown only after a posture training run: lets the participant loop back
+    // and collect the remaining postures (L / R / Mid) without resetting.
+    // pendingHandSamples accumulates across runs, so the Hand Data Zip below
+    // exports every posture's frames + IMU in ONE zip.
+
+    private var postureFrameCounts: [(HoldingHand, Int)] {
+        let samples = sessionManager.pendingHandSamples
+        return [HoldingHand.left, .right, .both].map { hand in
+            (hand, samples.filter { $0.holdingHand == hand }.count)
+        }
+    }
+
+    private var postureContinueSection: some View {
+        VStack(spacing: 12) {
+            Text("Posture Training Data")
+                .font(.headline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: 12) {
+                ForEach(postureFrameCounts, id: \.0) { hand, count in
+                    VStack(spacing: 2) {
+                        Text("\(count)")
+                            .font(.title3).fontWeight(.semibold)
+                            .foregroundColor(count > 0 ? .primary : .secondary)
+                        Text(hand == .both ? "Mid" : hand.displayName)
+                            .font(.caption).foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color(.systemGray6)))
+                }
+            }
+
+            Button(action: { showPostureSelect = true }) {
+                Label("Collect Another Posture", systemImage: "arrow.counterclockwise")
+                    .frame(maxWidth: .infinity).padding()
+                    .background(Color.blue)
+                    .foregroundColor(.white).cornerRadius(10)
+            }
+
+            Text("Frames from every run stay together — export them all in one Hand Data Zip below once each posture is collected.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 

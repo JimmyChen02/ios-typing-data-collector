@@ -1,162 +1,13 @@
-# Holding-Hand Model — Training Guide & Results
+# Holding-Hand Model — Results Log
 
-HandyTrak-style holding-hand classifier (left / right / both) trained on
-front-camera body-silhouette images collected with the iOS Typing Data Collector.
+**How to train:** see [`README.md`](README.md) in this folder (simple steps:
+setup → export data → train → export Core ML → bundle).
 
----
-
-## Results (first real run)
-
-Trained on one participant's own data — **520 frames**, balanced across hands.
-
-| Metric | Score | What it means |
-|--------|-------|---------------|
-| **HandyNet windowed accuracy** | **82.9%** | **Headline metric** — sliding-window (30) majority vote, the HandyTrak primary number |
-| HandyNet frame accuracy | **77.1%** | Per-frame accuracy, before temporal smoothing |
-| Centroid baseline | **33.3%** | Zero-training geometric baseline (= chance for 3 classes) |
-
-**Dataset / split**
-
-| | |
-|--|--|
-| Participant | `jimmy\|chen` (iPhone 14 Pro Max, front camera) |
-| Total frames | 520 |
-| Label balance | 174 both / 174 left / 173 right |
-| Train / eval | 414 / 105 (time-ordered 80/20, unshuffled) |
-| Epochs | 2 |
-
-**Reading the result:** the CNN (82.9%) beats the no-training geometric baseline
-(33.3%) by ~50 points — that gap shows the model learned real signal from the
-silhouettes, not a trivial geometric trick. 82.9% is in the same ballpark as the
-HandyTrak paper's ~89% (achieved with far more data and tuning). The centroid
-baseline collapsed to predicting "both" for everything, meaning the naive
-"horizontal centroid → hand" heuristic doesn't separate this data — which justifies
-the deep-learning approach.
-
----
-
-## How the training works
-
-When you run the training command, this happens in order:
-
-1. **Load + group.** Reads the manifest's rows (each row = one image + its hand
-   label + time-order keys) and groups them by participant.
-
-2. **Time-ordered 80/20 split.** For each hand (left/right/both), the first 80% of
-   frames *in capture order* become training data and the last 20% become the test
-   set. No shuffling — so the test set is "later moments the model never saw,"
-   making the accuracy an honest generalization test rather than memorization.
-
-3. **Turn each image into a feature vector** (the slow ~10-20 min stage on CPU):
-   - **preprocess** → resize to 224×224
-   - **segment (FCN-ResNet101)** → cut the body out of the background into a clean
-     silhouette
-   - **VGG16** → convert that silhouette into a numeric feature vector
-
-4. **Train the HandyNet head (transfer learning).** The two big networks
-   (FCN-ResNet101, VGG16) are **pretrained and frozen** — they do the heavy lifting
-   for free. The only thing that actually *learns* is a small classifier on top
-   (dropout + a 3-way softmax). Over 2 epochs it adjusts its weights so its
-   prediction matches the true hand label. This is why ~400 images is enough: you
-   are only training a tiny head, not a whole network.
-
-5. **Evaluate on the held-out test frames.** Predicts each test frame, compares to
-   the true label → **frame accuracy**. Then applies the **sliding-window majority
-   vote** (smooths 30 frames at a time, like the paper) → **windowed accuracy**.
-
-6. **Save.** Writes `hand_model.keras` (the trained model) and `summary.json` (the
-   numbers) under the output directory.
-
-**In one sentence:** labeled silhouettes → frozen pretrained features → a small head
-learns hand-from-features → tested on unseen later frames.
-
-**Key properties**
-- **User-dependent:** one model is trained per participant (a single cross-person
-  model performs poorly, per the paper).
-- **The label supervises:** every frame inherits the label of the condition it was
-  captured in, so honest holding during each labeled window is the main data-quality
-  lever.
-
----
-
-## How to run it
-
-From the repository root, with the ML virtual environment:
-
-```bash
-.venv-ml/bin/python scripts/train_hand_classifier.py \
-    Model-Training-Test/hand_manifest_Jimmy_Chen.csv \
-    --images-root Model-Training-Test/ \
-    --out Model-Training-Test/models/ \
-    --mode both --epochs 2
-```
-
-The two things that matter: the **real manifest path**, and **`--images-root`**
-pointing at the folder that *contains* `hand_images/`.
-
-**What you'll see**
-1. A flood of NumPy warnings at the top — harmless; wait for the `[PAPER-FAITHFUL]`
-   banner (it confirms FCN-ResNet101 + VGG16 are being used).
-2. `Stage 1 — preprocess … Stage 2 — segment … Stage 3 — extract features` —
-   segmentation is the slow part (~10-20 min on CPU). It looks frozen but is working.
-3. A results table, then `Summary written to: Model-Training-Test/models/summary.json`.
-
-**Useful knobs**
-- `--epochs 5` — train longer (may bump accuracy).
-- `--mode handynet` — skip the centroid baseline (a bit faster).
-- `--mode centroid` — *just* the baseline, no CNN (runs in seconds; quick data check).
-- Append ` > train.log 2>&1 &` to run in the background and watch `train.log`.
-
-**Outputs**
-- `Model-Training-Test/models/jimmy_chen/hand_model.keras` — the trained model
-- `Model-Training-Test/models/jimmy_chen/labels.json` — class labels
-- `Model-Training-Test/models/summary.json` — the accuracy numbers
-
----
-
-## Data setup note (gotcha)
-
-The manifest references images as `hand_images/<uuid>.jpg`. If AirDrop/Finder
-delivers the folder with a different name (e.g. `hand-images` with a hyphen), the
-trainer can't find the files. Make sure the image folder is named **`hand_images`**
-(underscore) and sits inside the `--images-root` directory.
-
----
-
-## What to do afterwards
-
-In rough priority:
-
-1. **Prove it generalizes — add participants.** The 82.9% is one person. Collecting
-   **2-4 more people** and retraining is the single most valuable next step. Each
-   gets their own model; a consistent average across people is what makes the result
-   defensible. One person could be luck; four isn't.
-
-2. **Quick experiment — `--epochs 5`.** Cheap to try; may nudge accuracy up.
-
-3. **Report what you have.** `summary.json` is the evidence: 82.9% windowed accuracy,
-   CNN beating the no-training baseline (33%) by ~50 points.
-
-4. **The research payoff — connect the two halves.** Use the holding-hand prediction
-   to select a **per-hand Gaussian keyboard**. How you hold the phone changes thumb
-   reach → changes tap distribution → so the optimal Gaussian key boundaries differ
-   by hand. Conditioning the adaptive keyboard on the detected holding hand is where
-   this stops being a HandyTrak reimplementation and becomes an original
-   contribution. (Requires holding-hand labels during typing — a future increment.)
-
-5. **Housekeeping.** Commit the work so the trained-model milestone has a clean
-   baseline.
-
----
-
-## Collection recap (how this data was made)
-
-- Guided capture in the app walks the participant through **left → right → both**,
-  ~30s each at ~2 Hz (front camera, upper body + face in view).
-- N typing sessions → N-1 between-session captures (4 sessions = 3 captures).
-- Each frame is saved as a JPEG + one labeled row in the manifest CSV.
-- Export "Hand Manifest CSV + Images" from the app's Complete screen; place the CSV
-  and `hand_images/` folder together; train.
+This file records training results only:
+- the **auto-generated block** below keeps the single best run (written by
+  `train_hand_classifier.py --md-out Model-Training-Test/model.md`);
+- the **manual log** at the bottom gets one entry per run — add date/time,
+  command variant, data, and the held-out numbers after every training run.
 
 <!-- TRAIN_RESULTS_START -->
 <!-- BEST_WINDOWED_ACC=0.836650 -->
@@ -180,3 +31,61 @@ _Generated 2026-07-01 16:11 UTC by `train_hand_classifier.py` (mode=both, epochs
 
 _Train acc = in-sample; Test = held-out 20% (time-ordered split); windowed = sliding-window-30 majority vote (HandyTrak metric); Centroid = zero-training baseline._
 <!-- TRAIN_RESULTS_END -->
+
+---
+
+## Results log (all runs, newest first)
+
+Manually maintained — unlike the auto-generated "best run" block above, every
+run gets an entry here.
+
+### 2026-07-07 14:25 — IMU-seq causal, 30 epochs ← current bundled model
+- Data: `hand_export_Anonymous_` — 379 frames (127 L / 128 R / 124 both), 302 train / 77 eval
+- Command: `--imu-seq --imu-causal --imu-window 50 --epochs 30` (re-run of the 14:10 recipe)
+- **TEST frame-acc 1.000 · windowed-acc 1.000** · all classes perfect
+- Exported to `posture_imu.mlpackage` and added to the Xcode project (repo root) — this exact model ships in the app bundle.
+
+### 2026-07-07 14:10 — IMU-seq causal, 30 epochs
+- Data: `hand_export_Anonymous_` — 379 frames (127 L / 128 R / 124 both), 302 train / 77 eval
+- Command: `--imu-seq --imu-causal --imu-window 50 --epochs 30`
+- **TEST frame-acc 0.974 · windowed-acc 1.000** · train 0.993
+- Per-class: both=1.000, left=0.923, right=1.000 (confusion: left→right ×2, rest perfect)
+- Exported to `posture_imu.mlpackage` (input `imu_window`, outputs `classLabel`/`classProbability`) — this is the model bundled for live on-device prediction.
+
+### 2026-07-07 14:06 — IMU-seq causal, 10 epochs (re-run)
+- Same data/command as 2026-07-06 run below.
+- TEST frame-acc 0.740 · windowed-acc 0.479 · train 0.629; per-class right collapsed to 0.385.
+- Lesson: at 10 epochs the small Conv1D is highly sensitive to random initialization — identical command, wildly different result than the day before. Use ≥30 epochs.
+
+### 2026-07-06 — IMU-seq causal, 10 epochs (first real IMU run)
+- Data: `hand_export_Anonymous_` — 379 frames (127 L / 128 R / 124 both), 302 train / 77 eval
+- Command: `--imu-seq --imu-causal --imu-window 50 --epochs 10`
+- TEST frame-acc 1.000 · windowed-acc 1.000 · train 0.980; all classes perfect.
+- Also surfaced + fixed two Core ML export bugs (input name `input_layer`→`imu_window`; probability output `classLabel_probs`→`classProbability`).
+
+### 2026-07-01 16:11 UTC — Image HandyNet, 2 epochs (best image run, see auto block)
+- Data: Jimmy 439/111 + Tran 416/105 frames (front-camera photos)
+- Command: `--mode both --epochs 2` (image pipeline)
+- Jimmy: TEST frame 0.649 · windowed 0.805 (weak on both/left) · Tran: frame 0.914 · windowed 0.868
+- Mean windowed 0.837 vs centroid baseline 0.448.
+
+### (earlier) — Image HandyNet, 2 epochs (first real run, single participant)
+- Data: `jimmy|chen` only (iPhone 14 Pro Max) — 520 frames balanced (174 both / 174 left / 173 right), 414 train / 105 eval
+- Command: `--mode both --epochs 2` (image pipeline)
+- TEST frame-acc 0.771 · **windowed-acc 0.829** · centroid baseline 0.333 (collapsed to predicting "both")
+- Reading: the CNN beat the zero-training geometric baseline by ~50 points — real signal, not a geometric trick; in the ballpark of HandyTrak's ~89% (which used far more data + tuning).
+
+_Held-out = last 20% of frames per class in capture order (time-ordered split, no shuffle). Windowed = 30-frame sliding majority vote. Within-user only — cross-user generalization not yet measured._
+
+---
+
+## Next steps (rough priority)
+
+1. **Prove it generalizes — add participants.** Collect 2–4 more people and
+   retrain (one model each); a consistent average across people is what makes
+   the result defensible.
+2. **The research payoff — connect the two halves.** Use the holding-hand
+   prediction to select a **per-hand Gaussian keyboard**: grip changes thumb
+   reach → changes tap distribution → the optimal Gaussian key boundaries
+   differ by hand. (Requires holding-hand labels during typing — a future
+   increment.)

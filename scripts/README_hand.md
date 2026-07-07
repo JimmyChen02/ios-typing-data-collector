@@ -323,11 +323,62 @@ paper path was followed.
 
 ---
 
+## IMU sequence model (`--imu-seq`, `scripts/imu_sequence.py`)
+
+The `--use-imu` fusion path above concatenates a 48-d **summary** vector
+(mean/std/min/max per channel over the whole session) onto the image
+features. `scripts/imu_sequence.py` adds a second, independent IMU path: a
+windowed **sequence** feature — a fixed `(window, 12)` slice of the raw IMU
+stream centered on (or trailing) each photo's capture timestamp — fed to a
+small Conv1D classifier (fallbacks: sklearn LogisticRegression, then a
+pure-numpy nearest-centroid, mirroring `train.py`'s own fallback ladder).
+This path does not use image features at all and skips the slow
+preprocess/segment/VGG stages entirely.
+
+```sh
+.venv-ml/bin/python scripts/train_hand_classifier.py \
+    Model-Training-Test/hand_manifest_Jimmy_Chen.csv \
+    --images-root Model-Training-Test/ \
+    --out Model-Training-Test/models_imu/ \
+    --imu-seq --imu-window 50 --epochs 10 \
+    --md-out Model-Training-Test/model.md
+# causal (serve-matched) variant:
+#   ... --imu-seq --imu-causal
+```
+
+- `--imu-window` (default 50, ≈1.0s at 50 Hz) — samples per window. Distinct
+  from `--window-size` (the 2 Hz majority-vote evaluation window, default 30)
+  — both flags coexist; do not confuse them.
+- `--imu-causal` — trailing window (prev+curr only) instead of the default
+  centered window (prev+curr+future). Offline training/eval typically uses
+  the centered window; the on-device live model (D3) uses the causal variant
+  since it cannot see future samples.
+- `--imu-seq` and `--use-imu` are mutually informative, not mutually
+  exclusive at the CLI level: if both are passed, `--imu-seq` wins and a
+  warning is printed.
+- `--mode` is forced to `handynet` under `--imu-seq` (the centroid baseline
+  is image-only and has nothing to evaluate here); a note is printed if the
+  requested mode was overridden.
+- Reuses the existing per-participant grouping, time-ordered
+  `split_train_eval_indices`, `windowed_accuracy`, `_save_model`, and
+  summary/markdown writers unchanged — the IMU-sequence model occupies the
+  same "Option B" (`handynet_*`) row/column slot as the image HandyNet model.
+- `--demo` works with `--imu-seq` out of the box: the synthetic manifest
+  already writes one IMU CSV per (participant, condition) block with a
+  per-condition signal offset, so `--demo --imu-seq` has real separability
+  to learn from.
+
+See `Model-Training-Test/README.md` for the step-by-step training guide
+(window semantics, Core ML export) and `Model-Training-Test/model.md` for
+the results log.
+
 ## Future work
 
 - **IMU fusion** — `MotionRecorder` is wired but OFF by default; enabling it
   and fusing IMU with image features is left for a future increment.
-- **On-device Core ML** conversion and inference.
+- **On-device Core ML** conversion and inference — see
+  `scripts/export_imu_coreml.py` and `docs/POSTURE_DEMO.md` (IMU-sequence
+  model only; the image pipeline is too heavy for on-device inference).
 - **Landscape-mode** capture.
 
 ---

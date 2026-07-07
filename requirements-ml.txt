@@ -11,3 +11,8 @@ torchvision>=0.17
 # numpy-2.x- and py3.12-compatible TensorFlow (Apple-Silicon-capable generic wheel).
 # See OPEN QUESTION 1 before tightening this pin.
 tensorflow>=2.16,<2.20
+# Used ONLY for the on-device Core ML export step (scripts/export_imu_coreml.py,
+# D3). Keep the same numpy-2.x pin caveat as tensorflow above — coremltools
+# releases can lag numpy's latest major version; if install fails, check
+# https://github.com/apple/coremltools for the current numpy-2.x-compatible range.
+coremltools>=7.0

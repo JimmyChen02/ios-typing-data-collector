@@ -332,10 +332,13 @@ class TestTrainHandClassifier(unittest.TestCase):
     def test_extract_features_fallback_length(self):
         """Fallback extract_features returns a 1024-d vector (32×32 flatten)."""
         import numpy as np
+        from unittest import mock
         # Build a dummy 224×224 uint8 mask
         mask = (np.random.rand(224, 224) > 0.5).astype("uint8") * 255
-        feat = thc.extract_features(mask)
-        # keras is absent in this environment → fallback
+        # Force the no-keras fallback so this passes in any environment
+        # (in .venv-ml keras IS present and the real VGG16 path returns 25088-d)
+        with mock.patch.object(thc, "_try_import_keras", return_value=(None, None)):
+            feat = thc.extract_features(mask)
         self.assertEqual(len(feat), 1024, f"Expected 1024-d fallback; got {len(feat)}")
 
     # -----------------------------------------------------------------------
@@ -344,6 +347,7 @@ class TestTrainHandClassifier(unittest.TestCase):
     def test_nearest_centroid_predict_and_score(self):
         """NearestCentroid classifier predict() and score() work after training."""
         import numpy as np
+        from unittest import mock
         np.random.seed(42)
         # 3 well-separated clusters
         X = np.vstack([
@@ -353,7 +357,12 @@ class TestTrainHandClassifier(unittest.TestCase):
         ])
         y = ["left"] * 10 + ["right"] * 10 + ["both"] * 10
 
-        model = thc.train(X, y)
+        # Force the pure-numpy nearest-centroid fallback so this passes in any
+        # environment (in .venv-ml keras IS present, so train() would build the
+        # HandyNet head — 2 epochs on 30 points lands near chance, not >0.8)
+        with mock.patch.object(thc, "_try_import_keras", return_value=(None, None)), \
+             mock.patch.object(thc, "_try_import_sklearn", return_value=None):
+            model = thc.train(X, y)
 
         self.assertEqual(sorted(model._hand_classes), ["both", "left", "right"])
         acc = thc._compute_accuracy(model, X, y)
@@ -1124,6 +1133,430 @@ class TestExistingManifestsBackwardCompat(unittest.TestCase):
 
     def test_hand_manifest_jimmy_chen(self):
         self._check_manifest("hand_manifest_Jimmy_Chen.csv", expected_min_rows=50)
+
+
+# ---------------------------------------------------------------------------
+# NEW: D1 — scripts/imu_sequence.py
+# ---------------------------------------------------------------------------
+
+import imu_sequence as iseq
+
+
+class TestImuSequenceLoadSeries(unittest.TestCase):
+    """imu_sequence.load_imu_series"""
+
+    def test_happy_path_shape_and_values(self):
+        """A well-formed IMU CSV loads to (T, 13) float32, columns = [t_ms] + channels."""
+        import numpy as np
+        with tempfile.TemporaryDirectory(prefix="iseq_test_") as tmp:
+            csv_path = Path(tmp) / "sess.csv"
+            row1 = [0.0] + [float(i) for i in range(12)]
+            row2 = [20.0] + [float(i) + 10.0 for i in range(12)]
+            _write_imu_csv(csv_path, [row1, row2])
+
+            series = iseq.load_imu_series(str(csv_path))
+
+        self.assertIsNotNone(series)
+        self.assertEqual(series.shape, (2, 13))
+        self.assertEqual(series.dtype, np.float32)
+        self.assertEqual(list(series[:, 0]), [0.0, 20.0])
+        # Channel columns follow IMU_CHANNELS order (attitude_roll first == index 1)
+        self.assertAlmostEqual(float(series[0, 1]), 0.0, places=4)
+        self.assertAlmostEqual(float(series[1, 1]), 10.0, places=4)
+
+    def test_none_path_returns_none(self):
+        """load_imu_series(None) -> None, never raises."""
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            self.assertIsNone(iseq.load_imu_series(None))
+
+    def test_missing_file_returns_none(self):
+        """Nonexistent path -> None, warns, no exception."""
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = iseq.load_imu_series("/nonexistent/does_not_exist_xyzzy.csv")
+        self.assertIsNone(result)
+        self.assertTrue(any("not found" in str(w.message) for w in caught))
+
+    def test_header_only_returns_none(self):
+        """Header-only CSV (0 data rows) -> None, warns, no exception."""
+        with tempfile.TemporaryDirectory(prefix="iseq_test_") as tmp:
+            csv_path = Path(tmp) / "empty.csv"
+            _write_imu_csv(csv_path, [])
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                result = iseq.load_imu_series(str(csv_path))
+        self.assertIsNone(result)
+        self.assertTrue(any("no data rows" in str(w.message) for w in caught))
+
+    def test_non_numeric_row_skipped_not_fatal(self):
+        """A row with a non-numeric t_ms is skipped (never raises); other rows load fine."""
+        with tempfile.TemporaryDirectory(prefix="iseq_test_") as tmp:
+            csv_path = Path(tmp) / "sess.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(_IMU_HEADER)
+                writer.writerow(["GARBAGE"] + [1.0] * 12)  # bad t_ms -> row skipped
+                writer.writerow([20.0] + [2.0] * 12)
+            series = iseq.load_imu_series(str(csv_path))
+        self.assertIsNotNone(series)
+        self.assertEqual(series.shape, (1, 13))
+        self.assertAlmostEqual(float(series[0, 0]), 20.0, places=4)
+
+    def test_non_numeric_cell_becomes_zero_not_fatal(self):
+        """A non-numeric channel cell (with a valid t_ms) becomes 0.0, row kept."""
+        with tempfile.TemporaryDirectory(prefix="iseq_test_") as tmp:
+            csv_path = Path(tmp) / "sess.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(_IMU_HEADER)
+                writer.writerow([0.0, "NaN_GARBAGE"] + [1.0] * 11)
+            series = iseq.load_imu_series(str(csv_path))
+        self.assertIsNotNone(series)
+        self.assertEqual(series.shape, (1, 13))
+        # attitude_roll (first channel, column index 1) -> 0.0 fallback
+        self.assertEqual(float(series[0, 1]), 0.0)
+
+
+class TestImuSequenceWindowForTimestamp(unittest.TestCase):
+    """imu_sequence.window_for_timestamp"""
+
+    def _make_series(self, n=100, dt=20.0):
+        """A synthetic (n, 13) series: t_ms = i*dt, channel c = i (same for all c)."""
+        import numpy as np
+        t = (np.arange(n) * dt).astype(np.float32)
+        chans = np.tile(np.arange(n, dtype=np.float32).reshape(-1, 1), (1, 12))
+        return np.concatenate([t.reshape(-1, 1), chans], axis=1).astype(np.float32)
+
+    def test_shape_always_exact_centered(self):
+        series = self._make_series()
+        win = iseq.window_for_timestamp(series, center_t_ms=1000.0, window=50, causal=False)
+        self.assertEqual(win.shape, (50, 12))
+
+    def test_shape_always_exact_causal(self):
+        series = self._make_series()
+        win = iseq.window_for_timestamp(series, center_t_ms=1000.0, window=50, causal=True)
+        self.assertEqual(win.shape, (50, 12))
+
+    def test_causal_window_is_trailing_prev_curr_only(self):
+        """Causal window ends at (and includes) the nearest sample; no future samples."""
+        series = self._make_series(n=100, dt=20.0)
+        # center at t=1000 -> nearest sample index 50 (t=1000)
+        win = iseq.window_for_timestamp(series, center_t_ms=1000.0, window=10, causal=True)
+        # Trailing 10 samples ending at idx 50: channel values 41..50
+        self.assertEqual(list(win[:, 0]), [float(i) for i in range(41, 51)])
+
+    def test_centered_window_includes_future(self):
+        """Centered window includes samples both before and after the nearest sample."""
+        series = self._make_series(n=100, dt=20.0)
+        win = iseq.window_for_timestamp(series, center_t_ms=1000.0, window=10, causal=False)
+        # window//2 = 5 before (inclusive of center) + 5 after -> idx 45..54
+        self.assertEqual(list(win[:, 0]), [float(i) for i in range(45, 55)])
+
+    def test_out_of_range_timestamp_clamped(self):
+        """A center_t_ms far outside the series range clamps to the boundary sample."""
+        series = self._make_series(n=100, dt=20.0)
+        win_low = iseq.window_for_timestamp(series, center_t_ms=-99999.0, window=10, causal=False)
+        win_high = iseq.window_for_timestamp(series, center_t_ms=99999.0, window=10, causal=False)
+        # Clamped to the first/last sample -> all rows repeat the boundary value
+        self.assertTrue((win_low[:, 0] == win_low[0, 0]).all() or win_low[0, 0] == 0.0)
+        self.assertEqual(float(win_high[-1, 0]), 99.0)  # last sample's channel value
+
+    def test_fewer_samples_than_window_padded_by_clamping(self):
+        """A series shorter than `window` still returns exactly (window, 12) via clamping."""
+        series = self._make_series(n=5, dt=20.0)
+        win = iseq.window_for_timestamp(series, center_t_ms=40.0, window=50, causal=False)
+        self.assertEqual(win.shape, (50, 12))
+
+    def test_empty_series_returns_zeros(self):
+        """None or empty series -> zeros((window, 12))."""
+        import numpy as np
+        win_none = iseq.window_for_timestamp(None, center_t_ms=0.0, window=50, causal=False)
+        self.assertEqual(win_none.shape, (50, 12))
+        self.assertTrue(np.all(win_none == 0.0))
+
+        empty = np.zeros((0, 13), dtype=np.float32)
+        win_empty = iseq.window_for_timestamp(empty, center_t_ms=0.0, window=50, causal=False)
+        self.assertEqual(win_empty.shape, (50, 12))
+        self.assertTrue(np.all(win_empty == 0.0))
+
+
+class TestImuSequenceFeature(unittest.TestCase):
+    """imu_sequence.imu_sequence_feature"""
+
+    def test_flatten_true_shape(self):
+        import numpy as np
+        series = np.tile(np.arange(30, dtype=np.float32).reshape(-1, 1), (1, 13))
+        series[:, 0] = np.arange(30, dtype=np.float32) * 20.0  # t_ms column
+        feat = iseq.imu_sequence_feature(series, center_t_ms=200.0, window=20, causal=False, flatten=True)
+        self.assertEqual(feat.shape, (20 * 12,))
+
+    def test_flatten_false_shape(self):
+        import numpy as np
+        series = np.tile(np.arange(30, dtype=np.float32).reshape(-1, 1), (1, 13))
+        series[:, 0] = np.arange(30, dtype=np.float32) * 20.0
+        feat = iseq.imu_sequence_feature(series, center_t_ms=200.0, window=20, causal=False, flatten=False)
+        self.assertEqual(feat.shape, (20, 12))
+
+    def test_z_normalized_zero_mean_unit_var_when_variable(self):
+        """A channel with real variance in-window normalizes to ~zero mean, ~unit std."""
+        import numpy as np
+        rng = np.random.default_rng(0)
+        n = 60
+        t = np.arange(n, dtype=np.float32) * 20.0
+        chans = rng.normal(loc=5.0, scale=2.0, size=(n, 12)).astype(np.float32)
+        series = np.concatenate([t.reshape(-1, 1), chans], axis=1)
+        feat = iseq.imu_sequence_feature(series, center_t_ms=600.0, window=40, causal=False, flatten=False)
+        self.assertAlmostEqual(float(feat[:, 0].mean()), 0.0, places=4)
+        self.assertAlmostEqual(float(feat[:, 0].std()), 1.0, places=3)
+
+    def test_zero_variance_channel_normalizes_to_zero_no_div_by_zero(self):
+        """A constant (zero-variance) channel in-window -> all-zero, no NaN/inf."""
+        import numpy as np
+        n = 30
+        t = np.arange(n, dtype=np.float32) * 20.0
+        chans = np.full((n, 12), 3.5, dtype=np.float32)  # constant everywhere
+        series = np.concatenate([t.reshape(-1, 1), chans], axis=1)
+        feat = iseq.imu_sequence_feature(series, center_t_ms=300.0, window=20, causal=False, flatten=False)
+        self.assertTrue(np.all(np.isfinite(feat)))
+        self.assertTrue(np.all(feat == 0.0))
+
+    def test_none_series_returns_zeros(self):
+        import numpy as np
+        feat = iseq.imu_sequence_feature(None, center_t_ms=0.0, window=20, causal=False, flatten=True)
+        self.assertEqual(feat.shape, (20 * 12,))
+        self.assertTrue(np.all(feat == 0.0))
+
+
+class TestImuSequenceBuildDataset(unittest.TestCase):
+    """imu_sequence.build_sequence_dataset"""
+
+    def test_happy_path_shape_and_grouping(self):
+        """Two records sharing one IMU CSV -> (2, window, 12) X, labels/sort_keys parallel."""
+        import numpy as np
+        with tempfile.TemporaryDirectory(prefix="iseq_ds_") as tmp:
+            tmp_path = Path(tmp)
+            imu_csv = tmp_path / "sess.csv"
+            rows = [[float(i) * 20.0] + [float(i)] * 12 for i in range(60)]
+            _write_imu_csv(imu_csv, rows)
+
+            records = [
+                {
+                    "imu_path": str(imu_csv), "label": "left",
+                    "captured_at_iso": "2026-01-01T00:00:00Z",
+                    "sort_key": (0, "2026-01-01T00:00:00Z", "a.jpg"),
+                },
+                {
+                    "imu_path": str(imu_csv), "label": "right",
+                    "captured_at_iso": "2026-01-01T00:00:01Z",
+                    "sort_key": (1, "2026-01-01T00:00:01Z", "b.jpg"),
+                },
+            ]
+            X, labels, sort_keys = iseq.build_sequence_dataset(records, window=20, causal=False)
+
+        self.assertEqual(X.shape, (2, 20, 12))
+        self.assertEqual(labels, ["left", "right"])
+        self.assertEqual(len(sort_keys), 2)
+
+    def test_missing_imu_gets_all_zero_window_kept_not_dropped(self):
+        """A record whose imu_path is None still appears in X (all-zero window)."""
+        import numpy as np
+        records = [
+            {"imu_path": None, "label": "left",
+             "captured_at_iso": "2026-01-01T00:00:00Z",
+             "sort_key": (0, "2026-01-01T00:00:00Z", "a.jpg")},
+        ]
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            X, labels, sort_keys = iseq.build_sequence_dataset(records, window=10, causal=False)
+        self.assertEqual(X.shape, (1, 10, 12))
+        self.assertTrue(np.all(X[0] == 0.0))
+        self.assertEqual(labels, ["left"])
+
+    def test_session_start_proxy_is_min_captured_at(self):
+        """center_t_ms is derived relative to the MIN captured_at_iso in the group."""
+        import numpy as np
+        with tempfile.TemporaryDirectory(prefix="iseq_ds2_") as tmp:
+            tmp_path = Path(tmp)
+            imu_csv = tmp_path / "sess.csv"
+            # t_ms 0..980 step 20 (50 samples), channel value == sample index
+            rows = [[float(i) * 20.0] + [float(i)] * 12 for i in range(50)]
+            _write_imu_csv(imu_csv, rows)
+
+            records = [
+                {"imu_path": str(imu_csv), "label": "left",
+                 "captured_at_iso": "2026-01-01T00:00:00Z",  # session start (t=0)
+                 "sort_key": (0, "2026-01-01T00:00:00Z", "a.jpg")},
+                {"imu_path": str(imu_csv), "label": "right",
+                 "captured_at_iso": "2026-01-01T00:00:01Z",  # +1s -> center_t_ms=1000
+                 "sort_key": (1, "2026-01-01T00:00:01Z", "b.jpg")},
+            ]
+            X, labels, sort_keys = iseq.build_sequence_dataset(records, window=1, causal=True)
+
+        # First record: center_t_ms=0 -> nearest sample idx 0 -> value 0
+        self.assertAlmostEqual(float(X[0, 0, 0]), 0.0, places=3)
+        # Second record: center_t_ms=1000 -> nearest sample idx 50 (clamped to 49) -> value 49
+        self.assertAlmostEqual(float(X[1, 0, 0]), 49.0, places=3)
+
+    def test_empty_records_returns_empty_arrays(self):
+        import numpy as np
+        X, labels, sort_keys = iseq.build_sequence_dataset([], window=10, causal=False)
+        self.assertEqual(X.shape, (0, 10, 12))
+        self.assertEqual(labels, [])
+        self.assertEqual(sort_keys, [])
+
+
+class TestImuSequenceTrainModel(unittest.TestCase):
+    """imu_sequence.train_imu_sequence_model"""
+
+    def test_happy_path_attaches_hand_classes_and_predicts(self):
+        """Trains on separable synthetic windows; predict() returns known labels."""
+        import numpy as np
+        rng = np.random.default_rng(1)
+        n_per_class = 15
+        window = 10
+        left = rng.normal(loc=-5.0, scale=0.2, size=(n_per_class, window, 12)).astype(np.float32)
+        right = rng.normal(loc=5.0, scale=0.2, size=(n_per_class, window, 12)).astype(np.float32)
+        X = np.concatenate([left, right], axis=0)
+        labels = ["left"] * n_per_class + ["right"] * n_per_class
+
+        model = iseq.train_imu_sequence_model(X, labels, epochs=3)
+
+        self.assertTrue(hasattr(model, "_hand_classes"))
+        self.assertEqual(sorted(model._hand_classes), ["left", "right"])
+
+        preds = model.predict(X)
+        preds_arr = np.array(preds)
+        # Decode however _predict_labels would (mirrors train_hand_classifier logic)
+        if preds_arr.ndim == 2:
+            pred_labels = [model._hand_classes[i] for i in preds_arr.argmax(axis=1)]
+        elif preds_arr.dtype.kind in ("i", "u"):
+            pred_labels = [model._hand_classes[i] for i in preds_arr]
+        else:
+            pred_labels = list(preds_arr)
+        acc = float(np.mean(np.array(pred_labels) == np.array(labels)))
+        self.assertGreater(acc, 0.8, f"Expected high train acc on separable data; got {acc:.3f}")
+
+    def test_nearest_centroid_seq_directly(self):
+        """_NearestCentroidSeqClassifier / _train_nearest_centroid_seq works standalone."""
+        import numpy as np
+        X = np.concatenate([
+            np.zeros((5, 4, 12), dtype=np.float32),
+            np.full((5, 4, 12), 10.0, dtype=np.float32),
+        ], axis=0)
+        y_idx = np.array([0] * 5 + [1] * 5)
+        model = iseq._train_nearest_centroid_seq(X, y_idx, ["left", "right"])
+        preds = model.predict(X)
+        acc = model.score(X, ["left"] * 5 + ["right"] * 5)
+        self.assertEqual(acc, 1.0)
+
+
+class TestImuSeqCliIntegration(unittest.TestCase):
+    """train_hand_classifier.py --imu-seq end-to-end via CLI (spec's required demo path)."""
+
+    def test_demo_imu_seq_runs_end_to_end(self):
+        """`--demo --imu-seq` must run end-to-end on synthetic data (spec requirement)."""
+        script = SCRIPTS_DIR / "train_hand_classifier.py"
+        result = subprocess.run(
+            [sys.executable, str(script), "--demo", "--imu-seq", "--epochs", "1"],
+            capture_output=True, text=True, timeout=300,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("IMU sequence model: ON", result.stdout)
+        self.assertIn("Summary written to:", result.stdout)
+
+    def test_demo_imu_seq_causal_runs_end_to_end(self):
+        """`--demo --imu-seq --imu-causal` (the serve-matched variant) also runs end-to-end."""
+        script = SCRIPTS_DIR / "train_hand_classifier.py"
+        result = subprocess.run(
+            [sys.executable, str(script), "--demo", "--imu-seq", "--imu-causal",
+             "--epochs", "1"],
+            capture_output=True, text=True, timeout=300,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("causal=True", result.stdout)
+
+    def test_imu_seq_wins_over_use_imu_when_both_passed(self):
+        """--imu-seq and --use-imu together: --imu-seq wins, warning printed to stderr."""
+        script = SCRIPTS_DIR / "train_hand_classifier.py"
+        result = subprocess.run(
+            [sys.executable, str(script), "--demo", "--imu-seq", "--use-imu",
+             "--epochs", "1"],
+            capture_output=True, text=True, timeout=300,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("IMU sequence model: ON", result.stdout)
+        self.assertIn("--imu-seq wins", result.stdout + result.stderr)
+
+    def test_summary_rows_record_imu_seq_flag(self):
+        """summary.json rows include imu_seq: true for an --imu-seq run."""
+        with tempfile.TemporaryDirectory(prefix="thc_imu_seq_cli_") as tmp:
+            script = SCRIPTS_DIR / "train_hand_classifier.py"
+            out_dir = Path(tmp) / "out"
+            result = subprocess.run(
+                [sys.executable, str(script), "--demo", "--imu-seq",
+                 "--epochs", "1", "--out", str(out_dir)],
+                capture_output=True, text=True, timeout=300,
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+            m = None
+            for line in result.stdout.splitlines():
+                if line.startswith("Summary written to:"):
+                    m = line.split("Summary written to:", 1)[1].strip()
+            self.assertIsNotNone(m, msg=result.stdout)
+            with open(m, encoding="utf-8") as fh:
+                summary = json.load(fh)
+        self.assertTrue(len(summary) > 0)
+        for row in summary:
+            self.assertIn("imu_seq", row)
+            self.assertTrue(row["imu_seq"] is True)
+
+    def test_mode_centroid_overridden_to_handynet_with_note(self):
+        """--imu-seq with --mode centroid is overridden to 'handynet' (printed note), not an error."""
+        script = SCRIPTS_DIR / "train_hand_classifier.py"
+        result = subprocess.run(
+            [sys.executable, str(script), "--demo", "--imu-seq", "--mode", "centroid",
+             "--epochs", "1"],
+            capture_output=True, text=True, timeout=300,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("overriding --mode", result.stdout)
+
+
+# ---------------------------------------------------------------------------
+# NEW: D3 — scripts/export_imu_coreml.py (no coremltools installed by design)
+# ---------------------------------------------------------------------------
+
+class TestExportImuCoreml(unittest.TestCase):
+
+    def test_missing_coremltools_fails_cleanly_no_traceback(self):
+        """Without coremltools installed, the script prints an install hint and
+        exits 1 — never a bare ImportError traceback (per D3 spec)."""
+        script = SCRIPTS_DIR / "export_imu_coreml.py"
+        with tempfile.TemporaryDirectory(prefix="export_coreml_") as tmp:
+            fake_model = Path(tmp) / "nope.keras"
+            out_path = Path(tmp) / "out.mlpackage"
+            result = subprocess.run(
+                [sys.executable, str(script), "--model", str(fake_model),
+                 "--out", str(out_path)],
+                capture_output=True, text=True, timeout=60,
+            )
+        # Import coremltools directly to decide which branch we expect.
+        try:
+            import coremltools  # noqa: F401
+            has_coremltools = True
+        except ImportError:
+            has_coremltools = False
+
+        if not has_coremltools:
+            self.assertEqual(result.returncode, 1, msg=result.stdout + result.stderr)
+            self.assertIn("coremltools is not installed", result.stderr)
+            self.assertNotIn("Traceback (most recent call last)", result.stderr)
+        else:
+            # If coremltools happens to be installed in this environment, the
+            # script should instead fail cleanly on the missing model file.
+            self.assertEqual(result.returncode, 1, msg=result.stdout + result.stderr)
+            self.assertIn("model not found", result.stderr)
 
 
 # ---------------------------------------------------------------------------

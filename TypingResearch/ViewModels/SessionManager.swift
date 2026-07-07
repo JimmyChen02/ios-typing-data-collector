@@ -2,6 +2,7 @@ import Foundation
 import SwiftData
 import Observation
 import CoreGraphics
+import UIKit
 
 // MARK: - SessionMode
 
@@ -182,6 +183,14 @@ private extension RawInputEvent {
 
 // MARK: - SessionManager
 
+// @MainActor: SessionManager is only ever driven from SwiftUI (main-actor)
+// call sites; this annotation was added alongside D2b so the @MainActor
+// PostureCaptureController (which wraps @MainActor HandBurstCapture) can be
+// stored/called directly without extra actor-hopping boilerplate. The
+// Task.detached(...) blocks in SessionView.swift (PDF/Gaussian-preview
+// rendering) do not call back into SessionManager from inside the detached
+// closure, so they are unaffected by this change.
+@MainActor
 @Observable
 final class SessionManager {
     // MARK: - State
@@ -199,6 +208,16 @@ final class SessionManager {
     var isTrialActive: Bool = false
     var isSessionComplete: Bool = false
     var completedTrials: [Trial] = []
+
+    // MARK: - Posture training run (D2) — opt-in, off by default
+    //
+    // Set by PostureSelectView before the following typing session starts.
+    // isPostureTrainingRun gates ALL of the continuous labeled-capture
+    // behavior below; default false so normal timed studies are completely
+    // unaffected (see the D2 spec's research-integrity requirement — every
+    // new hook in this file and in TrialView is guarded on this flag).
+    var selectedPosture: HoldingHand = .unknown
+    var isPostureTrainingRun: Bool = false
 
     // Which hit-test model the keyboard is using this session.
     var sessionMode: SessionMode = .classic
@@ -240,6 +259,11 @@ final class SessionManager {
     private var modelContext: ModelContext?
     private var sessionTimer: Timer?
     private var timerStarted: Bool = false
+
+    // Posture training run (D2b) — owns the background HandBurstCapture +
+    // per-frame counter for the typing screen. Only touched when
+    // isPostureTrainingRun == true.
+    private let postureCapture = PostureCaptureController()
 
     // Continuous mode: enough sentences to outlast any session
     private static let initialSentenceCount = 20
@@ -302,13 +326,20 @@ final class SessionManager {
 
     private func startTimer() {
         sessionTimer?.invalidate()
+        // Timer's closure is not statically guaranteed @MainActor by the
+        // compiler even though it fires on the main run loop in practice;
+        // hop explicitly (same pattern used elsewhere in this file, e.g.
+        // PosturePredictor's prediction timer) now that SessionManager
+        // itself is @MainActor-isolated (added alongside D2b).
         sessionTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            if self.remainingSeconds > 0 {
-                self.remainingSeconds -= 1
-                self.elapsedSeconds += 1
-            } else {
-                self.timeExpired()
+            Task { @MainActor in
+                guard let self = self else { return }
+                if self.remainingSeconds > 0 {
+                    self.remainingSeconds -= 1
+                    self.elapsedSeconds += 1
+                } else {
+                    self.timeExpired()
+                }
             }
         }
     }
@@ -390,6 +421,70 @@ final class SessionManager {
     /// mirrors the allEvents pattern for the exporter.
     func recordHandSample(_ sample: HandSample) {
         pendingHandSamples.append(sample)
+    }
+
+    // MARK: - Posture training run (D2b) — background labeled capture
+    //
+    // Guarded on isPostureTrainingRun; TrialView calls these on
+    // appear/disappear. Capture runs strictly in the background — it never
+    // touches keystroke logging, timers, or event flow, preserving normal
+    // session data integrity.
+
+    /// Starts continuous labeled photo+IMU capture for the typing screen.
+    /// No-op when isPostureTrainingRun == false, or when no active
+    /// participant/session/modelContext is available. MotionRecorder is
+    /// NOT started here — it already starts in startSession(); this only
+    /// starts the front-camera HandBurstCapture stream.
+    func startPostureCapture() {
+        guard isPostureTrainingRun,
+              let participant,
+              let modelContext
+        else { return }
+
+        postureCapture.start(
+            participant: participant,
+            sessionId: currentSession?.id,
+            studyId: studyId,
+            posture: selectedPosture,
+            modelContext: modelContext
+        ) { [weak self] sample in
+            guard let self else { return }
+            self.pendingHandSamples.append(sample)
+        }
+    }
+
+    /// Stops continuous labeled capture. Idempotent (mirrors
+    /// HandBurstCapture.stop()'s idempotency). Frames already saved are
+    /// KEPT — unlike HandCaptureView's discard-on-early-dismiss, posture
+    /// training run frames are real training data and an early dismiss of
+    /// the typing screen should not lose them (intentional difference,
+    /// documented here and in TrialView).
+    func stopPostureCapture() {
+        postureCapture.stop()
+    }
+
+    /// Starts another one-session posture training run with the same
+    /// participant, so all three postures (L / R / Mid) can be collected
+    /// back-to-back from the summary screen. pendingHandSamples is preserved
+    /// across runs (startStudy clears it) so every run's frames land in ONE
+    /// hand-data zip; the manifest carries per-sample sessionId + posture
+    /// labels, and the zip already bundles all images and all per-session
+    /// IMU CSVs.
+    func startNextPostureRun(posture: HoldingHand) {
+        guard let p = participant else { return }
+        let accumulatedSamples = pendingHandSamples
+        selectedPosture = posture
+        isPostureTrainingRun = true
+        startStudy(participant: p, totalSessions: 1, design: .classicOnly)
+        pendingHandSamples = accumulatedSamples
+    }
+
+    /// D2c — the most recently captured posture-training frame, for the
+    /// live camera-preview overlay. Reuses PostureCaptureController's single
+    /// HandBurstCapture stream (no second AVCaptureSession). nil when no
+    /// posture training run is active or no frame has arrived yet.
+    var latestPostureFrame: UIImage? {
+        postureCapture.latestFrame
     }
 
     // Compatibility path for callers that still build finalized events eagerly.
@@ -479,7 +574,10 @@ final class SessionManager {
 
     // MARK: - Key Row / Col Lookup
 
-    fileprivate static func keyRow(for label: String) -> String {
+    // nonisolated: called from RawInputEvent.materialized(...), a free
+    // (non-main-actor) extension method — these are pure, stateless lookups
+    // so opting out of SessionManager's @MainActor isolation is safe.
+    fileprivate nonisolated static func keyRow(for label: String) -> String {
         let top = Set(["q","w","e","r","t","y","u","i","o","p",
                        "1","2","3","4","5","6","7","8","9","0"])
         let mid = Set(["a","s","d","f","g","h","j","k","l",
@@ -492,7 +590,7 @@ final class SessionManager {
         return "space"   // space, return, and unknown special keys
     }
 
-    fileprivate static func keyCol(for label: String) -> Int? {
+    fileprivate nonisolated static func keyCol(for label: String) -> Int? {
         let rows: [[String]] = [
             ["q","w","e","r","t","y","u","i","o","p"],
             ["a","s","d","f","g","h","j","k","l"],
@@ -679,6 +777,9 @@ final class SessionManager {
     func reset() {
         sessionTimer?.invalidate()
         sessionTimer = nil
+        postureCapture.stop()
+        selectedPosture = .unknown
+        isPostureTrainingRun = false
         participant = nil
         currentSession = nil
         currentTrial = nil

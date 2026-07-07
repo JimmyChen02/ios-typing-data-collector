@@ -35,3 +35,7 @@ logs/
 Model-Training-Test/hand_images
 Model-Training-Test/hand_manifest*.csv
 Model-Training-Test/*.log
+# Per-session IMU CSVs merged from app exports
+Model-Training-Test/imu/
+# Raw per-participant export folders (kept locally for provenance)
+Model-Training-Test/exports/

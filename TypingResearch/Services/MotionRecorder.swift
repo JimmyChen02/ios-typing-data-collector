@@ -24,6 +24,19 @@ final class MotionRecorder {
     // Set to true (and set before calling start) to activate recording.
     var isEnabled: Bool = true
 
+    // MARK: - Live-callback hook (D3)
+    //
+    // Optional, nil by default (guarded — normal runs never set this).
+    // Lets PosturePredictor buffer the live 50 Hz motion stream for on-device
+    // inference WITHOUT owning a second CMMotionManager (avoids two motion
+    // managers sampling the same hardware). Does NOT change the CSV output
+    // or the 50 Hz cadence — this is purely an additional fan-out of the
+    // same per-frame values already being appended to `frames` below.
+    // Called on the same delegate queue as the CSV recording (NOT the main
+    // thread); PosturePredictor is responsible for hopping to whatever
+    // isolation it needs.
+    var onFrame: ((MotionFrame) -> Void)?
+
     // MARK: - Private State
 
     private let manager = CMMotionManager()
@@ -32,7 +45,7 @@ final class MotionRecorder {
     private var frames: [MotionFrame] = []
     private let queue = OperationQueue()
 
-    private struct MotionFrame {
+    struct MotionFrame {
         let tMs: Double
         let roll: Double
         let pitch: Double
@@ -67,7 +80,7 @@ final class MotionRecorder {
         manager.startDeviceMotionUpdates(to: queue) { [weak self] motion, error in
             guard let self, let motion else { return }
             let t = Date().timeIntervalSince(self.startDate ?? Date()) * 1000.0
-            self.frames.append(MotionFrame(
+            let frame = MotionFrame(
                 tMs:   t,
                 roll:  motion.attitude.roll,
                 pitch: motion.attitude.pitch,
@@ -81,7 +94,62 @@ final class MotionRecorder {
                 rotX:  motion.rotationRate.x,
                 rotY:  motion.rotationRate.y,
                 rotZ:  motion.rotationRate.z
-            ))
+            )
+            self.frames.append(frame)
+            // Live fan-out for PosturePredictor (D3) — does not affect CSV
+            // output or the 50 Hz cadence above. nil in normal runs.
+            self.onFrame?(frame)
+        }
+    }
+
+    // MARK: - Monitor-only mode (live posture demo)
+    //
+    // Fans frames out to `onFrame` WITHOUT buffering or CSV writing — used
+    // by the standalone LivePostureDemoView, which needs live IMU for
+    // PosturePredictor but is not part of any session. No-op while a
+    // session recording is active (onFrame is already fed by start()).
+
+    private var isMonitoring = false
+
+    /// Start 50 Hz device-motion updates that only feed `onFrame`.
+    /// Idempotent; no-op during an active session recording.
+    func startMonitoring() {
+        guard sessionIdForCSV == nil, !isMonitoring else { return }
+        guard manager.isDeviceMotionAvailable else {
+            print("MotionRecorder: device motion not available (monitoring)")
+            return
+        }
+        isMonitoring = true
+        let monitorStart = Date()
+        manager.deviceMotionUpdateInterval = 1.0 / 50.0
+        manager.startDeviceMotionUpdates(to: queue) { [weak self] motion, _ in
+            guard let self, let motion else { return }
+            let frame = MotionFrame(
+                tMs:   Date().timeIntervalSince(monitorStart) * 1000.0,
+                roll:  motion.attitude.roll,
+                pitch: motion.attitude.pitch,
+                yaw:   motion.attitude.yaw,
+                gravX: motion.gravity.x,
+                gravY: motion.gravity.y,
+                gravZ: motion.gravity.z,
+                accX:  motion.userAcceleration.x,
+                accY:  motion.userAcceleration.y,
+                accZ:  motion.userAcceleration.z,
+                rotX:  motion.rotationRate.x,
+                rotY:  motion.rotationRate.y,
+                rotZ:  motion.rotationRate.z
+            )
+            self.onFrame?(frame)
+        }
+    }
+
+    /// Stop monitor-only updates. Leaves an active session recording
+    /// untouched. Idempotent.
+    func stopMonitoring() {
+        guard isMonitoring else { return }
+        isMonitoring = false
+        if sessionIdForCSV == nil {
+            manager.stopDeviceMotionUpdates()
         }
     }
 

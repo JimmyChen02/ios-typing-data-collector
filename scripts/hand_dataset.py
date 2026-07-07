@@ -147,6 +147,16 @@ def load_dataset_records(
                            not exist on disk. A missing/absent IMU path never
                            causes the row to be skipped — image-only samples
                            remain valid.
+        captured_at_iso   (str) — the raw ISO 8601 capture timestamp from the
+                           manifest row (same value embedded in `sort_key`, but
+                           exposed as an explicit key so callers — e.g. the D1
+                           IMU sequence builder — can locate a photo's
+                           timestamp inside its session IMU CSV without
+                           re-parsing `sort_key`). "" if the column was blank.
+        study_session_index (int) — the parsed per-frame index (see parsing
+                           note below), also exposed explicitly for the same
+                           reason. Kept in sync with the value folded into
+                           `sort_key`.
 
     Skips rows with missing/invalid label or missing image file (same rules as
     load_dataset: warn on not-found and bad-label, silent skip on empty
@@ -230,6 +240,9 @@ def load_dataset_records(
                 "participant_key": participant_key,
                 "sort_key": sort_key,
                 "imu_path": imu_path,
+                # Explicit keys (kept in sync with sort_key) — see docstring.
+                "captured_at_iso": captured_at,
+                "study_session_index": session_idx,
             })
 
     return records

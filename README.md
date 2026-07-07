@@ -96,7 +96,8 @@ python3 scripts/train_hand_classifier.py --mode centroid ...  # zero-training ba
 
 Useful knobs: `--epochs N` (train longer), `--mode handynet` (skip the centroid
 baseline), `--mode centroid` (baseline only, runs in seconds). See
-`Model-Training-Test/model.md` for a worked run with results and
+`Model-Training-Test/README.md` for the step-by-step training guide,
+`Model-Training-Test/model.md` for the results log, and
 `scripts/README_hand.md` for full pipeline and manifest-schema details.
 
 Open the app with:

@@ -124,6 +124,10 @@ from hand_dataset import (
     _make_demo_manifest_and_images,
 )
 
+# imu_sequence is imported lazily inside main() (only needed for --imu-seq)
+# to keep this file's import-time surface unchanged for callers that never
+# touch the IMU-sequence path.
+
 # ---------------------------------------------------------------------------
 # Module-level constants
 # ---------------------------------------------------------------------------
@@ -813,6 +817,16 @@ def centroid_baseline_eval(
 # main
 # ---------------------------------------------------------------------------
 
+def _group_by_participant(records: list[dict]) -> "dict[str, list[int]]":
+    """Return {participant_key -> [record indices]}, used by the --imu-seq
+    all-zero-IMU sanity check in main()."""
+    from collections import defaultdict
+    out: dict[str, list[int]] = defaultdict(list)
+    for i, rec in enumerate(records):
+        out[rec["participant_key"]].append(i)
+    return dict(out)
+
+
 def _save_model(model, out_dir: Path) -> None:
     """Save model to out_dir as .keras or .pkl."""
     model_path_keras = out_dir / "hand_model.keras"
@@ -852,11 +866,25 @@ def main() -> None:
         print(f"[FALLBACK — not paper results] Missing: {', '.join(missing)}. "
               "Lightweight substitutes will run.")
 
+    # --imu-seq wins over --use-imu when both are passed (mutually informative,
+    # not mutually exclusive at the parser level — resolved here per the spec).
+    if args.imu_seq and args.use_imu:
+        warnings.warn(
+            "--imu-seq and --use-imu both passed; --imu-seq wins (the "
+            "windowed IMU-sequence model is used; the 48-d IMU summary fusion "
+            "path with image features is skipped).",
+            stacklevel=2,
+        )
+
     # IMU fusion banner. NOTE: `_write_markdown_results` keeps only the single
     # BEST run by windowed accuracy — an image+IMU run and an image-only run
     # compete for the same block. To compare both, use DIFFERENT --md-out
-    # paths (or --out dirs) for the two runs.
-    if args.use_imu:
+    # paths (or --out dirs) for the two runs. (Same gotcha applies to
+    # --imu-seq runs vs. image-only/fusion runs.)
+    if args.imu_seq:
+        print(f"IMU sequence model: ON (window={args.imu_window}, "
+              f"causal={args.imu_causal})")
+    elif args.use_imu:
         print(f"IMU fusion: ON ({_IMU_FEATURE_DIM}-d)")
     else:
         print("IMU fusion: OFF")
@@ -894,37 +922,72 @@ def main() -> None:
 
     print(f"\nLoaded {len(records)} records from manifest")
 
-    # ---- Steps 2+3: preprocess -> segment -> features, streamed per frame ----
-    # Each frame is processed end-to-end and its large float image discarded
-    # immediately, so peak RAM holds only the compact silhouettes/features —
-    # not all raw 224x224x3 float arrays at once. Silhouettes are kept only when
-    # the centroid baseline needs them; features only for the HandyNet path.
-    need_features = mode in ("handynet", "both")
-    need_silhouettes = mode in ("centroid", "both")
-    print("Stage 1-3 — preprocess, segment"
-          + (", extract features" if need_features else "") + " ...")
+    # ---- --imu-seq: build the windowed IMU-sequence feature array directly,
+    # skipping preprocess/segment/VGG entirely (the slow stages). `mode` is
+    # forced to "handynet" for the rest of main() since the IMU-sequence model
+    # occupies the same "Option B" slot as HandyNet — no image features and
+    # no silhouettes are needed (centroid baseline is image-only, so --mode
+    # centroid/both would have nothing to evaluate under --imu-seq; the value
+    # is overridden with a printed note rather than erroring).
+    if args.imu_seq:
+        import imu_sequence
 
-    silhouettes: list = []
-    feature_list: list = []
-    n_records = len(records)
-    for i, r in enumerate(records):
-        img = preprocess(r["image_path"])
-        sil = segment(img)
-        del img
-        if need_silhouettes:
-            silhouettes.append(sil)
-        if need_features:
-            img_feat = extract_features(sil)
-            if args.use_imu:
-                imu_feat = imu_summary_features(r.get("imu_path"))
-                feat = np.concatenate([img_feat, imu_feat])
-            else:
-                feat = img_feat
-            feature_list.append(feat)
-        if (i + 1) % 50 == 0 or (i + 1) == n_records:
-            print(f"  processed {i + 1}/{n_records} frames", flush=True)
+        if mode != "handynet":
+            print(f"  --imu-seq: overriding --mode {mode!r} -> 'handynet' "
+                  "(the centroid baseline is image-only and has nothing to "
+                  "evaluate under --imu-seq).")
+            mode = "handynet"
 
-    features_arr = np.stack(feature_list, axis=0) if need_features else None
+        print(f"Stage 1-3 (skipped) — building IMU-sequence windows "
+              f"(window={args.imu_window}, causal={args.imu_causal}) ...")
+        features_arr, _seq_labels, _seq_sort_keys = imu_sequence.build_sequence_dataset(
+            records, window=args.imu_window, causal=args.imu_causal
+        )
+        silhouettes: list = []
+        need_features = True
+        need_silhouettes = False
+        print(f"  built {features_arr.shape[0]} windows of shape "
+              f"{features_arr.shape[1:]}")
+
+        # Flag participants whose IMU is entirely zero (all-missing) — a
+        # zero-variance feature gives chance accuracy but must not crash.
+        for p_key, p_idx in _group_by_participant(records).items():
+            if all(not np.any(features_arr[i]) for i in p_idx):
+                print(f"  NOTE: participant {p_key!r} has ALL-ZERO IMU "
+                      "windows (no readable IMU for any frame) — training "
+                      "will run but expect chance-level accuracy.")
+    else:
+        # ---- Steps 2+3: preprocess -> segment -> features, streamed per frame ----
+        # Each frame is processed end-to-end and its large float image discarded
+        # immediately, so peak RAM holds only the compact silhouettes/features —
+        # not all raw 224x224x3 float arrays at once. Silhouettes are kept only when
+        # the centroid baseline needs them; features only for the HandyNet path.
+        need_features = mode in ("handynet", "both")
+        need_silhouettes = mode in ("centroid", "both")
+        print("Stage 1-3 — preprocess, segment"
+              + (", extract features" if need_features else "") + " ...")
+
+        silhouettes = []
+        feature_list: list = []
+        n_records = len(records)
+        for i, r in enumerate(records):
+            img = preprocess(r["image_path"])
+            sil = segment(img)
+            del img
+            if need_silhouettes:
+                silhouettes.append(sil)
+            if need_features:
+                img_feat = extract_features(sil)
+                if args.use_imu:
+                    imu_feat = imu_summary_features(r.get("imu_path"))
+                    feat = np.concatenate([img_feat, imu_feat])
+                else:
+                    feat = img_feat
+                feature_list.append(feat)
+            if (i + 1) % 50 == 0 or (i + 1) == n_records:
+                print(f"  processed {i + 1}/{n_records} frames", flush=True)
+
+        features_arr = np.stack(feature_list, axis=0) if need_features else None
 
     # ---- Step 4: Group by participant ----
     from collections import defaultdict
@@ -1001,12 +1064,22 @@ def main() -> None:
             "handynet_windowed_acc": float("nan"),
             "centroid_frame_acc":   float("nan"),
             "imu_fusion":           bool(args.use_imu),
+            "imu_seq":              bool(args.imu_seq),
         }
 
-        # ---- Option B: HandyNet ----
+        # ---- Option B: HandyNet (image) OR IMU-sequence model (--imu-seq) ----
+        # Both occupy the same "Option B" slot in the row/summary/markdown
+        # writers below (handynet_* keys are reused for the IMU-sequence
+        # model's metrics too, so the existing summary/markdown code needs no
+        # changes — see the D1 spec's "reuse unchanged" instruction).
         if mode in ("handynet", "both") and features_arr is not None:
             train_feats = features_arr[abs_train]
-            model = train(train_feats, train_labels_list, epochs=epochs)
+            if args.imu_seq:
+                model = imu_sequence.train_imu_sequence_model(
+                    train_feats, train_labels_list, epochs=epochs
+                )
+            else:
+                model = train(train_feats, train_labels_list, epochs=epochs)
 
             # Save model + labels
             unique_labels_p = sorted(set(train_labels_list))
@@ -1310,6 +1383,33 @@ def _parse_args() -> argparse.Namespace:
         help="Concatenate a 48-d IMU summary vector onto the image features "
              "before the softmax head (feature-level fusion). Requires "
              "imu_relative_path in the manifest.",
+    )
+    parser.add_argument(
+        "--imu-seq",
+        action="store_true",
+        help="Use the windowed IMU SEQUENCE model (scripts/imu_sequence.py) "
+             "instead of image features entirely — skips preprocess/segment/"
+             "VGG (the slow stages). Mutually informative with --use-imu: if "
+             "both are passed, --imu-seq wins and a warning is printed.",
+    )
+    parser.add_argument(
+        "--imu-window",
+        type=int,
+        default=50,
+        help="IMU sequence window size in samples (default 50, ~1.0s at "
+             "50 Hz). Only used with --imu-seq. NOTE: distinct from "
+             "--window-size, which is the sliding-window MAJORITY-VOTE "
+             "evaluation window (2 Hz frame stream, default 30) — the two "
+             "windows measure different things and are not interchangeable.",
+    )
+    parser.add_argument(
+        "--imu-causal",
+        action="store_true",
+        help="Use a causal TRAILING IMU window (prev+curr only) instead of "
+             "the default centered window (prev+curr+future). Only used with "
+             "--imu-seq. Trailing windows match what the on-device live "
+             "model can compute (no future samples available at inference "
+             "time); centered windows are for offline training/eval only.",
     )
     return parser.parse_args()
 

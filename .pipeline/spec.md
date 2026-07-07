@@ -1,206 +1,323 @@
-# Spec: IMU + Image Fusion for the Holding-Hand Classifier (app-collected data)
+# Spec — IMU sequence modeling + labeled in-session hand-posture capture + live inference
 
-## OPEN QUESTIONS
-None. All five prior questions were resolved by the human (see "Resolved decisions" below). Implement exactly as specified; do not invent extra features.
+Scope for one branch of work. Splits into three deliverables that can be built and
+reviewed independently but share one data-collection change:
 
-## Resolved decisions (authoritative)
-- Q1: ENABLE iOS IMU collection now. All IMU + image data comes from the app's own collection. iOS work below is IN SCOPE.
-- Q2 (join key): one IMU CSV per `session_id`; add an `imu_relative_path` column to the hand manifest.
-- Q3 (feature representation): 48-d summary-stat vector = mean/std/min/max of the 12 IMU channels (roll, pitch, yaw, grav_x/y/z, acc_x/y/z, rot_x/y/z). Column `t_ms` is NOT a channel.
-- Q4 (fusion): feature-level concatenation of the 48-d IMU vector onto the existing image feature vector, BEFORE the Dense softmax head. Reuse `train(features, labels, epochs)` with its existing `(N, D)` contract unchanged (fusion just makes D larger).
-- Q5 (success metric): same held-out time-ordered 80/20 split, windowed (size-30) accuracy; report image-only vs image+IMU on the SAME split.
+- **D1 (Python)** — IMU *sequence* model in `scripts/` (windowed prev+curr+future
+  frames), extending the existing `--use-imu` fusion path in
+  `train_hand_classifier.py` from 48-d summary stats to a temporal-window feature.
+- **D2 (iOS)** — In-session labeled capture flow: user picks L / R / Both on one
+  screen, then types on the next while photos + IMU are captured continuously and
+  auto-labeled with the chosen posture. Plus a live camera-preview overlay with a
+  predicted-posture "tag".
+- **D3** — Core ML conversion path + a demo/video recipe.
 
----
-
-## Part A — iOS data-collection changes (Swift)
-
-### A1. Flip MotionRecorder ON
-File: `TypingResearch/Services/MotionRecorder.swift`, line 26.
-- Change `var isEnabled: Bool = false` to `var isEnabled: Bool = true`.
-- Do NOT change the CSV header (line 117-118) or the row format (line 121) — the Python side is hardcoded to that exact 13-column order (see A5). Header, in order:
-  `t_ms,attitude_roll,attitude_pitch,attitude_yaw,grav_x,grav_y,grav_z,acc_x,acc_y,acc_z,rot_x,rot_y,rot_z`
-- CSV path is unchanged: `Documents/imu/<sessionId.uuidString>.csv`.
-
-### A2. Wire the two SessionManager seams
-File: `TypingResearch/ViewModels/SessionManager.swift`.
-
-Seam 1 — start (currently line 291, commented):
-```
-// MotionRecorder.shared.start(sessionId: UUID(), studySessionIndex: 0)
-```
-Do NOT start recording in `startStudy` — at that point no `Session` exists yet, so its id is unknown and would not match the HandSample join key. Instead start recording inside `startSession(...)` right after `self.currentSession = session` is assigned (currently line 269). Add:
-```swift
-MotionRecorder.shared.start(sessionId: session.id, studySessionIndex: completedStudySessions)
-```
-Rationale: `HandSample.sessionId` is set to `sessionManager.currentSession?.id` (SessionView.swift line 639), and the IMU CSV is named `<sessionId>.csv`. Using `session.id` here makes the CSV filename equal the manifest `session_id` value — that IS the join. Remove the now-obsolete commented seam at line 291.
-
-Seam 2 — stop (currently line 617-618, commented):
-```
-// let _ = MotionRecorder.shared.stop()
-```
-This sits inside `finalizeSession()`. Replace the comment with a real call so the buffered frames flush to disk when the session ends:
-```swift
-let _ = MotionRecorder.shared.stop()
-```
-Keep it in the same location (after `BackendClient.shared.flush()`, before `try? modelContext?.save()`).
-
-Edge cases:
-- `start()` / `stop()` are internally guarded by `isEnabled` and `isDeviceMotionAvailable`; no extra guards needed.
-- If a session produces zero motion frames, `writeCSV` still writes a header-only CSV. That is acceptable; the Python loader treats an empty-body IMU CSV as "no IMU" (see A5 edge cases). Do not add special-casing in Swift.
-
-### A3. Add `imuRelativePath` to the HandSample model
-File: `TypingResearch/Models/HandSample.swift`.
-- Add stored property after `imageRelativePath` (line 47):
-  ```swift
-  var imuRelativePath: String   // relative to Documents/; "" if no IMU CSV
-  ```
-- Add matching init parameter (default `""`) after the `imageRelativePath` parameter (line 62), and assign `self.imuRelativePath = imuRelativePath` in the body.
-- Set the value where HandSample is constructed, `TypingResearch/Views/HandCaptureView.swift` around line 468-485. Add:
-  ```swift
-  imuRelativePath: sessionId.map { "imu/\($0.uuidString).csv" } ?? "",
-  ```
-  Place it in the initializer call (e.g. right after `imageRelativePath: rel,`). This yields the same relative path the zip layout uses (see A4). It is a path string only; do NOT check file existence on device.
-
-  SwiftData note: adding a non-optional stored property with a default value to an existing `@Model` is a lightweight-migration-safe additive change. Give it a default in the init so existing call sites that omit it still compile.
-
-### A4. Include IMU CSVs in the export + add manifest column
-File: `TypingResearch/Services/DataExporter.swift`.
-
-(a) Manifest header + rows — `exportHandManifestCSV` (lines 121-156).
-- Add `"imu_relative_path"` to the header array. Insert it immediately AFTER `"image_relative_path"` (currently line 128), so header order becomes:
-  `participant_first, participant_last, study_id, session_id, study_session_index, captured_at_iso, holding_hand, image_relative_path, imu_relative_path, image_pixel_width, image_pixel_height, camera_position, device_model, system_version, notes`
-  (15 columns; was 14.)
-- In the per-row array (lines 134-149), insert `csvEscape(s.imuRelativePath)` immediately after `csvEscape(s.imageRelativePath)` so column order matches the header exactly.
-
-(b) Zip layout — `exportHandDataZip` (lines 165-198).
-- After copying images into `hand_images/` (lines 189-194), copy every session IMU CSV into an `imu/` subfolder so `imu_relative_path` = `imu/<sessionId>.csv` resolves under the zip root (matching A3). Add:
-  ```swift
-  // IMU CSVs: Documents/imu/<sessionId>.csv → staging/imu/<sessionId>.csv
-  let imuSrc = FileManager.default
-      .urls(for: .documentDirectory, in: .userDomainMask)[0]
-      .appendingPathComponent("imu", isDirectory: true)
-  if fm.fileExists(atPath: imuSrc.path) {
-      let imuDest = staging.appendingPathComponent("imu", isDirectory: true)
-      try? fm.createDirectory(at: imuDest, withIntermediateDirectories: true)
-      if let files = try? fm.contentsOfDirectory(at: imuSrc, includingPropertiesForKeys: nil) {
-          for f in files where f.pathExtension == "csv" {
-              try? fm.copyItem(at: f, to: imuDest.appendingPathComponent(f.lastPathComponent))
-          }
-      }
-  }
-  ```
-  Copy ALL session CSVs (do not try to filter to referenced sessions); extra CSVs are harmless.
-
-### A5. Info.plist / permissions
-`INFOPLIST_KEY_NSMotionUsageDescription` is ALREADY present in `TypingResearch.xcodeproj/project.pbxproj` (lines 386 and 417) for both build configs. No plist change required. Do not remove it.
-
-### A6. Build + log requirement (per CLAUDE.md)
-- Build after the Swift changes:
-  ```sh
-  xcodebuild -scheme TypingResearch -destination 'platform=iOS Simulator,name=iPhone 16' build
-  ```
-- Append an entry to `build_log.md` describing the change, any errors, fixes, and the result (success/failure). This is mandatory on every build.
+The Coder reads only this file. Follow `CLAUDE.md`: iOS 17+, SwiftUI, `@Observable`
+`SessionManager`, update `build_log.md` on every build, no Claude attribution in
+commits, commit only when asked. Run Python from repo root via the ML venv
+(`.venv-ml/`), never install into the anaconda base.
 
 ---
 
-## Part B — Python fusion pipeline
+## RESOLVED QUESTIONS (user confirmed 2026-07-02 — these are final decisions)
 
-Two files change. Keep both backward-compatible with existing 14-column manifests (no `imu_relative_path`).
+1. **Live inference model format → (A) IMU-only Core ML model.** Convert the D1
+   IMU sequence model (small 1D-CNN/GRU on a rolling 12-channel window) to Core ML.
+   No camera needed for inference; the camera preview in D2c is display-only.
+   Vision-based live inference (B) is deferred, not built on this branch.
 
-### B1. `scripts/hand_dataset.py`
-- Update the module docstring schema block (lines 8-15) and the "14-column" wording (line 29-33) to mention the optional 15th column `imu_relative_path`.
-- In `load_dataset_records` (lines 129-207), add to each emitted record dict a new key:
-  ```python
-  "imu_path": <absolute path str or None>,
-  ```
-  Compute it as: `imu_rel = (row.get("imu_relative_path") or "").strip()`. If empty → `None`. Else `imu_abs = root / imu_rel`; if the file does not exist → `None` with a one-time `warnings.warn` (do NOT skip the row — image-only samples remain valid). Store `str(imu_abs)` when it exists.
-- Backward compat: rows from a 14-col manifest have no `imu_relative_path` key → `row.get(...)` returns `None` → `imu_path = None`. No crash.
-- `load_dataset` (lines 71-126) is unchanged (image-only helper).
-- Extend `_make_demo_manifest_and_images` (lines 227-333) so the demo exercises fusion:
-  - Add `"imu_relative_path"` to `fieldnames` (after `"image_relative_path"`), matching the new manifest column order in A4.
-  - Write one synthetic IMU CSV per participant-condition block under `<tmp>/imu/<name>.csv` with the EXACT 13-column header from A1 and ~40 rows of deterministic values (use the existing `rng`). Make the values class-separable (e.g. offset one channel by condition) so fusion demonstrably helps. Set each row's `imu_relative_path` to `imu/<name>.csv`.
-  - Keep the existing image generation intact.
+2. **"Mid" == `both`.** Reuse the existing `HoldingHand.both` class. No new enum
+   case, no manifest schema churn; existing trained models stay valid.
 
-### B2. `scripts/train_hand_classifier.py`
+3. **Labeled-typing capture is a NEW opt-in sub-flow** ("Posture training run")
+   reachable from the setup screen — NOT folded into the default timed study, so
+   existing keystroke-study data integrity is untouched.
 
-Add an IMU-feature extractor and a fusion switch. Do NOT change the `train`, `_train_handynet`, split, or windowing function signatures.
-
-(a) New constant near line 132:
-```python
-# 12 IMU channels (excludes t_ms), 4 stats each → 48-d summary vector
-_IMU_CHANNELS = [
-    "attitude_roll", "attitude_pitch", "attitude_yaw",
-    "grav_x", "grav_y", "grav_z",
-    "acc_x", "acc_y", "acc_z",
-    "rot_x", "rot_y", "rot_z",
-]
-_IMU_FEATURE_DIM = 48  # 12 channels × {mean, std, min, max}
-```
-
-(b) New function:
-```python
-def imu_summary_features(imu_path: "str | None") -> "np.ndarray":
-    """Return a 48-d float32 vector: [mean,std,min,max] per IMU channel,
-    channels in _IMU_CHANNELS order (stats grouped per channel:
-    ch0_mean,ch0_std,ch0_min,ch0_max, ch1_mean,...).
-
-    imu_path None, missing file, unreadable, or header-only (no data rows)
-    → zeros(48). Warns once per distinct failure reason. Reads the CSV with
-    csv.DictReader; ignores unexpected extra columns; missing expected column
-    → that channel's 4 stats are 0. Non-numeric cells are skipped per-cell.
-    """
-```
-Implementation notes: use `csv.DictReader`; collect per-channel float lists; `np.mean/std/min/max` (population std, `ddof=0`); empty channel → 4 zeros; return `np.zeros(48, dtype=np.float32)` on any total failure. Deterministic ordering: iterate `_IMU_CHANNELS` and emit `[mean, std, min, max]` for each.
-
-(c) CLI flag in `_parse_args` (near line 1145):
-```python
-parser.add_argument(
-    "--use-imu",
-    action="store_true",
-    help="Concatenate a 48-d IMU summary vector onto the image features "
-         "before the softmax head (feature-level fusion). Requires "
-         "imu_relative_path in the manifest.",
-)
-```
-
-(d) `main()` feature build (lines 804-828). When `args.use_imu` and `need_features`:
-- For each record `r`, compute `img_feat = extract_features(sil)` as today, then `imu_feat = imu_summary_features(r.get("imu_path"))`, then `feat = np.concatenate([img_feat, imu_feat])`. Append `feat`.
-- When `--use-imu` is NOT passed, behavior is byte-for-byte the current image-only path (no concat). This is how Q5 "image-only vs image+IMU on the same split" is produced: run twice on the same manifest, once without and once with `--use-imu`.
-- Because `train`/`_train_handynet` derive `n_features = features.shape[1]` (line 399), the larger fused D flows through with NO signature change. Confirm nothing else hardcodes the feature dimension.
-- Print a one-line banner in `main()` after the paper-faithful/fallback banner: `IMU fusion: ON (48-d)` or `IMU fusion: OFF`.
-
-(e) Summary/markdown labeling: add the fusion state to the run so results are self-describing. Minimal: include `"imu_fusion": bool(args.use_imu)` in each `summary_rows` dict, and pass it through so `_write_markdown_results` notes `(mode=..., epochs=..., imu=on/off)` in its generated caption. Do not otherwise restructure the summary table. NOTE: `_write_markdown_results` keeps only the single BEST run by windowed accuracy — an image+IMU run and an image-only run compete for the same block. To compare both, use DIFFERENT `--md-out` paths (or `--out` dirs) for the two runs; call this out in a code comment near the fusion banner.
-
-(f) Update the trailing "Future work" print (lines 1021-1024): remove the now-implemented "IMU+image multimodal fusion" bullet.
-
-### B3. Edge cases the Python side MUST handle
-- 14-column manifest (no IMU column) + `--use-imu`: every `imu_path` is None → every IMU vector is zeros(48). Fusion still runs (D grows by 48 zeros); warn once that no IMU data was found. Do not crash.
-- Mixed manifest: some rows have IMU, some don't → per-row zeros for the missing ones.
-- IMU CSV present but header-only (empty session): zeros(48).
-- `--use-imu` with `--mode centroid`: centroid path uses silhouettes, not features; IMU is ignored for centroid (only affects the HandyNet feature path). No error.
-- Fusion changes feature length only; the time-ordered split (`split_train_eval_indices`), windowing (`sliding_window_majority_vote`, `windowed_accuracy`), and per-class/confusion code are untouched.
+4. **Train/serve window asymmetry accepted.** Offline training/eval uses the
+   centered window (prev+curr+future); the live on-device model uses a causal
+   trailing window (prev+curr only).
 
 ---
 
-## Patterns to copy / follow
-- Swift CSV column add: mirror the exact header/row parallelism already in `exportHandManifestCSV` (DataExporter.swift lines 125-151) — header array and row array must stay index-aligned.
-- Swift file copy into zip staging: copy the existing `hand_images/` block in `exportHandDataZip` (DataExporter.swift lines 189-194) for the new `imu/` block.
-- Python optional-column read: follow the defensive `(row.get("...") or "").strip()` + missing-file-warn-and-continue idiom already in `load_dataset_records` (hand_dataset.py lines 157-198).
-- Python fallback discipline: follow the existing "never abort, warn and degrade" pattern (return zeros rather than raise) used throughout `train_hand_classifier.py`.
+## Assumptions (chosen defaults, not blocking)
 
-## Files touched (summary)
-Create: none.
-Modify:
-- `TypingResearch/Services/MotionRecorder.swift` (line 26)
-- `TypingResearch/ViewModels/SessionManager.swift` (~line 269 start seam; ~line 617 stop seam; remove line 291 comment)
-- `TypingResearch/Models/HandSample.swift` (add `imuRelativePath`)
-- `TypingResearch/Views/HandCaptureView.swift` (~line 468 init call)
-- `TypingResearch/Services/DataExporter.swift` (`exportHandManifestCSV` header+row; `exportHandDataZip` imu copy)
-- `scripts/hand_dataset.py` (`load_dataset_records`, `_make_demo_manifest_and_images`, docstring)
-- `scripts/train_hand_classifier.py` (IMU constants, `imu_summary_features`, `--use-imu`, `main` feature build, summary/markdown label, future-work print)
-- `build_log.md` (mandatory build entry)
+- IMU is recorded at 50 Hz (`MotionRecorder`, `deviceMotionUpdateInterval = 1/50`).
+  Photos at ~2 Hz (`HandBurstCapture.targetFPS = 2.0`). A "frame" for labeling is a
+  photo; each photo is joined to the IMU window centered on its capture time.
+- Sequence window default: **50 IMU samples (~1.0 s) centered on the photo timestamp**
+  (25 before + 25 after). Tunable via CLI flag. Rationale: matches the "increase
+  window size / prev+curr+future" note and the 50 Hz rate.
+- One IMU CSV per session already exists at `Documents/imu/<sessionId>.csv` with the
+  13-column header in `MotionRecorder.swift`. Reuse it; do not change the format.
+- Class set stays `{left, right, both}` (drop `unknown` for training, as today).
+- No new SwiftData migration is needed — `HandSample` already carries
+  `imuRelativePath`, `holdingHand`, `capturedAt`, and per-frame `studySessionIndex`.
 
-## Verification (Coder should run)
-1. `xcodebuild -scheme TypingResearch -destination 'platform=iOS Simulator,name=iPhone 16' build` → update `build_log.md`.
-2. `python3 scripts/hand_dataset.py --demo` (from repo root, using `venv/`) → confirms demo manifest now has `imu_relative_path` and IMU CSVs are written.
-3. `python3 scripts/train_hand_classifier.py --demo --use-imu` and again without `--use-imu` → both run end-to-end; fusion banner reflects the flag; feature dim differs by 48.
+---
+
+## D1 — IMU sequence model (Python)
+
+### Files
+- **Create** `scripts/imu_sequence.py` — new module: IMU window loading + feature
+  builder + a small sequence classifier. Pattern to copy: the structure, lazy-import
+  guards, `[PAPER-FAITHFUL]/[FALLBACK]` banner style, and docstring conventions of
+  `scripts/train_hand_classifier.py`. Reuse `_IMU_CHANNELS` ordering exactly from
+  that file (12 channels, no `t_ms`).
+- **Modify** `scripts/train_hand_classifier.py` — add a new IMU-sequence code path
+  alongside the existing 48-d `--use-imu` summary path. Do NOT delete
+  `imu_summary_features`; add a sibling.
+- **Modify** `scripts/hand_dataset.py` — `load_dataset_records` already returns
+  `imu_path` and `sort_key` (which contains `captured_at_iso`). Add `captured_at_iso`
+  and the per-frame `study_session_index` as explicit keys on each record dict so the
+  sequence builder can locate a photo's timestamp inside its session IMU CSV without
+  re-parsing `sort_key`. Keep backward compatibility (existing keys unchanged).
+- **Modify** `Model-Training-Test/model.md` and `scripts/README_hand.md` — document
+  the new flag and window semantics (append; do not rewrite existing sections). The
+  auto-generated results block between `<!-- TRAIN_RESULTS_START -->` markers is
+  written by `_write_markdown_results`; do not hand-edit inside it.
+
+### Interfaces (`scripts/imu_sequence.py`)
+
+```python
+# Channel order — import/reuse from train_hand_classifier if practical, else mirror.
+IMU_CHANNELS: list[str]   # == train_hand_classifier._IMU_CHANNELS (12 entries)
+
+def load_imu_series(imu_path: str | None) -> "np.ndarray | None":
+    """Read a MotionRecorder CSV → float32 array shape (T, 13):
+    columns [t_ms] + the 12 channels in IMU_CHANNELS order.
+    None / missing / unreadable / header-only → None (never raise).
+    Warn-once per distinct failure reason, mirroring imu_summary_features."""
+
+def window_for_timestamp(
+    series: "np.ndarray",       # (T, 13) from load_imu_series
+    center_t_ms: float,         # photo time offset within the session, ms
+    window: int = 50,           # total samples in the window
+    causal: bool = False,       # True → trailing (prev+curr); False → centered
+) -> "np.ndarray":
+    """Return a fixed (window, 12) float32 slice of the 12 channels centered
+    (or trailing) on the sample nearest center_t_ms.
+    Edge handling: pad by clamping/replicating the boundary sample so the shape
+    is ALWAYS exactly (window, 12). Empty series → zeros((window, 12))."""
+
+def imu_sequence_feature(
+    series: "np.ndarray | None",
+    center_t_ms: float,
+    window: int = 50,
+    causal: bool = False,
+    flatten: bool = True,
+) -> "np.ndarray":
+    """Convenience: window_for_timestamp → per-channel z-normalized →
+    flattened to (window*12,) when flatten else (window, 12).
+    series None → zeros of the corresponding shape."""
+
+def build_sequence_dataset(
+    records: list[dict],        # from load_dataset_records (with new keys)
+    window: int = 50,
+    causal: bool = False,
+) -> tuple["np.ndarray", list[str], list]:
+    """Group records by session_id; load each session IMU series once; for each
+    record compute center_t_ms = (captured_at - session_start) and build its
+    window. Returns (X, labels, sort_keys) where X is (N, window, 12).
+    Records whose IMU series is missing get an all-zero window (kept, warned)."""
+
+def train_imu_sequence_model(
+    X: "np.ndarray",            # (N, window, 12)
+    labels: list[str],
+    epochs: int = 10,
+) -> object:
+    """Small temporal classifier. Paper-faithful-analog priority:
+      1. keras: Conv1D(32,5)->BN->ReLU->Conv1D(64,5)->GlobalAvgPool->Dropout(0.5)
+         ->Dense(n_classes, softmax). Adam, batch 32.
+      2. sklearn LogisticRegression on FLATTENED X (fallback).
+      3. numpy nearest-centroid on flattened X (guaranteed fallback).
+    Attach ._hand_classes = sorted(unique labels), like train_hand_classifier."""
+```
+
+### `train_hand_classifier.py` changes
+- Add CLI flags (in `_parse_args`), mirroring existing flag docstring style:
+  - `--imu-seq` (store_true): use the sequence IMU model instead of image features.
+    Mutually informative with `--use-imu`; if both passed, `--imu-seq` wins and a
+    warning is printed.
+  - `--imu-window` (int, default 50): window size in IMU samples.
+  - `--imu-causal` (store_true): trailing window instead of centered.
+- New branch in `main()`: when `--imu-seq`, skip the preprocess/segment/VGG stages
+  entirely (they are the slow part). Build `X` via
+  `imu_sequence.build_sequence_dataset(records, ...)`, then run the SAME
+  per-participant grouping + time-ordered `split_train_eval_indices` +
+  `windowed_accuracy` evaluation already in the file. Reuse
+  `_predict_labels`, `_per_class_and_confusion`, `sliding_window_majority_vote`,
+  `windowed_accuracy`, `_save_model`, and the summary/markdown writers unchanged.
+  The window-size for the *sliding-window majority vote* stays `--window-size`
+  (a different concept from `--imu-window`; keep both, document the distinction in a
+  comment as this file already does for similar overlaps).
+- `center_t_ms` derivation: the session IMU CSV `t_ms` is milliseconds since
+  `MotionRecorder.start()` (i.e. session start). Each HandSample has `capturedAt`.
+  `center_t_ms = (capturedAt - session_start).milliseconds`. **Edge case:** the
+  manifest does not currently carry the session start time. Resolve by taking the
+  session start as the MIN `captured_at_iso` among that session's frames as a proxy,
+  and note the approximation in a comment. (If exactness is later required, add a
+  `session_start_iso` column — do NOT add it now; flagged.)
+
+### Edge cases D1 must handle
+- Session with a photo but no IMU CSV, or header-only IMU → zeros window, keep row,
+  warn once.
+- Fewer IMU samples than `window` → pad by clamping to the boundary sample.
+- Photo timestamp outside the IMU series time range → clamp `center_t_ms` into range.
+- Participant/condition with `< 2` frames → existing `split_train_eval_indices`
+  behavior (all to train, warn); do not special-case.
+- All records for a participant have zero IMU → training still runs but flag it in a
+  printed note (a zero-variance feature will give chance accuracy; do not crash).
+- Non-numeric / short rows in the IMU CSV → skip per-cell/row like
+  `imu_summary_features` does; never raise.
+
+### D1 CLI examples (add to README_hand.md)
+```sh
+.venv-ml/bin/python scripts/train_hand_classifier.py \
+    Model-Training-Test/hand_manifest_Jimmy_Chen.csv \
+    --images-root Model-Training-Test/ \
+    --out Model-Training-Test/models_imu/ \
+    --imu-seq --imu-window 50 --epochs 10 \
+    --md-out Model-Training-Test/model.md
+# causal (serve-matched) variant:
+#   ... --imu-seq --imu-causal
+```
+Because `_write_markdown_results` keeps only the single best run per `--md-out`,
+use a DIFFERENT `--md-out` (or `--out`) for image-only vs. imu-seq runs to compare
+both — same gotcha the file already documents.
+
+---
+
+## D2 — iOS labeled in-session capture + live preview
+
+### D2a — Posture-select screen (the "first page: L, R, Mid")
+- **Create** `TypingResearch/Views/PostureSelectView.swift` — a screen with three
+  large buttons (Left / Right / Both). Pattern to copy: the button styling, ring
+  colors (`ringColor(for:)` blue/green/orange), and Form/VStack layout in
+  `HandCaptureView.swift`. On tap it stores the selected `HoldingHand` and advances.
+  Reuse `HoldingHand` from `Models/HandSample.swift` (Both == "Mid", per OPEN Q2).
+- Selection is written to `SessionManager` (new property below) so all frames
+  captured during the following typing screen inherit that label.
+
+### D2b — Continuous labeled capture during typing
+- **Modify** `TypingResearch/ViewModels/SessionManager.swift`:
+  - Add `var selectedPosture: HoldingHand = .unknown` (set by PostureSelectView).
+  - Add `var isPostureTrainingRun: Bool = false` (gates the whole opt-in flow;
+    default false so normal timed studies are unchanged — see OPEN Q3).
+  - MotionRecorder already starts/stops in `startSession`/`finalizeSession`
+    (lines 270, 616) — reuse; do NOT add a second IMU recorder.
+  - Add a hook to start/stop a background `HandBurstCapture` for the typing screen
+    when `isPostureTrainingRun`. Frames are saved via the SAME `saveFrame` logic as
+    `HandCaptureView` (JPEG through `HandImageStore`, one `HandSample` per frame with
+    `holdingHand = selectedPosture`, `imuRelativePath = imu/<sessionId>.csv`,
+    `studySessionIndex = per-frame counter`). Append to `pendingHandSamples` and
+    `modelContext.insert` exactly as `HandCaptureView.saveFrame` does.
+- **Create** `TypingResearch/Services/PostureCaptureController.swift` (or fold into
+  SessionManager if cleaner) — owns the `HandBurstCapture` instance + per-frame
+  counter for the typing screen, so `TrialView` stays a thin view. Copy the
+  onFrame/onUnavailable wiring and the `saveFrame` body from `HandCaptureView.swift`
+  (lines 375-490); do not duplicate JPEG logic — call `HandImageStore.shared.saveImage`.
+- **Modify** `TypingResearch/Views/TrialView.swift` — when
+  `sessionManager.isPostureTrainingRun`, start the posture capture on appear and stop
+  on disappear. **Do not touch keystroke logging** (`LoggingTextField`), timers, or
+  event flow — capture runs strictly in the background so session data integrity is
+  preserved (per the research-integrity requirement).
+
+### D2c — Live camera-preview overlay with predicted-posture tag
+- **Create** `TypingResearch/Views/CameraPreviewOverlay.swift` — a togg(button at
+  the top of the typing screen, per the notes) that shows what the front camera sees
+  plus a live label ("little tag") of the predicted posture. Requirements:
+  - A small button pinned top of `TrialView` (e.g. `camera.viewfinder` SF Symbol).
+    Tapping presents the overlay (sheet or overlay layer). Must NOT steal keyboard
+    focus or pause the typing session/timer.
+  - Live preview: reuse `HandBurstCapture` frames (display the latest `UIImage`), OR
+    add an `AVCaptureVideoPreviewLayer` wrapped in a `UIViewRepresentable`. Prefer
+    reusing the existing `HandBurstCapture.onFrame` UIImage stream to avoid a second
+    camera session (two `AVCaptureSession`s on the same device may conflict). Display
+    the most recent frame in an `Image`.
+  - The tag shows `livePredictedPosture` (see D3). Until a Core ML model is wired,
+    the tag shows the user-selected posture with a "(declared)" suffix so the UI is
+    testable before the model exists. This staged behavior lets D2 land before D3.
+- **Camera permission:** `HandBurstCapture` already handles authorization and
+  Simulator/denied gracefully via `onUnavailable`; reuse it. Ensure
+  `NSCameraUsageDescription` exists in the app's Info settings (check
+  `project.pbxproj` / Info.plist; it must already be present because HandCaptureView
+  uses the camera — verify, add only if missing).
+
+### D2 edge cases
+- Simulator / camera denied → `onUnavailable` fires; capture and preview degrade to
+  no-frames without crashing; typing continues normally.
+- Disk write failure in `saveImage` → label-only `HandSample` still saved (mirror
+  existing `saveFrame` behavior, HandCaptureView lines 455-466).
+- Overlay opened/closed repeatedly → `HandBurstCapture.start()/stop()` are idempotent;
+  do not create multiple sessions. Reuse the single background capture.
+- Early dismiss of the typing screen → stop capture on `onDisappear`; keep frames
+  already saved (this is training data, unlike HandCaptureView's discard-on-dismiss).
+  Document this intentional difference in a comment.
+- `isPostureTrainingRun == false` → none of the above runs; zero behavioral change to
+  the normal study (guard every new hook on this flag).
+
+---
+
+## D3 — Core ML live-inference model + demo (assumes OPEN Q1 = A)
+
+### Files
+- **Create** `scripts/export_imu_coreml.py` — converts the trained IMU sequence model
+  (from D1, `--imu-causal` variant) to a `.mlmodel`/`.mlpackage`. Pattern: lazy import
+  `coremltools` with a clear error if absent; take `--model` (the saved keras model),
+  `--window`, `--out`. Emit class-label metadata (`._hand_classes`) into the Core ML
+  model's classifier config. Input: `(window, 12)` float32; output: class label +
+  softmax probabilities.
+- **Add** `coremltools>=7.0` to `requirements-ml.txt` under a comment noting it is
+  used only for the on-device export step (keep the numpy-2.x pin caveat that file
+  already documents).
+- **Create** `TypingResearch/Services/PosturePredictor.swift` — loads the bundled
+  `.mlmodel`, buffers the last `window` IMU samples from a live 50 Hz stream, runs
+  prediction on a timer (~2 Hz to match the tag cadence), and publishes
+  `livePredictedPosture: HoldingHand` + confidence. Must be a no-op (returns
+  `.unknown`) when the model resource is absent, so the app builds and runs before a
+  model is shipped. `MotionRecorder` currently buffers to CSV and does not expose a
+  live tap — add a lightweight live-callback hook to `MotionRecorder` (an optional
+  `onFrame: ((MotionFrame-like values)) -> Void`) WITHOUT changing its CSV output or
+  the 50 Hz cadence, or have `PosturePredictor` own its own `CMMotionManager` read.
+  Prefer adding the callback to avoid two motion managers; guard it so it is nil in
+  normal runs.
+- **Wire** `PosturePredictor.livePredictedPosture` into the D2c tag, replacing the
+  "(declared)" placeholder when a model is present.
+
+### D3 feasibility note (put in export script docstring + README)
+- The image pipeline (FCN-ResNet101 + VGG16) is NOT converted for live use — too
+  heavy for interactive on-device inference. Core ML path covers the **IMU sequence
+  model only** (small Conv1D/GRU). This realizes the advisor's goal that the deployed
+  model no longer depends on the user declaring L/R/Both: at inference time the IMU
+  model predicts posture from motion alone. The declared label is used ONLY as the
+  training label during D2 capture.
+
+### D3 — Demo / video recipe
+- **Create** `docs/POSTURE_DEMO.md` — a short recipe: run a posture-training capture
+  (D2), export the hand data zip, train the causal IMU sequence model (D1), export to
+  Core ML (D3), reinstall, open the live camera overlay while typing in each posture,
+  and screen-record the tag updating live. This is the "video/demo of the
+  classification model working" deliverable. List exact commands.
+
+---
+
+## Non-goals (explicitly out of scope for this branch)
+- A distinct "Mid/thumb" class separate from `both` (OPEN Q2).
+- Converting the vision (FCN/VGG) pipeline to Core ML (OPEN Q1 option B).
+- Cross-user generalization experiments / multi-participant retraining (data
+  collection only; the "works on future users" goal is enabled by the IMU-only
+  inference design, but validating it needs more participants — future work).
+- Any change to keystroke logging, cleaning, or the Gaussian keyboard.
+- SwiftData schema migration (none needed).
+
+---
+
+## Build / verification checklist for the Coder
+- iOS: build with the documented `xcodebuild` command; update `build_log.md` with the
+  result (required by CLAUDE.md).
+- Python: `.venv-ml/bin/python scripts/train_hand_classifier.py --demo --imu-seq`
+  must run end-to-end on the synthetic data (the demo manifest already writes
+  per-condition IMU CSVs — see `_make_demo_manifest_and_images`). Add/adjust a demo
+  path so `--imu-seq --demo` works without real data.
+- Do not commit unless asked; when asked, one concise commit per deliverable (D1/D2/D3),
+  no Claude attribution.
