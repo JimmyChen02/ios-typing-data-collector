@@ -133,6 +133,10 @@ instruction and exits non-zero — it never crashes with a raw traceback.
 5. Stop the recording; this is the "video/demo of the classification model
    working" deliverable.
 
+The live posture demo screen also has a bottom typing field so you can type
+with the on-screen keyboard in each posture while watching the tag react —
+no keystrokes are logged or persisted.
+
 ---
 
 ## Notes / known limitations

@@ -86,7 +86,7 @@ These guidelines follow the HandyTrak paper:
 
 1. Complete the typing study until the **"Collection Complete"** (or
    "Study Complete") summary screen appears.
-2. Tap **"Hand Manifest CSV + Images"** in the export section.
+2. Tap **"Hand Data Zip (CSV + Images)"** in the export section.
 3. In the share sheet, AirDrop (or save to Files) **both**:
    - the `manifest_hand_<participant>.csv` file
    - the `hand_images/` folder (one JPEG per frame)
@@ -106,26 +106,8 @@ These guidelines follow the HandyTrak paper:
 
 ## Training Command
 
-From the repository root (with the Python virtual environment active):
-
-```bash
-.venv-ml/bin/python scripts/train_hand_classifier.py \
-    my_study/manifest_hand_alice.csv \
-    --images-root my_study/ \
-    --out models/ \
-    --mode both \
-    --epochs 2
-```
-
-**Parameter notes:**
-
-| Parameter | Meaning |
-|-----------|---------|
-| `<manifest.csv>` | Path to the exported CSV file |
-| `--images-root <dir>` | Parent directory that contains the `hand_images/` folder (paths in the manifest are relative to this root) |
-| `--out models/` | Output directory for trained weights and summary |
-| `--mode both` | Train and evaluate both the HandyNet CNN and the centroid baseline |
-| `--epochs 2` | Number of training epochs (increase for larger datasets) |
+The current (IMU) retrain pipeline lives in `Model-Training-Test/model.md`;
+full internals in `scripts/README_hand.md`.
 
 To run the built-in synthetic demo (no collected data required):
 

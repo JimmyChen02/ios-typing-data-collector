@@ -81,9 +81,14 @@ struct RawInputEvent: Sendable {
 
 // MARK: - StudySessionSummary
 
-struct StudySessionSummary {
-    let sessionIndex: Int   // 0-based
+struct StudySessionSummary: Identifiable {
+    // Unique identity: posture training runs are back-to-back 1-session
+    // studies, so sessionIndex repeats (always 0) across runs and can't
+    // be used as a ForEach id.
+    let id = UUID()
+    let sessionIndex: Int   // 0-based within its run
     let mode: String        // "classic" or "gaussian"
+    let posture: String?    // holding-posture label for posture training runs, else nil
     let meanAccuracy: Double
     let meanWPM: Double
     let totalBackspaces: Int
@@ -699,6 +704,9 @@ final class SessionManager {
         studySessionSummaries.append(StudySessionSummary(
             sessionIndex: completedStudySessions,
             mode: sessionMode == .gaussian ? "gaussian" : "classic",
+            posture: isPostureTrainingRun
+                ? (selectedPosture == .both ? "Mid" : selectedPosture.displayName)
+                : nil,
             meanAccuracy: currentSession?.meanAccuracy ?? 0,
             meanWPM: sessionWPM,
             totalBackspaces: currentSession?.totalBackspaces ?? 0,

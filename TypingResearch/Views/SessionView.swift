@@ -260,15 +260,18 @@ struct SummaryView: View {
             Text("Session by Session")
                 .font(.headline)
 
-            ForEach(sessionManager.studySessionSummaries, id: \.sessionIndex) { s in
+            // Rows are numbered by position, not sessionIndex: posture
+            // training runs append one summary per run, each with
+            // sessionIndex 0, so positional numbering keeps labels unique.
+            ForEach(Array(sessionManager.studySessionSummaries.enumerated()), id: \.element.id) { position, s in
                 let isGaussian = s.mode == "gaussian"
                 HStack(spacing: 12) {
                     // Session label
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("S\(s.sessionIndex + 1)")
+                        Text(s.posture != nil ? "R\(position + 1)" : "S\(position + 1)")
                             .font(.caption).fontWeight(.bold)
                             .foregroundColor(isGaussian ? .teal : .orange)
-                        Text(isGaussian ? "Adaptive" : "Classic")
+                        Text(s.posture ?? (isGaussian ? "Adaptive" : "Classic"))
                             .font(.system(size: 9))
                             .foregroundColor(.secondary)
                     }

@@ -1,13 +1,70 @@
 # Holding-Hand Model — Results Log
 
-**How to train:** see [`README.md`](README.md) in this folder (simple steps:
-setup → export data → train → export Core ML → bundle).
+**How to train:** the quick retrain pipeline lives below (`Retrain pipeline`
+section); the long-form guide is still [`README.md`](README.md) in this folder.
 
 This file records training results only:
 - the **auto-generated block** below keeps the single best run (written by
   `train_hand_classifier.py --md-out Model-Training-Test/model.md`);
 - the **manual log** at the bottom gets one entry per run — add date/time,
   command variant, data, and the held-out numbers after every training run.
+
+## Retrain pipeline (verified, repo root)
+
+1. Merge a new app export zip:
+   ```
+   bash scripts/merge_hand_export.sh ~/Downloads/hand_export_<name>.zip
+   ```
+   Note it lands a provenance copy under `Model-Training-Test/exports/`,
+   appends rows to `hand_manifest_combined.csv`, copies `hand_images/` +
+   `imu/`, and refuses double-merges.
+
+2. Train:
+   ```
+   .venv-ml/bin/python scripts/train_hand_classifier.py \
+       Model-Training-Test/hand_manifest_combined.csv \
+       --images-root Model-Training-Test/ \
+       --out Model-Training-Test/models/ \
+       --imu-seq --imu-causal --imu-window 50 --epochs 30
+   ```
+   Note: use ≥30 epochs (10 is unstable); `--imu-causal` is required for
+   live-use export.
+
+3. Check `Model-Training-Test/models/summary.json` —
+   `handynet_windowed_acc` is the headline metric. The model lands at
+   `Model-Training-Test/models/<participant_slug>/hand_model.keras` +
+   `labels.json`.
+
+4. Export to Core ML (output MUST be repo-root `posture_imu.mlpackage` —
+   that is the exact resource the Xcode project bundles and
+   `PosturePredictor` loads by name):
+   ```
+   .venv-ml/bin/python scripts/export_imu_coreml.py \
+       --model Model-Training-Test/models/<slug>/hand_model.keras \
+       --labels Model-Training-Test/models/<slug>/labels.json \
+       --window 50 \
+       --out posture_imu.mlpackage
+   ```
+   Success requires the export to print `Classes: ['both', 'left', 'right']`.
+
+5. Rebuild the app and verify on the Live Posture Demo screen:
+   ```
+   xcodebuild -scheme TypingResearch \
+       -destination 'platform=iOS Simulator,name=iPhone 16,OS=18.3.1' build
+   ```
+   Per repo convention, update `build_log.md` for this build.
+
+**Gotchas:**
+- numpy 1.x/2.x `ImportError` spam from the anaconda base leaking through
+  `--system-site-packages` is HARMLESS (optional pandas/pyarrow/numexpr/
+  bottleneck probes). Success markers are `[PAPER-FAITHFUL] ... importable`
+  and `Core ML model saved`. Optional silence:
+  `.venv-ml/bin/pip install pandas pyarrow numexpr bottleneck`.
+- No normalization between train and serve — raw IMU windows both sides.
+
+The auto-generated "best run" block below is image-era and does not reflect
+the currently shipped IMU model (the 2026-07-07 100% windowed run in the
+manual log is what ships).
 
 <!-- TRAIN_RESULTS_START -->
 <!-- BEST_WINDOWED_ACC=0.836650 -->

@@ -21,6 +21,8 @@ struct LivePostureDemoView: View {
 
     @State private var camera = LiveDemoCameraController()
     @State private var cameraUnavailable = false
+    @State private var typedText: String = ""
+    @FocusState private var typingFocused: Bool
 
     private var predictor: PosturePredictor { PosturePredictor.shared }
 
@@ -56,8 +58,10 @@ struct LivePostureDemoView: View {
                 }
                 Spacer()
                 predictionCard
-                    .padding(.bottom, 24)
+                    .padding(.bottom, 8)
+                typingBar
             }
+            .padding(.horizontal, 24)
         }
         .onAppear {
             camera.onUnavailable = { cameraUnavailable = true }
@@ -108,6 +112,42 @@ struct LivePostureDemoView: View {
         .frame(maxWidth: 320)
         .background(RoundedRectangle(cornerRadius: 18).fill(.ultraThinMaterial))
         .padding(.horizontal, 24)
+    }
+
+    // MARK: - Typing bar
+    //
+    // Plain SwiftUI TextField (not LoggingTextField) — this demo never logs
+    // or persists keystrokes, so the UIViewRepresentable + InputEvent wiring
+    // LoggingTextField requires would be unused overhead here.
+
+    private var typingBar: some View {
+        HStack(spacing: 10) {
+            TextField("Type here to test each hand posture\u{2026}", text: $typedText)
+                .textFieldStyle(.plain)
+                .autocorrectionDisabled(true)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.asciiCapable)
+                .focused($typingFocused)
+                .submitLabel(.done)
+                .onSubmit { typingFocused = false }
+                .foregroundColor(.white)
+
+            if !typedText.isEmpty {
+                Button(action: { typedText = "" }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.white.opacity(0.85))
+                }
+            }
+
+            if typingFocused {
+                Button("Done") { typingFocused = false }
+                    .foregroundColor(.white.opacity(0.85))
+                    .fontWeight(.semibold)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(RoundedRectangle(cornerRadius: 14).fill(.ultraThinMaterial))
     }
 
     private func tagColor(for hand: HoldingHand) -> Color {
