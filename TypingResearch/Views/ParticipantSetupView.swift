@@ -22,6 +22,10 @@ struct ParticipantSetupView: View {
     @State private var showPostureSelect: Bool = false
     @State private var showLiveDemo: Bool = false
 
+    // Free Writing Mode — self-contained secondary data-collection mode
+    // (mirrors the Posture Training Run opt-in entry point pattern above).
+    @State private var showFreeWriting: Bool = false
+
     var body: some View {
         NavigationStack {
             Form {
@@ -105,6 +109,27 @@ struct ParticipantSetupView: View {
                 }
 
                 Section {
+                    Button(action: startFreeWriting) {
+                        HStack {
+                            Spacer()
+                            VStack(spacing: 2) {
+                                Text("Free Writing Mode")
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.white)
+                                Text("Opt-in — 3 minutes on the standard iOS keyboard")
+                                    .font(.caption2)
+                                    .foregroundColor(.white.opacity(0.85))
+                            }
+                            .padding(.vertical, 8)
+                            Spacer()
+                        }
+                    }
+                    .listRowBackground(Color.blue)
+                } footer: {
+                    Text("Type freely on the standard iOS keyboard for 3 minutes. No custom keyboard — captures how you use Apple's keyboard.")
+                }
+
+                Section {
                     Button(action: { showPostureSelect = true }) {
                         HStack {
                             Spacer()
@@ -147,6 +172,9 @@ struct ParticipantSetupView: View {
             .navigationTitle("TypingResearch")
             .fullScreenCover(isPresented: $showLiveDemo) {
                 LivePostureDemoView()
+            }
+            .fullScreenCover(isPresented: $showFreeWriting) {
+                FreeWritingView(sessionManager: sessionManager)
             }
             .sheet(isPresented: $showPostureSelect) {
                 PostureSelectView(
@@ -228,5 +256,33 @@ struct ParticipantSetupView: View {
         sessionManager.selectedPosture = posture
         sessionManager.isPostureTrainingRun = true
         sessionManager.startStudy(participant: participant, totalSessions: 1, design: .classicOnly)
+    }
+
+    // MARK: - Free Writing Mode
+    //
+    // Self-contained secondary data-collection mode — a single 3-minute
+    // notepad session on the standard iOS keyboard. Does not touch the
+    // study/trial/gaussian flow; sessionManager.startFreeWriting() owns a
+    // parallel Session/Trial + timer path (see SessionManager.swift).
+    private func startFreeWriting() {
+        let fn = firstName.trimmingCharacters(in: .whitespaces)
+        let ln = lastName.trimmingCharacters(in: .whitespaces)
+        let age: Int? = ageText.isEmpty ? nil : Int(ageText)
+
+        let participant = Participant(
+            firstName: fn.isEmpty ? "Anonymous" : fn,
+            lastName: ln.isEmpty ? "" : ln,
+            age: age,
+            dominantHand: dominantHand,
+            deviceModel: DeviceInfo.modelName,
+            systemVersion: DeviceInfo.systemVersion,
+            screenWidthPt: DeviceInfo.screenWidthPt,
+            screenHeightPt: DeviceInfo.screenHeightPt,
+            appVersion: DeviceInfo.appVersion
+        )
+        modelContext.insert(participant)
+        sessionManager.configure(modelContext: modelContext)
+        sessionManager.startFreeWriting(participant: participant)
+        showFreeWriting = true
     }
 }

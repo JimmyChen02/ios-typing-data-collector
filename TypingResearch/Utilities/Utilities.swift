@@ -302,6 +302,22 @@ struct WordGenerator {
     }
 }
 
+// MARK: - FreeWritingPrompts
+
+struct FreeWritingPrompts {
+    static let all: [String] = [
+        "Describe your favorite vacation. Where did you go and what made it special?",
+        "Write about your scariest memory.",
+        "Describe the craziest dream you can remember.",
+        "What is a small thing that always makes you happy?",
+        "Describe a person who has had a big impact on your life.",
+        "If you could live anywhere in the world, where would it be and why?",
+        "Write about a goal you're working toward right now.",
+        "Describe your perfect ordinary day from morning to night.",
+    ]
+    static func random() -> String { all.randomElement() ?? all[0] }
+}
+
 // MARK: - MetricsComputer
 
 struct MetricsComputer {
