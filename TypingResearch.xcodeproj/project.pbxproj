@@ -7,9 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		879B4A262FFD7C4B0002F39D /* posture_imu.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = 879B4A252FFD7C4A0002F39D /* posture_imu.mlpackage */; };
 		87AA804B2F6C999900764884 /* BackendClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87AA80492F6C999900764884 /* BackendClient.swift */; };
 		87AA804C2F6C999900764884 /* KeyReportExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87AA804A2F6C999900764884 /* KeyReportExporter.swift */; };
 		87AA804E2F6C99AA00764884 /* TapDotPlotView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87AA804D2F6C99AA00764884 /* TapDotPlotView.swift */; };
+		87AA80522F6DB50D00764884 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 87AA80512F6DB50D00764884 /* Assets.xcassets */; };
 		AA000000000000000000001 /* TypingResearchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000001 /* TypingResearchApp.swift */; };
 		AA000000000000000000002 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000002 /* Models.swift */; };
 		AA000000000000000000003 /* SessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000003 /* SessionManager.swift */; };
@@ -24,14 +26,25 @@
 		AA000000000000000000014 /* GaussianModelStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000014 /* GaussianModelStore.swift */; };
 		AA000000000000000000015 /* GaussianKeyboardExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000015 /* GaussianKeyboardExporter.swift */; };
 		AA000000000000000000016 /* GaussianKeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000016 /* GaussianKeyboardView.swift */; };
+		HC000000000000000000001 /* HandSample.swift in Sources */ = {isa = PBXBuildFile; fileRef = HC000000000000000000002 /* HandSample.swift */; };
+		HC000000000000000000003 /* HandImageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = HC000000000000000000004 /* HandImageStore.swift */; };
+		HC000000000000000000005 /* MotionRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = HC000000000000000000006 /* MotionRecorder.swift */; };
+		HC000000000000000000007 /* HandCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = HC000000000000000000008 /* HandCaptureView.swift */; };
+		HC000000000000000000009 /* HandBurstCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = HC000000000000000000010 /* HandBurstCapture.swift */; };
 		JJ000000000000000000010 /* CustomKeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = JJ000000000000000000011 /* CustomKeyboardView.swift */; };
+		PD000000000000000000001 /* PostureSelectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = PD000000000000000000002 /* PostureSelectView.swift */; };
+		PD000000000000000000003 /* CameraPreviewOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = PD000000000000000000004 /* CameraPreviewOverlay.swift */; };
+		PD000000000000000000005 /* PostureCaptureController.swift in Sources */ = {isa = PBXBuildFile; fileRef = PD000000000000000000006 /* PostureCaptureController.swift */; };
+		PD000000000000000000007 /* PosturePredictor.swift in Sources */ = {isa = PBXBuildFile; fileRef = PD000000000000000000008 /* PosturePredictor.swift */; };
+		PD000000000000000000009 /* LivePostureDemoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = PD00000000000000000000A /* LivePostureDemoView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		879B4A252FFD7C4A0002F39D /* posture_imu.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = posture_imu.mlpackage; sourceTree = "<group>"; };
 		87AA80492F6C999900764884 /* BackendClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendClient.swift; sourceTree = "<group>"; };
 		87AA804A2F6C999900764884 /* KeyReportExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyReportExporter.swift; sourceTree = "<group>"; };
 		87AA804D2F6C99AA00764884 /* TapDotPlotView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TapDotPlotView.swift; sourceTree = "<group>"; };
-		87AA80512F6DB50D00764884 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = text; path = Assets.xcassets; sourceTree = "<group>"; };
+		87AA80512F6DB50D00764884 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		BB000000000000000000001 /* TypingResearchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypingResearchApp.swift; sourceTree = "<group>"; };
 		BB000000000000000000002 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		BB000000000000000000003 /* SessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionManager.swift; sourceTree = "<group>"; };
@@ -47,7 +60,17 @@
 		BB000000000000000000015 /* GaussianKeyboardExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaussianKeyboardExporter.swift; sourceTree = "<group>"; };
 		BB000000000000000000016 /* GaussianKeyboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaussianKeyboardView.swift; sourceTree = "<group>"; };
 		BB000000000000000000099 /* TypingResearch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TypingResearch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		HC000000000000000000002 /* HandSample.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandSample.swift; sourceTree = "<group>"; };
+		HC000000000000000000004 /* HandImageStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandImageStore.swift; sourceTree = "<group>"; };
+		HC000000000000000000006 /* MotionRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionRecorder.swift; sourceTree = "<group>"; };
+		HC000000000000000000008 /* HandCaptureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandCaptureView.swift; sourceTree = "<group>"; };
+		HC000000000000000000010 /* HandBurstCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandBurstCapture.swift; sourceTree = "<group>"; };
 		JJ000000000000000000011 /* CustomKeyboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomKeyboardView.swift; sourceTree = "<group>"; };
+		PD000000000000000000002 /* PostureSelectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostureSelectView.swift; sourceTree = "<group>"; };
+		PD000000000000000000004 /* CameraPreviewOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPreviewOverlay.swift; sourceTree = "<group>"; };
+		PD000000000000000000006 /* PostureCaptureController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostureCaptureController.swift; sourceTree = "<group>"; };
+		PD000000000000000000008 /* PosturePredictor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PosturePredictor.swift; sourceTree = "<group>"; };
+		PD00000000000000000000A /* LivePostureDemoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePostureDemoView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -64,6 +87,7 @@
 		DD000000000000000000001 = {
 			isa = PBXGroup;
 			children = (
+				879B4A252FFD7C4A0002F39D /* posture_imu.mlpackage */,
 				87AA80512F6DB50D00764884 /* Assets.xcassets */,
 				DD000000000000000000002 /* TypingResearch */,
 				DD000000000000000000003 /* Products */,
@@ -95,6 +119,7 @@
 			isa = PBXGroup;
 			children = (
 				BB000000000000000000002 /* Models.swift */,
+				HC000000000000000000002 /* HandSample.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -117,6 +142,10 @@
 				BB000000000000000000007 /* LoggingTextField.swift */,
 				JJ000000000000000000011 /* CustomKeyboardView.swift */,
 				BB000000000000000000016 /* GaussianKeyboardView.swift */,
+				HC000000000000000000008 /* HandCaptureView.swift */,
+				PD000000000000000000002 /* PostureSelectView.swift */,
+				PD000000000000000000004 /* CameraPreviewOverlay.swift */,
+				PD00000000000000000000A /* LivePostureDemoView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -128,6 +157,11 @@
 				BB000000000000000000012 /* KeystrokeCleaner.swift */,
 				BB000000000000000000013 /* GaussianKeyModel.swift */,
 				BB000000000000000000014 /* GaussianModelStore.swift */,
+				HC000000000000000000004 /* HandImageStore.swift */,
+				HC000000000000000000006 /* MotionRecorder.swift */,
+				HC000000000000000000010 /* HandBurstCapture.swift */,
+				PD000000000000000000006 /* PostureCaptureController.swift */,
+				PD000000000000000000008 /* PosturePredictor.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -201,6 +235,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				87AA80522F6DB50D00764884 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -229,6 +264,17 @@
 				AA000000000000000000016 /* GaussianKeyboardView.swift in Sources */,
 				AA000000000000000000009 /* Utilities.swift in Sources */,
 				JJ000000000000000000010 /* CustomKeyboardView.swift in Sources */,
+				HC000000000000000000001 /* HandSample.swift in Sources */,
+				HC000000000000000000003 /* HandImageStore.swift in Sources */,
+				879B4A262FFD7C4B0002F39D /* posture_imu.mlpackage in Sources */,
+				HC000000000000000000005 /* MotionRecorder.swift in Sources */,
+				HC000000000000000000007 /* HandCaptureView.swift in Sources */,
+				HC000000000000000000009 /* HandBurstCapture.swift in Sources */,
+				PD000000000000000000001 /* PostureSelectView.swift in Sources */,
+				PD000000000000000000003 /* CameraPreviewOverlay.swift in Sources */,
+				PD000000000000000000009 /* LivePostureDemoView.swift in Sources */,
+				PD000000000000000000005 /* PostureCaptureController.swift in Sources */,
+				PD000000000000000000007 /* PosturePredictor.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -358,8 +404,11 @@
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 55A7CXN98C;
+				DEVELOPMENT_TEAM = P2LUTF8N6F;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Capture a front-camera photo of your upper body so we can study which hand is holding the phone.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "Record device motion to study how holding hand affects typing.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Attach a photo for holding-hand classification research.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -370,7 +419,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.trantran.typingresearch;
+				PRODUCT_BUNDLE_IDENTIFIER = jimmychen.typingresearch;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -386,8 +435,11 @@
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 55A7CXN98C;
+				DEVELOPMENT_TEAM = P2LUTF8N6F;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Capture a front-camera photo of your upper body so we can study which hand is holding the phone.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "Record device motion to study how holding hand affects typing.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Attach a photo for holding-hand classification research.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -398,7 +450,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.trantran.typingresearch;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jimmychen.typingresearch;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;

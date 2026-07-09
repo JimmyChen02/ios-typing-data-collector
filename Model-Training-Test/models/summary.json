@@ -1,0 +1,24 @@
+[
+  {
+    "participant": "jimmy|",
+    "n_train": 831,
+    "n_eval": 210,
+    "handynet_train_acc": 1.0,
+    "handynet_frame_acc": 0.9904761904761905,
+    "handynet_windowed_acc": 1.0,
+    "centroid_frame_acc": NaN,
+    "imu_fusion": false,
+    "imu_seq": true,
+    "handynet_per_class_acc": {
+      "both": 1.0,
+      "left": 1.0,
+      "right": 0.9714285714285714
+    },
+    "handynet_confusion": {
+      "left->left": 70,
+      "right->right": 68,
+      "right->both": 2,
+      "both->both": 70
+    }
+  }
+]
