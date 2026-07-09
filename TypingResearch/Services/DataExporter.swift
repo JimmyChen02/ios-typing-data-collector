@@ -113,6 +113,63 @@ final class DataExporter {
         return rows.joined(separator: "\n")
     }
 
+    // MARK: - Free Writing Mode Export
+    //
+    // Local-only export (CSV + TXT) for the Free Writing secondary
+    // data-collection mode. Deliberately separate from makeCSV — free
+    // writing events carry no tap coordinates / key labels (system keyboard
+    // limitation) and the schema is much smaller. sessionMode is always the
+    // "free_writing" constant.
+
+    func exportFreeWritingCSV(
+        session: Session,
+        prompt: String,
+        finalText: String,
+        events: [InputEventData],
+        participant: Participant?
+    ) -> URL? {
+        let header = [
+            "participant_first", "participant_last", "session_id", "mode", "prompt",
+            "event_type", "char", "range_start", "range_length", "text_length_before",
+            "timestamp_ms", "inter_key_interval_ms"
+        ]
+
+        var rows: [String] = [header.joined(separator: ",")]
+        let sessionStart = session.startedAt
+
+        for event in events {
+            let row: [String] = [
+                csvEscape(participant?.firstName ?? ""),
+                csvEscape(participant?.lastName  ?? ""),
+                csvEscape(session.id.uuidString),
+                csvEscape("free_writing"),
+                csvEscape(prompt),
+                csvEscape(event.eventType.rawValue),
+                csvEscape(event.replacementString),
+                String(event.rangeStart),
+                String(event.rangeLength),
+                String(event.textBefore.count),
+                String(format: "%.3f", event.timestamp.timeIntervalSince(sessionStart) * 1000),
+                String(format: "%.3f", event.interKeyIntervalMs)
+            ]
+            rows.append(row.joined(separator: ","))
+        }
+
+        let csv = rows.joined(separator: "\n")
+        let name = filename(participant: participant, suffix: "free_writing", ext: "csv")
+        return writeToTempFile(content: csv, filename: name)
+    }
+
+    func exportFreeWritingText(
+        prompt: String,
+        finalText: String,
+        participant: Participant?
+    ) -> URL? {
+        let content = "\(prompt)\n\n\(finalText)"
+        let name = filename(participant: participant, suffix: "free_writing_text", ext: "txt")
+        return writeToTempFile(content: content, filename: name)
+    }
+
     // MARK: - Hand Manifest CSV
     //
     // One row per HandSample. Schema matches the manifest consumed by

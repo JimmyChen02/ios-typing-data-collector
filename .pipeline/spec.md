@@ -1,144 +1,43 @@
-# Spec: Typing test field in Live Posture Demo
+# Spec: Move "Free Writing Mode" button under "Start Study"
 
-## Goal
-Add a text input at the bottom of the Live Posture Demo screen so the user can
-type with the on-screen iOS keyboard while the live posture prediction card
-stays visible. Purpose: manually confirm the IMU classifier's left / right /
-both predictions react correctly while actually typing in different postures.
-This is a demo aid, NOT a data-collection surface — nothing is logged or
-persisted.
+## OPEN QUESTIONS
+None. Both viable styling choices are covered under DECISIONS; neither materially blocks implementation.
 
-## Files to modify
-- `TypingResearch/Views/LivePostureDemoView.swift` — the only code file to touch.
-- `docs/POSTURE_DEMO.md` — add one short note that the demo screen now has a
-  typing field (see "Docs" below).
-- `build_log.md` — add a new entry (repo rule; see "Build verification").
+## DECISIONS
+- **Placement**: Move the entire `Section { ... }` that currently wraps the "Free Writing Mode" button (currently lines 151-169) so it sits **immediately after** the "Start Study" `Section` (currently lines 92-109) and **before** the "Posture Training Run" `Section` (currently lines 111-129). "Directly under Start Study" is interpreted as the very next Form section, which renders directly below the Start Study button. Keeping it as its own `Section` (rather than merging into the Start Study section) preserves the existing footer text and matches the sibling opt-in buttons.
+- **Styling**: **Unchanged.** Keep the current secondary styling (`.listRowBackground(Color(.systemGray6))`, `.fontWeight(.semibold)` title + `.caption2`/`.secondary` subtitle, `.padding(.vertical, 4)`). Free Writing Mode remains a secondary/opt-in mode like Posture Training Run and Live Posture Demo; it should not adopt the orange prominent styling reserved for the primary Start Study action. Reason: the request is a positioning tweak, not a visual promotion.
+- **Presentation logic**: **Do not move.** The `.fullScreenCover(isPresented: $showFreeWriting)` modifier (lines 175-177), the `@State private var showFreeWriting` (line 27), and the `startFreeWriting()` method (lines 266-286) are all attached to the `Form`/`NavigationStack` or are view-level members, not to the Free Writing `Section`. Reordering the section does not require touching any of them.
+- **Behavior / validation**: **Unchanged.** No enabled/disabled condition is tied to the Free Writing button today (there is no `.disabled(...)` on it, and `startStudy`/`startFreeWriting` both default empty names to "Anonymous"). The new position does not make any condition wrong, so preserve behavior exactly.
 
-Do NOT create new files. Do NOT touch SessionManager, SessionView, model
-files, or anything under `Model-Training-Test/` — the working tree already has
-unrelated pending changes there that must be left exactly as-is.
+## FILE TO MODIFY
+- `/Users/jimmy2/Downloads/Cornell/Hyunchul_Research/ios-typing-data-collector/TypingResearch/Views/ParticipantSetupView.swift`
 
-## Current layout (what you are editing)
-`LivePostureDemoView.body` is a `ZStack`:
-1. `Color.black.ignoresSafeArea()`
-2. Camera preview (`LiveDemoPreviewView`, `.ignoresSafeArea()`) or an
-   "unavailable" placeholder.
-3. A `VStack` overlay: close button (top-right `xmark.circle.fill` that calls
-   `dismiss()`), a `Spacer()`, then `predictionCard`, `.padding(.bottom, 24)`.
+This is the only file to change. No new files.
 
-`.onAppear` starts the camera, `MotionRecorder.shared.startMonitoring()`, and
-`predictor.start()`. `.onDisappear` reverses all three. Keep this lifecycle
-untouched — the IMU pipeline is independent of UIKit text input, so raising the
-keyboard does not interfere with motion sampling or prediction.
+## EXACT CHANGE
+Reorder the sections inside the `Form` so the order becomes:
 
-The view uses `PosturePredictor.shared` and holds no `SessionManager`. It does
-not need one; do not add one.
+1. `Section("Participant Information")`
+2. `Section("Study Setup")`
+3. `Section("Device Info")`
+4. `Section { Button(action: startStudy) ... }`  (Start Study — unchanged)
+5. `Section { Button(action: startFreeWriting) ... }`  (Free Writing Mode — MOVED HERE, unchanged content)
+6. `Section { Button(action: { showPostureSelect = true }) ... }`  (Posture Training Run — unchanged)
+7. `Section { Button(action: { showLiveDemo = true }) ... }`  (Live Posture Demo — unchanged)
 
-## Implementation
+Concretely: cut the Free Writing `Section` block (the section beginning `Section {` with `Button(action: startFreeWriting)` and ending with its `} footer: { Text("Type freely ...") }` — currently lines 151-169) and paste it verbatim immediately after the Start Study section's closing brace (currently the `}` on line 109), before the "Posture Training Run" section. Do not alter the block's contents.
 
-### 1. Text field
-Add a `@State private var typedText: String = ""` and a
-`@FocusState private var typingFocused: Bool`.
+## PATTERN TO FOLLOW
+Match the existing sibling sections already in this same file — the Start Study, Posture Training Run, and Live Posture Demo sections are all standalone `Section { Button ... } footer: { ... }` blocks. This is a pure reorder of an existing, correctly-styled block; copy nothing new.
 
-Use a **plain SwiftUI `TextField`**, not `LoggingTextField`. Justification:
-`LoggingTextField` (UIViewRepresentable) requires `onEvent` / `buildEventData`
-closures wired to `InputEvent`/session logging and force-`becomeFirstResponder()`
-on appear — all irrelevant here and would pull session plumbing into a
-zero-persistence demo. A plain `TextField` with autocorrect/autocapitalization
-disabled gives the same "study keyboard" typing feel without the logging hooks.
+## EDGE CASES / CONSTRAINTS
+- Do not duplicate the Free Writing section — it must appear exactly once.
+- Leave the `.fullScreenCover(isPresented: $showFreeWriting)` modifier and all other view modifiers (`.sheet`, `.onReceive`, `.alert`, `.navigationTitle`) untouched and in place.
+- Leave `showFreeWriting` state and `startFreeWriting()` untouched.
+- No changes to `SessionManager` or `FreeWritingView`.
+- Preserve exact string content, footer text, spacing values, and `.listRowBackground` color of the moved block.
 
-Configure the field to mirror the study keyboard behavior:
-```swift
-TextField("Type here to test each hand posture\u{2026}", text: $typedText)
-    .textFieldStyle(.plain)
-    .autocorrectionDisabled(true)
-    .textInputAutocapitalization(.never)
-    .keyboardType(.asciiCapable)
-    .focused($typingFocused)
-    .submitLabel(.done)
-    .onSubmit { typingFocused = false }
-```
-Wrap it in a rounded `.ultraThinMaterial` background bar so it reads over the
-camera feed (match the prediction card's material/corner treatment, e.g.
-`RoundedRectangle(cornerRadius: 14).fill(.ultraThinMaterial)` with internal
-padding). White foreground text.
-
-### 2. Clear + dismiss controls
-Alongside the text field (trailing side of the input bar), add:
-- A **clear** control (e.g. `xmark.circle.fill` button) that sets
-  `typedText = ""`. Show it only when `!typedText.isEmpty`.
-- A **Done / dismiss-keyboard** control that sets `typingFocused = false`,
-  shown only when `typingFocused` is true (or always — either is fine). This
-  gives the user a way to drop the keyboard and see the full-screen camera
-  again. Dismissing the keyboard must NOT clear the text (separate from clear).
-
-### 3. Layout / keyboard avoidance (the critical part)
-When the keyboard is raised the prediction card must remain visible above it.
-
-- Put the input bar at the bottom of the overlay `VStack` (below
-  `predictionCard`), so the layout order top-to-bottom is: close button,
-  `Spacer()`, `predictionCard`, input bar.
-- Do NOT apply `.ignoresSafeArea(.keyboard)` to the overlay `VStack` — you WANT
-  SwiftUI's default keyboard avoidance to push the overlay content (card + input
-  bar) up above the keyboard. Keep the camera preview / black background on
-  `.ignoresSafeArea()` so only the camera stays full-bleed while the overlay
-  lifts.
-- Result: with the keyboard down, card sits near the bottom as today and the
-  input bar sits just below it; with the keyboard up, both card and input bar
-  ride up above the keyboard and stay visible. The camera preview does not need
-  to shrink — it stays full-screen behind the (now-shorter visible) overlay.
-- Reduce or drop the current `predictionCard`'s `.padding(.bottom, 24)` if it
-  causes the card to sit too far from the input bar; keep spacing tight so both
-  fit above the keyboard on an iPhone 16-class screen.
-- Give the whole overlay `VStack` a small horizontal padding consistent with the
-  existing `.padding(.horizontal, 24)` used inside `predictionCard`.
-
-### 4. Tap-to-dismiss (optional, low risk)
-Optionally add a `.onTapGesture { typingFocused = false }` to the black
-background so tapping the camera area dismisses the keyboard. Only add this if
-it does not swallow the close button / clear button taps (those are on top in
-the ZStack, so they should still receive taps). If uncertain, skip it — the
-Done control already covers dismissal.
-
-## Edge cases the implementation must handle
-- **Camera unavailable (Simulator):** the input bar + prediction card must still
-  render and be usable when `cameraUnavailable == true`. Do not nest the input
-  bar inside the `else` (camera-available) branch — it lives in the overlay
-  `VStack`, which draws regardless of camera state.
-- **No Core ML model bundled:** the prediction card already shows the "No Core
-  ML model bundled" state; the typing field must not depend on
-  `predictor.isModelAvailable` and must remain functional.
-- **Keyboard raised then screen dismissed:** dismissing the fullScreenCover (via
-  the close button) while the keyboard is up must still run `.onDisappear`
-  cleanup normally. Since the close button calls `dismiss()`, no special
-  handling is needed — just do not gate `dismiss()` on focus state.
-- **Empty text:** clear button hidden when text is empty; no crash on clearing
-  already-empty text.
-- **Long typed text:** the field is single-line; long input should scroll within
-  the field, not push the layout. A plain single-line `TextField` handles this.
-
-## Patterns to follow
-- Material card styling: copy the look from `predictionCard` in the same file
-  (`.ultraThinMaterial`, `RoundedRectangle(cornerRadius:)`, padding).
-- Autocorrect/caps-off intent: mirror `LoggingTextField.makeUIView`
-  (`autocorrectionType = .no`, `autocapitalizationType = .none`,
-  `keyboardType = .asciiCapable`) — but express it with SwiftUI modifiers as in
-  section 1, do not import/use `LoggingTextField`.
-- Close button pattern: reuse the existing `xmark.circle.fill` white/opacity
-  styling already in the view for the clear button.
-
-## Build verification (repo rule)
-After implementing, run:
-```sh
-xcodebuild -scheme TypingResearch -destination 'platform=iOS Simulator,name=iPhone 16,OS=18.3.1' build
-```
-It must reach `** BUILD SUCCEEDED **`. Then append a new dated entry to
-`build_log.md` following the existing format (Change / Files touched / Command /
-Errors / Result). Note in it that the change is scoped to `LivePostureDemoView`
-and adds no logging/persistence.
-
-## Docs
-In `docs/POSTURE_DEMO.md`, add a brief note (in "5. Record the demo" or "Notes")
-that the Live Posture Demo screen now includes a bottom typing field so you can
-type in each posture while watching the live tag — no keystrokes are logged.
-Keep it to 1-2 sentences.
+## VERIFICATION
+- App builds: `xcodebuild -scheme TypingResearch`.
+- Existing `TypingResearchTests` target should be unaffected (no logic changed). No new tests required for a layout reorder.
+- Manual/visual: in the setup screen, the "Free Writing Mode" button now renders directly below the orange "Start Study" button, retaining its gray secondary appearance and footer text; tapping it still presents `FreeWritingView` full-screen.

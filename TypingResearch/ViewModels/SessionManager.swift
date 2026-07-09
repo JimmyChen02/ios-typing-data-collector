@@ -256,6 +256,14 @@ final class SessionManager {
     var liveTypedText: String = ""
     var liveWPM: Double = 0.0
 
+    // MARK: - Free Writing Mode (secondary data-collection mode) — opt-in,
+    // parallel to the timed study. Reuses the generic timer/WPM machinery
+    // above; never touches the study/trial branches elsewhere in this file.
+    var isFreeWritingActive: Bool = false
+    var isFreeWritingComplete: Bool = false
+    var freeWritingPrompt: String = ""
+    var freeWritingEvents: [InputEventData] = []
+
     // Internal
     private var trialStartTime: Date?
     private var lastEventTimestamp: Date?
@@ -351,6 +359,12 @@ final class SessionManager {
     }
 
     private func timeExpired() {
+        // Free writing is a parallel path — never fall through into the
+        // study's submitTrial/finalizeSession logic below.
+        if isFreeWritingActive {
+            finalizeFreeWriting(finalText: liveTypedText)
+            return
+        }
         sessionTimer?.invalidate()
         sessionTimer = nil
         if isTrialActive {
@@ -781,6 +795,139 @@ final class SessionManager {
                 )
             }
         }
+    }
+
+    // MARK: - Free Writing Mode
+    //
+    // Self-contained parallel path (mirrors the posture training run pattern).
+    // Reuses startTimer()/remainingSeconds/elapsedSeconds/formattedRemaining/
+    // liveWPM — those are generic — but never calls into submitTrial,
+    // finalizeSession, or persistAndExport (the study path). Events are kept
+    // in memory only (freeWritingEvents) and exported locally via
+    // DataExporter; they are NOT enqueued to BackendClient (see spec OPEN
+    // QUESTION 1) and are NOT persisted as InputEvent rows.
+
+    func startFreeWriting(participant: Participant) {
+        // configure(modelContext:) must already have been called by the caller
+        self.participant = participant
+        if freeWritingPrompt.isEmpty {
+            self.freeWritingPrompt = FreeWritingPrompts.random()
+        }
+        self.sessionDurationSeconds = 180
+        self.remainingSeconds = 180
+        self.elapsedSeconds = 0
+        self.freeWritingEvents = []
+        self.liveTypedText = ""
+        self.liveWPM = 0.0
+        let session = Session(participantId: participant.id)
+        self.currentSession = session
+        modelContext?.insert(session)
+        let trial = Trial(sessionId: session.id, trialIndex: 0, targetText: freeWritingPrompt)
+        self.currentTrial = trial
+        modelContext?.insert(trial)
+        self.isFreeWritingComplete = false
+        self.isFreeWritingActive = true
+        self.timerStarted = false          // timer starts on first keystroke
+        self.trialStartTime = nil
+        self.lastEventTimestamp = nil
+        self.lastLiveWPMUpdateAt = nil
+    }
+
+    func reshuffleFreeWritingPrompt() {
+        // Locked once typing begins (spec DECISIONS: "locked once typing
+        // begins"). startFreeWriting() sets isFreeWritingActive = true
+        // immediately (before the start screen is even shown), so gating on
+        // that flag would disable Shuffle Prompt permanently; timerStarted
+        // (first-keystroke flag) is the correct signal for "typing began".
+        guard !timerStarted else { return }
+        freeWritingPrompt = FreeWritingPrompts.random()
+    }
+
+    func captureFreeWritingEvent(
+        textBefore: String, textAfter: String, replacementString: String,
+        rangeStart: Int, rangeLength: Int, eventType: InputEventType
+    ) {
+        // start countdown on first keystroke (mirror captureEvent)
+        if !timerStarted {
+            timerStarted = true
+            trialStartTime = Date()
+            startTimer()
+        }
+        let now = Date()
+        let iki: Double = lastEventTimestamp.map { now.timeIntervalSince($0) * 1000.0 } ?? 0.0
+        lastEventTimestamp = now
+        let event = InputEventData(
+            trialId: currentTrial?.id ?? UUID(),
+            sessionId: currentSession?.id ?? UUID(),
+            studyId: studyId,
+            timestamp: now,
+            eventType: eventType,
+            replacementString: replacementString,
+            rangeStart: rangeStart,
+            rangeLength: rangeLength,
+            expectedIndex: rangeStart,
+            keyLabel: "", tapLocalX: 0, tapLocalY: 0, keyWidth: 0, keyHeight: 0,
+            keyRow: "", keyCol: nil,
+            expectedChar: "",
+            actualChar: (eventType == .insert || eventType == .replace)
+                ? String(replacementString.prefix(1)) : "",
+            correctedChar: (eventType == .delete && !textBefore.isEmpty)
+                ? String(textBefore.last!) : "",
+            isCorrect: false,
+            previousKeyLabel: "",
+            textBefore: textBefore,
+            textAfter: textAfter,
+            interKeyIntervalMs: iki,
+            sessionMode: "free_writing",
+            studySessionIndex: 0,
+            trialIndex: 0
+        )
+        freeWritingEvents.append(event)
+        liveTypedText = textAfter
+        // live WPM (reuse throttling pattern from captureEvent)
+        if let start = trialStartTime {
+            let elapsedMs = now.timeIntervalSince(start) * 1000.0
+            let refresh = lastLiveWPMUpdateAt.map {
+                now.timeIntervalSince($0) >= Self.liveWPMUpdateInterval } ?? true
+            if refresh {
+                liveWPM = MetricsComputer.wpm(charCount: textAfter.count, durationMs: elapsedMs)
+                lastLiveWPMUpdateAt = now
+            }
+        }
+    }
+
+    func finalizeFreeWriting(finalText: String) {
+        guard isFreeWritingActive else { return }
+        sessionTimer?.invalidate(); sessionTimer = nil
+        if let trial = currentTrial, let start = trialStartTime {
+            let end = Date()
+            trial.finalText = finalText
+            trial.endedAt = end
+            trial.durationMs = end.timeIntervalSince(start) * 1000.0
+            trial.wpm = MetricsComputer.wpm(charCount: finalText.count, durationMs: trial.durationMs)
+        }
+        currentSession?.endedAt = Date()
+        try? modelContext?.save()
+        isFreeWritingActive = false
+        isFreeWritingComplete = true
+    }
+
+    func resetFreeWriting() {
+        sessionTimer?.invalidate(); sessionTimer = nil
+        isFreeWritingActive = false
+        isFreeWritingComplete = false
+        freeWritingPrompt = ""
+        freeWritingEvents = []
+        currentSession = nil
+        currentTrial = nil
+        liveTypedText = ""
+        liveWPM = 0.0
+        trialStartTime = nil
+        lastEventTimestamp = nil
+        lastLiveWPMUpdateAt = nil
+        timerStarted = false
+        remainingSeconds = 0
+        elapsedSeconds = 0
     }
 
     // MARK: - Reset
