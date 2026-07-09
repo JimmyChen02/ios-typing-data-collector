@@ -16,6 +16,12 @@ struct ParticipantSetupView: View {
     @State private var totalSessions: Int = 4  // min 2, step 2
     @State private var studyDesign: StudyDesign = .classicAndAdaptive
 
+    // D2a — opt-in "Posture training run" sub-flow entry point. NOT folded
+    // into the default timed study (see the D2 spec's research-integrity
+    // requirement) — presented as a separate screen reachable from setup.
+    @State private var showPostureSelect: Bool = false
+    @State private var showLiveDemo: Bool = false
+
     var body: some View {
         NavigationStack {
             Form {
@@ -97,8 +103,60 @@ struct ParticipantSetupView: View {
                     }
                     .listRowBackground(Color.orange)
                 }
+
+                Section {
+                    Button(action: { showPostureSelect = true }) {
+                        HStack {
+                            Spacer()
+                            VStack(spacing: 2) {
+                                Text("Posture Training Run")
+                                    .fontWeight(.semibold)
+                                Text("Opt-in — labels one typing session with a declared hand posture")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 4)
+                            Spacer()
+                        }
+                    }
+                    .listRowBackground(Color(.systemGray6))
+                } footer: {
+                    Text("Separate from the study above — captures photos + motion data continuously while you type, labeled with the posture you pick next. Does not affect keystroke-study data.")
+                }
+
+                Section {
+                    Button(action: { showLiveDemo = true }) {
+                        HStack {
+                            Spacer()
+                            VStack(spacing: 2) {
+                                Label("Live Posture Demo", systemImage: "person.crop.square.badge.camera")
+                                    .fontWeight(.semibold)
+                                Text("Camera feed + live model prediction")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 4)
+                            Spacer()
+                        }
+                    }
+                    .listRowBackground(Color(.systemGray6))
+                } footer: {
+                    Text("Demo only — nothing is recorded or saved. Requires the bundled Core ML posture model for live predictions.")
+                }
             }
             .navigationTitle("TypingResearch")
+            .fullScreenCover(isPresented: $showLiveDemo) {
+                LivePostureDemoView()
+            }
+            .sheet(isPresented: $showPostureSelect) {
+                PostureSelectView(
+                    onSelect: { posture in
+                        showPostureSelect = false
+                        startPostureTrainingRun(posture: posture)
+                    },
+                    onCancel: { showPostureSelect = false }
+                )
+            }
             .onReceive(
                 NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)
             ) { notification in
@@ -139,5 +197,36 @@ struct ParticipantSetupView: View {
         modelContext.insert(participant)
         sessionManager.configure(modelContext: modelContext)
         sessionManager.startStudy(participant: participant, totalSessions: totalSessions, design: studyDesign)
+    }
+
+    // MARK: - Posture Training Run (D2a/D2b)
+    //
+    // A single classic-mode session (no Gaussian switch-over — irrelevant to
+    // labeled posture capture) with isPostureTrainingRun = true and
+    // selectedPosture set from PostureSelectView. Everything else about the
+    // normal session/trial flow (SessionView -> TrialView, keystroke logging,
+    // timers) is unchanged; only the background capture hooks in TrialView
+    // are gated on isPostureTrainingRun.
+    private func startPostureTrainingRun(posture: HoldingHand) {
+        let fn = firstName.trimmingCharacters(in: .whitespaces)
+        let ln = lastName.trimmingCharacters(in: .whitespaces)
+        let age: Int? = ageText.isEmpty ? nil : Int(ageText)
+
+        let participant = Participant(
+            firstName: fn.isEmpty ? "Anonymous" : fn,
+            lastName: ln.isEmpty ? "" : ln,
+            age: age,
+            dominantHand: dominantHand,
+            deviceModel: DeviceInfo.modelName,
+            systemVersion: DeviceInfo.systemVersion,
+            screenWidthPt: DeviceInfo.screenWidthPt,
+            screenHeightPt: DeviceInfo.screenHeightPt,
+            appVersion: DeviceInfo.appVersion
+        )
+        modelContext.insert(participant)
+        sessionManager.configure(modelContext: modelContext)
+        sessionManager.selectedPosture = posture
+        sessionManager.isPostureTrainingRun = true
+        sessionManager.startStudy(participant: participant, totalSessions: 1, design: .classicOnly)
     }
 }

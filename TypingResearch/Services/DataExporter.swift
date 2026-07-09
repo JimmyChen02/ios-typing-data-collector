@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 
 final class DataExporter {
 
@@ -110,6 +111,138 @@ final class DataExporter {
         }
 
         return rows.joined(separator: "\n")
+    }
+
+    // MARK: - Hand Manifest CSV
+    //
+    // One row per HandSample. Schema matches the manifest consumed by
+    // scripts/hand_dataset.py and scripts/train_hand_classifier.py.
+
+    func exportHandManifestCSV(samples: [HandSample], participant: Participant?) -> URL? {
+        guard !samples.isEmpty else { return nil }
+
+        let iso = ISO8601DateFormatter()
+        let header = [
+            "participant_first", "participant_last", "study_id", "session_id",
+            "study_session_index", "captured_at_iso", "holding_hand",
+            "image_relative_path", "imu_relative_path", "image_pixel_width", "image_pixel_height",
+            "camera_position", "device_model", "system_version", "notes"
+        ]
+
+        var rows: [String] = [header.joined(separator: ",")]
+        for s in samples {
+            let row: [String] = [
+                csvEscape(participant?.firstName ?? ""),
+                csvEscape(participant?.lastName  ?? ""),
+                csvEscape(s.studyId.uuidString),
+                csvEscape(s.sessionId?.uuidString ?? ""),
+                String(s.studySessionIndex),
+                csvEscape(iso.string(from: s.capturedAt)),
+                csvEscape(s.holdingHand.rawValue),
+                csvEscape(s.imageRelativePath),
+                csvEscape(s.imuRelativePath),
+                String(s.imagePixelWidth),
+                String(s.imagePixelHeight),
+                csvEscape(s.cameraPosition),
+                csvEscape(s.deviceModel),
+                csvEscape(s.systemVersion),
+                csvEscape(s.notes)
+            ]
+            rows.append(row.joined(separator: ","))
+        }
+
+        let csv = rows.joined(separator: "\n")
+        let name = filename(participant: participant, suffix: "hand_manifest", ext: "csv")
+        return writeToTempFile(content: csv, filename: name)
+    }
+
+    /// Bundles the hand manifest CSV and every captured image into a single
+    /// `.zip`, so the whole camera dataset can be AirDropped as one file
+    /// instead of hundreds of separate images.
+    ///
+    /// Layout inside the archive:
+    ///   - `hand_manifest_<first>_<last>.csv`
+    ///   - `hand_images/<uuid>.jpg` (all captured images)
+    ///   - `imu/<sessionId>.csv` (all session IMU recordings)
+    func exportHandDataZip(samples: [HandSample], participant: Participant?) -> URL? {
+        guard !samples.isEmpty else { return nil }
+
+        let fm = FileManager.default
+        let first = participant?.firstName ?? "unknown"
+        let last  = participant?.lastName  ?? "unknown"
+        let stagingName = "hand_export_\(first)_\(last)"
+
+        // Fresh staging directory under tmp/ — remove any leftover from a prior export.
+        let staging = fm.temporaryDirectory.appendingPathComponent(stagingName, isDirectory: true)
+        try? fm.removeItem(at: staging)
+        do {
+            try fm.createDirectory(at: staging, withIntermediateDirectories: true)
+        } catch {
+            print("DataExporter: could not create hand-export staging dir: \(error)")
+            return nil
+        }
+
+        // 1. Manifest CSV.
+        guard let manifestURL = exportHandManifestCSV(samples: samples, participant: participant) else {
+            return nil
+        }
+        try? fm.copyItem(at: manifestURL, to: staging.appendingPathComponent(manifestURL.lastPathComponent))
+
+        // 2. Images into a hand_images/ subfolder.
+        let imagesDest = staging.appendingPathComponent("hand_images", isDirectory: true)
+        try? fm.createDirectory(at: imagesDest, withIntermediateDirectories: true)
+        for imageURL in HandImageStore.shared.allImageURLs() {
+            try? fm.copyItem(at: imageURL, to: imagesDest.appendingPathComponent(imageURL.lastPathComponent))
+        }
+
+        // 3. IMU CSVs: Documents/imu/<sessionId>.csv → staging/imu/<sessionId>.csv
+        let imuSrc = FileManager.default
+            .urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("imu", isDirectory: true)
+        if fm.fileExists(atPath: imuSrc.path) {
+            let imuDest = staging.appendingPathComponent("imu", isDirectory: true)
+            try? fm.createDirectory(at: imuDest, withIntermediateDirectories: true)
+            if let files = try? fm.contentsOfDirectory(at: imuSrc, includingPropertiesForKeys: nil) {
+                for f in files where f.pathExtension == "csv" {
+                    try? fm.copyItem(at: f, to: imuDest.appendingPathComponent(f.lastPathComponent))
+                }
+            }
+        }
+
+        // 4. Zip the staging directory.
+        return zipDirectory(staging, zipName: "\(stagingName).zip")
+    }
+
+    /// Zips `directory` into a single archive named `zipName` under tmp/.
+    /// Uses NSFileCoordinator's `.forUploading` intent, which produces a zipped
+    /// copy of a directory without any third-party dependency.
+    private func zipDirectory(_ directory: URL, zipName: String) -> URL? {
+        let fm = FileManager.default
+        let dest = fm.temporaryDirectory.appendingPathComponent(zipName)
+        try? fm.removeItem(at: dest)
+
+        var coordinatorError: NSError?
+        var resultURL: URL?
+        NSFileCoordinator().coordinate(
+            readingItemAt: directory,
+            options: .forUploading,
+            error: &coordinatorError
+        ) { zippedURL in
+            // `zippedURL` is a temporary archive the coordinator created; copy it
+            // out to a stable location before this block returns.
+            do {
+                try fm.copyItem(at: zippedURL, to: dest)
+                resultURL = dest
+            } catch {
+                print("DataExporter: zip copy failed: \(error)")
+            }
+        }
+
+        if let coordinatorError {
+            print("DataExporter: zip coordination failed: \(coordinatorError)")
+            return nil
+        }
+        return resultURL
     }
 
     // MARK: - Helpers

@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 struct SessionView: View {
     var sessionManager: SessionManager
@@ -39,6 +40,8 @@ struct SummaryView: View {
     @State private var shareItem: ShareItem? = nil
     @State private var showResetConfirm: Bool = false
     @State private var generatingPDF: PDFKind? = nil
+    @State private var zippingHandData: Bool = false
+    @State private var showPostureSelect: Bool = false
     @State private var plotLayout: TapDotPlotView.LayoutMode = .alpha
     @State private var gaussianPreviewImage: UIImage? = nil
     @State private var isRenderingGaussianPreview = false
@@ -57,6 +60,10 @@ struct SummaryView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 24) {
+                    if sessionManager.isPostureTrainingRun {
+                        postureContinueSection
+                        Divider()
+                    }
                     if sessionManager.studyDesign == .classicAndAdaptive {
                         studyComparison
                         Divider()
@@ -86,9 +93,70 @@ struct SummaryView: View {
                                 isPresented: $showResetConfirm,
                                 titleVisibility: .visible) {
                 Button("Same participant") { sessionManager.restartSameSession() }
-                Button("New participant", role: .destructive) { sessionManager.reset() }
+                Button("New participant", role: .destructive) {
+                    HandImageStore.shared.deleteAll()
+                    sessionManager.reset()
+                }
                 Button("Cancel", role: .cancel) {}
             }
+            .sheet(isPresented: $showPostureSelect) {
+                PostureSelectView(
+                    onSelect: { posture in
+                        showPostureSelect = false
+                        sessionManager.startNextPostureRun(posture: posture)
+                    },
+                    onCancel: { showPostureSelect = false }
+                )
+            }
+        }
+    }
+
+    // MARK: - Posture Training Run — collect next posture
+    //
+    // Shown only after a posture training run: lets the participant loop back
+    // and collect the remaining postures (L / R / Mid) without resetting.
+    // pendingHandSamples accumulates across runs, so the Hand Data Zip below
+    // exports every posture's frames + IMU in ONE zip.
+
+    private var postureFrameCounts: [(HoldingHand, Int)] {
+        let samples = sessionManager.pendingHandSamples
+        return [HoldingHand.left, .right, .both].map { hand in
+            (hand, samples.filter { $0.holdingHand == hand }.count)
+        }
+    }
+
+    private var postureContinueSection: some View {
+        VStack(spacing: 12) {
+            Text("Posture Training Data")
+                .font(.headline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: 12) {
+                ForEach(postureFrameCounts, id: \.0) { hand, count in
+                    VStack(spacing: 2) {
+                        Text("\(count)")
+                            .font(.title3).fontWeight(.semibold)
+                            .foregroundColor(count > 0 ? .primary : .secondary)
+                        Text(hand == .both ? "Mid" : hand.displayName)
+                            .font(.caption).foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color(.systemGray6)))
+                }
+            }
+
+            Button(action: { showPostureSelect = true }) {
+                Label("Collect Another Posture", systemImage: "arrow.counterclockwise")
+                    .frame(maxWidth: .infinity).padding()
+                    .background(Color.blue)
+                    .foregroundColor(.white).cornerRadius(10)
+            }
+
+            Text("Frames from every run stay together — export them all in one Hand Data Zip below once each posture is collected.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -192,15 +260,18 @@ struct SummaryView: View {
             Text("Session by Session")
                 .font(.headline)
 
-            ForEach(sessionManager.studySessionSummaries, id: \.sessionIndex) { s in
+            // Rows are numbered by position, not sessionIndex: posture
+            // training runs append one summary per run, each with
+            // sessionIndex 0, so positional numbering keeps labels unique.
+            ForEach(Array(sessionManager.studySessionSummaries.enumerated()), id: \.element.id) { position, s in
                 let isGaussian = s.mode == "gaussian"
                 HStack(spacing: 12) {
                     // Session label
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("S\(s.sessionIndex + 1)")
+                        Text(s.posture != nil ? "R\(position + 1)" : "S\(position + 1)")
                             .font(.caption).fontWeight(.bold)
                             .foregroundColor(isGaussian ? .teal : .orange)
-                        Text(isGaussian ? "Adaptive" : "Classic")
+                        Text(s.posture ?? (isGaussian ? "Adaptive" : "Classic"))
                             .font(.system(size: 9))
                             .foregroundColor(.secondary)
                     }
@@ -429,9 +500,33 @@ struct SummaryView: View {
                 pdfLabel: "Cleaned Keyboard View PDF",
                 pdfKind: .cleaned
             )
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Hand data")
+                    .font(.headline)
+                Text("Holding-hand manifest CSV + captured images (HandyTrak-style).")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Button(action: exportHandData) {
+                    HStack {
+                        if zippingHandData {
+                            ProgressView().padding(.trailing, 4)
+                            Text("Zipping\u{2026}")
+                        } else {
+                            Image(systemName: "hand.raised")
+                            Text("Hand Data Zip (CSV + Images)")
+                        }
+                    }
+                    .frame(maxWidth: .infinity).padding()
+                    .background(Color(.systemGray5))
+                    .foregroundColor(.primary).cornerRadius(10)
+                }
+                .disabled(zippingHandData)
+            }
         }
         .sheet(item: $shareItem) { item in
-            ShareSheet(activityItems: [item.url])
+            ShareSheet(activityItems: item.urls)
         }
     }
 
@@ -514,6 +609,21 @@ struct SummaryView: View {
         if let url { shareItem = ShareItem(url: url) }
     }
 
+    private func exportHandData() {
+        let samples = sessionManager.pendingHandSamples
+        guard !samples.isEmpty, !zippingHandData else { return }
+        let participant = sessionManager.participant
+        zippingHandData = true
+        Task.detached(priority: .userInitiated) {
+            let exporter = DataExporter()
+            let url = exporter.exportHandDataZip(samples: samples, participant: participant)
+            await MainActor.run {
+                zippingHandData = false
+                if let url { shareItem = ShareItem(url: url) }
+            }
+        }
+    }
+
     private func renderGaussianBoundaryPreview(width: CGFloat, height: CGFloat) async {
         let events = gaussianBoundaryEvents
         guard !events.isEmpty else {
@@ -553,6 +663,8 @@ struct SummaryView: View {
 struct BetweenSessionView: View {
     var sessionManager: SessionManager
 
+    @State private var showHandCapture: Bool = false
+
     private var completedCount: Int { sessionManager.completedStudySessions }
     private var totalCount: Int { sessionManager.totalStudySessions }
     private var isClassicOnly: Bool { sessionManager.studyDesign == .classicOnly }
@@ -563,7 +675,7 @@ struct BetweenSessionView: View {
         VStack(spacing: 24) {
             // Buttons at top so they're out of thumb-reach from the keyboard area
             VStack(spacing: 12) {
-                Button(action: { sessionManager.continueToNextSession() }) {
+                Button(action: { showHandCapture = true }) {
                     Text("Continue to Session \(completedCount + 1)")
                         .fontWeight(.semibold)
                         .foregroundColor(.white)
@@ -586,6 +698,24 @@ struct BetweenSessionView: View {
                 .padding(.horizontal, 32)
             }
             .padding(.top, 16)
+            .sheet(isPresented: $showHandCapture) {
+                if let participant = sessionManager.participant {
+                    HandCaptureView(
+                        participant: participant,
+                        sessionId: sessionManager.currentSession?.id,
+                        studyId: sessionManager.studyId,
+                        studySessionIndex: sessionManager.completedStudySessions - 1
+                    ) { samples in
+                        if let samples {
+                            for sample in samples {
+                                sessionManager.recordHandSample(sample)
+                            }
+                        }
+                        showHandCapture = false
+                        sessionManager.continueToNextSession()
+                    }
+                }
+            }
 
             Divider()
 
@@ -676,7 +806,13 @@ struct BetweenSessionView: View {
 
 struct ShareItem: Identifiable {
     let id = UUID()
-    let url: URL
+    let urls: [URL]
+
+    /// Convenience init for sharing a single URL (backward-compatible).
+    init(url: URL) { self.urls = [url] }
+
+    /// Init for sharing multiple URLs (hand manifest + images).
+    init(urls: [URL]) { self.urls = urls }
 }
 
 struct ShareSheet: UIViewControllerRepresentable {

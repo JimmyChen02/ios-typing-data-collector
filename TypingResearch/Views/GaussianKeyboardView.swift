@@ -4,13 +4,109 @@ import UIKit
 // MARK: - GaussianKeyboardView
 //
 // Visually matches CustomKeyboardView but replaces per-key gestures with a
-// single unified drag gesture. Letter-key hits are routed through the
-// GaussianKeyModel (Mahalanobis argmax + anchor protection). Special keys
+// single UIViewRepresentable touch overlay. Letter-key hits are routed through
+// the GaussianKeyModel (Mahalanobis argmax + anchor protection). Special keys
 // (⌫, space, return, ⇧, 123) fall back to strict frame hit-testing.
 //
-// The fitted Gaussian boundaries are drawn as translucent 1σ ellipses behind
-// the letter keys so the user can see which region currently maps to each
-// key.
+// Using UIView.touchesBegan instead of DragGesture eliminates the gesture
+// recognizer cascade delay and avoids blocking subsequent touch delivery
+// with in-flight SwiftUI re-renders.
+
+// MARK: - Touch Overlay (UIViewRepresentable)
+
+private struct KeyboardTouchOverlay: UIViewRepresentable {
+    var onTap: (CGPoint) -> Void
+    var onRelease: () -> Void
+
+    func makeUIView(context: Context) -> TouchOverlayView {
+        let v = TouchOverlayView()
+        v.backgroundColor = .clear
+        v.isMultipleTouchEnabled = false
+        v.onTap = onTap
+        v.onRelease = onRelease
+        return v
+    }
+
+    func updateUIView(_ uiView: TouchOverlayView, context: Context) {
+        uiView.onTap = onTap
+        uiView.onRelease = onRelease
+    }
+}
+
+private class TouchOverlayView: UIView {
+    var onTap: ((CGPoint) -> Void)?
+    var onRelease: (() -> Void)?
+    private var didDispatch = false
+    private let haptic = UIImpactFeedbackGenerator(style: .light)
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        haptic.prepare()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        haptic.prepare()
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard !didDispatch, let touch = touches.first else { return }
+        didDispatch = true
+        haptic.impactOccurred()
+        onTap?(touch.location(in: self))
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        didDispatch = false
+        onRelease?()
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        didDispatch = false
+        onRelease?()
+    }
+}
+
+// MARK: - Key Callout
+
+private struct KeyCalloutView: View {
+    let label: String
+    let keyWidth: CGFloat
+    let keyHeight: CGFloat
+    let colorScheme: ColorScheme
+
+    private static let bubbleH: CGFloat = 54
+    private static let stemH:   CGFloat = 16
+    private static let overlap: CGFloat = 4
+    static  let totalHeight:    CGFloat = bubbleH + stemH - overlap
+
+    private var bubbleW: CGFloat { max(44, keyWidth) }
+    private var stemW:   CGFloat { min(keyWidth, 28) }
+    private var bgColor: Color {
+        colorScheme == .dark ? Color(white: 0.31) : .white
+    }
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            RoundedRectangle(cornerRadius: 5)
+                .fill(bgColor)
+                .frame(width: stemW, height: Self.stemH)
+            ZStack {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(bgColor)
+                    .shadow(color: Color(white: 0, opacity: 0.18), radius: 8, x: 0, y: 4)
+                Text(label)
+                    .font(.system(size: 30, weight: .regular))
+                    .foregroundColor(colorScheme == .dark ? .white : .black)
+            }
+            .frame(width: bubbleW, height: Self.bubbleH)
+            .offset(y: -(Self.stemH - Self.overlap))
+        }
+        .frame(width: max(bubbleW, stemW), height: Self.totalHeight)
+    }
+}
+
+// MARK: - GaussianKeyboardView
 
 struct GaussianKeyboardView: View {
     var overlayMode: Bool = false
@@ -19,10 +115,9 @@ struct GaussianKeyboardView: View {
     var onKeyTap: (String, TapInfo) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @State private var pressedKey: String? = nil
+    @State private var pressedRect: CGRect? = nil
 
-    // Keys the Gaussian model fits. Matches the alpha layout — special
-    // keys (space, delete, shift, …) are routed via strict frame tests,
-    // so they don't need per-key Gaussians.
     static let fittableKeys: [String] = [
         "q","w","e","r","t","y","u","i","o","p",
         "a","s","d","f","g","h","j","k","l",
@@ -41,7 +136,6 @@ struct GaussianKeyboardView: View {
     private let keyGap:    CGFloat = 6
     private let rowGap:    CGFloat = 11
     private let bottomPad: CGFloat = 3
-    private let keyH:      CGFloat = 42
 
     private var kbBg: Color {
         if overlayMode { return .clear }
@@ -54,13 +148,22 @@ struct GaussianKeyboardView: View {
         GeometryReader { geo in
             let layout = computeLayout(size: geo.size)
             ZStack {
-                // Static visual layer
                 keyboardVisual(layout: layout)
 
-                // Direct UIKit touch capture reduces the latency from SwiftUI's
-                // gesture state machine on the full keyboard surface.
-                TouchCaptureOverlay { point in
+                KeyboardTouchOverlay { [layout] point in
                     dispatchTap(at: point, layout: layout)
+                } onRelease: {
+                    pressedKey = nil
+                    pressedRect = nil
+                }
+
+                // Callout bubble rendered above everything, no hit-testing
+                if let pk = pressedKey, pk.count == 1, let pr = pressedRect {
+                    KeyCalloutView(label: pk, keyWidth: pr.width,
+                                   keyHeight: pr.height, colorScheme: colorScheme)
+                        .position(x: pr.midX,
+                                  y: pr.minY - KeyCalloutView.totalHeight / 2)
+                        .allowsHitTesting(false)
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
@@ -68,13 +171,16 @@ struct GaussianKeyboardView: View {
         }
     }
 
+    // MARK: - Dispatch
+
     private func dispatchTap(at point: CGPoint, layout: KeyboardLayout) {
-        // Specials first (⇧ and the label-only #+= have action "" — ignored)
         for (action, rect) in layout.specialFrames {
             if rect.contains(point) {
                 switch action {
-                case "switch_numeric": showNumeric = true
-                case "switch_alpha":   showNumeric = false
+                case "switch_numeric":
+                    pressedKey = "123"; pressedRect = rect; showNumeric = true
+                case "switch_alpha":
+                    pressedKey = "ABC"; pressedRect = rect; showNumeric = false
                 case "": return
                 default:
                     emit(action: action, at: point, rect: rect)
@@ -83,25 +189,24 @@ struct GaussianKeyboardView: View {
             }
         }
 
-        // Space is a special frame too — strict frame test (no Gaussian)
         if let sp = layout.spaceFrame, sp.contains(point) {
             emit(action: "space", at: point, rect: sp)
             return
         }
 
-        // Letters: Gaussian classifier on the alpha/numeric letter frames
         let letterFrames = layout.letterFrames
         if letterFrames.isEmpty { return }
 
-        if let winner = model.winner(at: point, frames: layout.letterFrameList),
+        let frameList = letterFrames.map { (key: $0.key, rect: $0.value) }
+        if let winner = model.winner(at: point, frames: frameList),
            let rect = letterFrames[winner] {
             emit(action: winner, at: point, rect: rect)
         }
     }
 
     private func emit(action: String, at point: CGPoint, rect: CGRect) {
-        // Clamp local coords into the rect — taps can land just outside
-        // the visible key if the Gaussian tail stretches across gaps.
+        pressedKey = action
+        pressedRect = rect
         let lx = min(max(point.x - rect.minX, 0), rect.width)
         let ly = min(max(point.y - rect.minY, 0), rect.height)
         let info = TapInfo(
@@ -119,34 +224,31 @@ struct GaussianKeyboardView: View {
     @ViewBuilder
     private func keyboardVisual(layout: KeyboardLayout) -> some View {
         ZStack(alignment: .topLeading) {
-            // Special keys (⇧, ⌫, 123/#+=/ABC, return)
             ForEach(layout.specialList) { s in
-                keyCap(label: s.label, rect: s.rect, isSpecial: true)
+                keyCap(label: s.label, action: s.action, rect: s.rect, isSpecial: true)
             }
-
-            // Space
             if let sp = layout.spaceFrame {
-                keyCap(label: "space", rect: sp, isSpecial: false)
+                keyCap(label: "space", action: "space", rect: sp, isSpecial: false)
             }
-
-            // Letter keys
             ForEach(Array(layout.letterFrames.keys.sorted()), id: \.self) { key in
                 if let rect = layout.letterFrames[key] {
-                    keyCap(label: displayLabel(for: key), rect: rect,
-                           isSpecial: false)
+                    keyCap(label: key, action: key, rect: rect, isSpecial: false)
                 }
             }
         }
     }
 
-    private func keyCap(label: String, rect: CGRect, isSpecial: Bool) -> some View {
+    private func keyCap(label: String, action: String, rect: CGRect, isSpecial: Bool) -> some View {
+        let isKeyPressed = pressedKey == action
         let bg: Color = {
             if isSpecial {
                 return colorScheme == .dark
                     ? Color(white: 0.21)
                     : Color(red: 0.69, green: 0.71, blue: 0.73)
             }
-            return colorScheme == .dark ? Color(white: 0.31) : .white
+            return colorScheme == .dark
+                ? Color(white: isKeyPressed ? 0.22 : 0.31)
+                : (isKeyPressed ? Color(white: 0.82) : .white)
         }()
         let labelColor: Color = colorScheme == .dark ? .white : .black
 
@@ -169,7 +271,7 @@ struct GaussianKeyboardView: View {
                         radius: 0, x: 0, y: 1)
         )
         .position(x: rect.midX, y: rect.midY)
-        .allowsHitTesting(false)   // the ZStack gesture catcher handles all input
+        .allowsHitTesting(false)
     }
 
     private func fontFor(label: String) -> Font {
@@ -185,36 +287,29 @@ struct GaussianKeyboardView: View {
         }
     }
 
-    private func displayLabel(for key: String) -> String { key }
-
-    private func tintColor(for key: String) -> Color {
-        let allKeys = ["q","w","e","r","t","y","u","i","o","p",
-                       "a","s","d","f","g","h","j","k","l",
-                       "z","x","c","v","b","n","m"]
-        let idx = Double(allKeys.firstIndex(of: key) ?? 0)
-        let hue = (idx * 0.618033988749895).truncatingRemainder(dividingBy: 1.0)
-        return Color(hue: hue, saturation: 0.72, brightness: 0.88)
-    }
-
     // MARK: - Layout
 
     private func computeLayout(size: CGSize) -> KeyboardLayout {
         let kw: CGFloat = (size.width - 2 * sidePad - 9 * keyGap) / 10
         let sp: CGFloat = (size.width - 2 * sidePad - 7 * kw - 8 * keyGap) / 2
-        let usedH: CGFloat = 4 * keyH + 3 * rowGap + bottomPad + 38
-        let topPad: CGFloat = max(8, size.height - usedH)
+        // Derive key height so 4 rows fill the available area; clamp to Apple-like proportions.
+        let topInset: CGFloat = 8
+        let fixedOverhead: CGFloat = 3 * rowGap + bottomPad + 38 + topInset  // 38 = globe/mic row
+        let rawKeyH = (size.height - fixedOverhead) / 4
+        let keyH = min(max(rawKeyH, 38), kw * 1.45)  // floor 38pt, cap so keys never get absurdly tall
+        let usedH = 4 * keyH + fixedOverhead
+        let topPad = max(topInset, size.height - usedH)
 
         var layout = KeyboardLayout()
 
         let row0 = showNumeric ? numRow0 : alphaRow0
         let row1 = showNumeric ? numRow1 : alphaRow1
         let row2Inner = showNumeric ? numRow2p : alphaRow2
-        let row2LeftLabel = showNumeric ? "#+=" : "\u{21E7}"   // ⇧
-        let switchLabel   = showNumeric ? "ABC" : "123"
-        let switchAction  = showNumeric ? "switch_alpha" : "switch_numeric"
-        let row2LeftAction = showNumeric ? "" : ""            // both modeless
+        let row2LeftLabel  = showNumeric ? "#+=" : "\u{21E7}"
+        let switchLabel    = showNumeric ? "ABC" : "123"
+        let switchAction   = showNumeric ? "switch_alpha" : "switch_numeric"
+        let row2LeftAction = showNumeric ? "" : ""
 
-        // Row 0
         let y0 = topPad
         var x = sidePad
         for k in row0 {
@@ -222,7 +317,6 @@ struct GaussianKeyboardView: View {
             x += kw + keyGap
         }
 
-        // Row 1
         let y1 = y0 + keyH + rowGap
         if showNumeric {
             x = sidePad
@@ -231,7 +325,6 @@ struct GaussianKeyboardView: View {
                 x += kw + keyGap
             }
         } else {
-            // 9 centered keys
             let row1W = CGFloat(row1.count) * kw + CGFloat(row1.count - 1) * keyGap
             x = (size.width - row1W) / 2
             for k in row1 {
@@ -240,13 +333,10 @@ struct GaussianKeyboardView: View {
             }
         }
 
-        // Row 2: ⇧/#+= + letters/punct + ⌫
         let y2 = y1 + keyH + rowGap
         x = sidePad
         layout.specialList.append(SpecialKey(
-            id: "row2Left",
-            label: row2LeftLabel,
-            action: row2LeftAction,
+            id: "row2Left", label: row2LeftLabel, action: row2LeftAction,
             rect: CGRect(x: x, y: y2, width: sp, height: keyH)
         ))
         x += sp + keyGap
@@ -263,82 +353,25 @@ struct GaussianKeyboardView: View {
             }
         }
         layout.specialList.append(SpecialKey(
-            id: "delete",
-            label: "\u{232B}",
-            action: "delete",
+            id: "delete", label: "\u{232B}", action: "delete",
             rect: CGRect(x: size.width - sidePad - sp, y: y2, width: sp, height: keyH)
         ))
 
-        // Row 3: switch + space + return
         let y3 = y2 + keyH + rowGap
         layout.specialList.append(SpecialKey(
-            id: "switch",
-            label: switchLabel,
-            action: switchAction,
+            id: "switch", label: switchLabel, action: switchAction,
             rect: CGRect(x: sidePad, y: y3, width: sp, height: keyH)
         ))
         let spaceX = sidePad + sp + keyGap
         let spaceW = size.width - 2 * sidePad - 2 * sp - 2 * keyGap
         layout.spaceFrame = CGRect(x: spaceX, y: y3, width: spaceW, height: keyH)
         layout.specialList.append(SpecialKey(
-            id: "return",
-            label: "return",
-            action: "return",
+            id: "return", label: "return", action: "return",
             rect: CGRect(x: size.width - sidePad - sp, y: y3, width: sp, height: keyH)
         ))
 
-        layout.letterFrameList = layout.letterFrames.map { (key: $0.key, rect: $0.value) }
         for s in layout.specialList { layout.specialFrames[s.action] = s.rect }
         return layout
-    }
-}
-
-private struct TouchCaptureOverlay: UIViewRepresentable {
-    let onTouchBegan: (CGPoint) -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onTouchBegan: onTouchBegan)
-    }
-
-    func makeUIView(context: Context) -> TouchCaptureView {
-        let view = TouchCaptureView()
-        view.backgroundColor = .clear
-        view.coordinator = context.coordinator
-        return view
-    }
-
-    func updateUIView(_ uiView: TouchCaptureView, context: Context) {
-        context.coordinator.onTouchBegan = onTouchBegan
-        uiView.coordinator = context.coordinator
-    }
-
-    final class Coordinator {
-        var onTouchBegan: (CGPoint) -> Void
-
-        init(onTouchBegan: @escaping (CGPoint) -> Void) {
-            self.onTouchBegan = onTouchBegan
-        }
-    }
-}
-
-private final class TouchCaptureView: UIView {
-    var coordinator: TouchCaptureOverlay.Coordinator?
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        isMultipleTouchEnabled = false
-        isOpaque = false
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        super.touchesBegan(touches, with: event)
-        guard let point = touches.first?.location(in: self) else { return }
-        coordinator?.onTouchBegan(point)
     }
 }
 
@@ -346,10 +379,9 @@ private final class TouchCaptureView: UIView {
 
 private struct KeyboardLayout {
     var letterFrames: [String: CGRect] = [:]
-    var letterFrameList: [(key: String, rect: CGRect)] = []
     var spaceFrame: CGRect? = nil
     var specialList: [SpecialKey] = []
-    var specialFrames: [String: CGRect] = [:]   // keyed by action
+    var specialFrames: [String: CGRect] = [:]
 }
 
 private struct SpecialKey: Identifiable {
@@ -369,13 +401,11 @@ private struct EllipseOverlay: View {
     var body: some View {
         let e = GaussianKeyModel.ellipse(for: gaussian, keyFrame: rect)
         return ZStack {
-            // 2σ translucent
             Ellipse()
                 .stroke(color.opacity(0.30), lineWidth: 0.8)
                 .frame(width: e.semiA * 4, height: e.semiB * 4)
                 .rotationEffect(.radians(e.angle))
                 .position(x: e.center.x, y: e.center.y)
-            // 1σ
             Ellipse()
                 .stroke(color.opacity(0.75), lineWidth: 1.2)
                 .frame(width: e.semiA * 2, height: e.semiB * 2)

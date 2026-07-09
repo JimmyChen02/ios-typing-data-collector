@@ -42,6 +42,63 @@ Main in-app exports:
 - tap-distribution PDF
 - Gaussian boundary PDF
 - ground-truth loss PDF
+- holding-hand manifest CSV + captured images
+
+### Holding-hand classification (HandyTrak)
+
+The app can collect holding-hand data for offline classification following the
+HandyTrak approach (Lim et al., UIST '21). After each typing session, a sheet
+captures a front-camera upper-body photo and a self-reported holding-hand label
+(Left / Right / Both / Unknown). The label defaults from the participant's
+stated dominant hand but is always editable. Photo capture is optional —
+label-only records are supported. Captured images are stored under
+`Documents/hand_images/` and exported via the "Hand data" button in the summary
+screen alongside a manifest CSV. See `scripts/README_hand.md` for the offline
+training pipeline.
+
+#### ML model training environment
+
+The classifier follows the paper-faithful path (FCN-ResNet101 segmentation +
+VGG16 features + a small HandyNet head), which needs TensorFlow/Keras and
+torch. These are kept in an isolated `.venv-ml/` at the repo root so they don't
+disturb the analysis `venv/` or the anaconda base.
+
+**One-time setup** (creates `.venv-ml/`, installs TensorFlow, prefetches the
+~700 MB FCN-ResNet101 + VGG16 weights):
+
+```sh
+bash scripts/setup_ml_env.sh --prefetch-weights
+```
+
+**Train a model** (run from the repo root, using `.venv-ml`):
+
+```sh
+.venv-ml/bin/python scripts/train_hand_classifier.py \
+    Model-Training-Test/hand_manifest_Jimmy_Chen.csv \
+    --images-root Model-Training-Test/ \
+    --out Model-Training-Test/models/ \
+    --mode both --epochs 2
+```
+
+The two arguments that matter are the manifest CSV path and `--images-root`,
+which must point at the folder that *contains* `hand_images/`. A
+`[PAPER-FAITHFUL]` banner at startup confirms torch + TensorFlow are both
+available; segmentation is the slow stage (~10–20 min on CPU). Outputs land in
+`--out`: `<participant>/hand_model.keras`, `<participant>/labels.json`, and
+`summary.json` with the accuracy numbers.
+
+**Quick checks** (no real data or heavy deps needed):
+
+```sh
+.venv-ml/bin/python scripts/train_hand_classifier.py --demo   # end-to-end plumbing
+python3 scripts/train_hand_classifier.py --mode centroid ...  # zero-training baseline
+```
+
+Useful knobs: `--epochs N` (train longer), `--mode handynet` (skip the centroid
+baseline), `--mode centroid` (baseline only, runs in seconds). See
+`Model-Training-Test/README.md` for the step-by-step training guide,
+`Model-Training-Test/model.md` for the results log, and
+`scripts/README_hand.md` for full pipeline and manifest-schema details.
 
 Open the app with:
 
@@ -59,6 +116,8 @@ open TypingResearch.xcodeproj
 - `scripts/plot_cleansing_subset.py`: renders a side-by-side raw-vs-cleaned keyboard view for a chosen session range
 - `scripts/ground_truth_trial_loss.py`: compares trial prefixes against all-trial ground truth
 - `scripts/numpy_analysis_utils.py`: shared histogram and CSV helpers for the analysis scripts
+- `scripts/hand_dataset.py`: reads the holding-hand manifest CSV + images; returns (image_paths, labels) for the training pipeline
+- `scripts/train_hand_classifier.py`: HandyTrak pipeline (preprocess → segment → classify) for holding-hand classification; heavy DL deps optional with lightweight fallbacks
 
 ## Offline Workflow
 
@@ -156,8 +215,6 @@ Primary outputs:
 - `frames/<key>/frame_XX_*.png`
 - `frames/whole_keyboard/frame_XX_*.png`
 - `videos/whole_keyboard_boundary.mp4`
-
-**Implementation note — eval vs display coordinate systems:** The Gaussian model parameters (`mu_x`, `mu_y`, precision matrix) are fit in phone-pixel units that match the unscaled PDF key dimensions (~45 px/key). The script uses `--scale` (default 2.0) to enlarge the output image, but winner-map evaluation must stay in the scale=1.0 coordinate system. Evaluating in scaled coordinates inflates `dx` relative to `mu_x`/`mu_y`, causing fitted neighbour keys to score artificially low and letting fallback-Gaussian keys steal their territory. The script therefore always evaluates all winner maps and raster backgrounds using `base_panel_rect` / `base_frames` (scale=1.0) and only applies the display scale to the matplotlib axes, `imshow` extent, and key-outline rendering.
 
 ### 7. Generate a side-by-side cleansing check
 

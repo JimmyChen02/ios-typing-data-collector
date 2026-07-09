@@ -10,6 +10,12 @@ struct TrialView: View {
     @Environment(\.colorScheme) private var colorScheme
     private let showsTapDiagnostics = false
 
+    // D2c — posture camera-preview overlay toggle. Only shown/usable during
+    // a posture training run (sessionManager.isPostureTrainingRun); a plain
+    // overlay layer (not a .sheet) so it never steals keyboard focus or
+    // pauses the session/timer running underneath.
+    @State private var showCameraOverlay: Bool = false
+
     // Mirror CustomKeyboardView layout constants so the buffer strip maps taps correctly
     private let kbSidePad: CGFloat = 5
     private let kbKeyGap:  CGFloat = 6
@@ -73,12 +79,45 @@ struct TrialView: View {
                 .frame(height: keyboardHeight + kbBufH + sessionManager.safeAreaBottom)
                 .ignoresSafeArea(edges: .bottom)
         }
+        .overlay(alignment: .bottomTrailing) {
+            // D2c — camera toggle + floating picture-in-picture preview.
+            // Anchored in the empty region just above the keyboard (trailing
+            // edge) so neither ever covers the top bar, the target text, or
+            // any key. The preview card has hit-testing disabled, so even if
+            // a stray touch lands on it, it passes through — typing is never
+            // hindered. Not a .sheet: keyboard focus and the session timer
+            // keep running untouched.
+            if sessionManager.isPostureTrainingRun {
+                VStack(alignment: .trailing, spacing: 10) {
+                    if showCameraOverlay {
+                        CameraPreviewOverlay(sessionManager: sessionManager)
+                            .transition(.opacity)
+                    }
+                    PostureCameraToggleButton(isPresented: $showCameraOverlay)
+                }
+                .padding(.trailing, 12)
+                .padding(.bottom, keyboardHeight + kbBufH + 64)
+            }
+        }
         .onAppear {
             if sessionManager.sessionMode == .gaussian {
                 gaussianModel = GaussianModelStore.shared.loadModel(
                     keys: GaussianKeyboardView.fittableKeys
                 )
             }
+            // D2b — posture training run: start background labeled capture.
+            // No-op (guarded internally) when isPostureTrainingRun == false,
+            // so normal timed studies see zero behavioral change. Capture
+            // runs strictly in the background — keystroke logging, timers,
+            // and event flow below are completely untouched.
+            sessionManager.startPostureCapture()
+        }
+        .onDisappear {
+            // Stop capture on disappear (including early dismiss of the
+            // typing screen). Frames already saved are KEPT — this is
+            // training data, unlike HandCaptureView's discard-on-dismiss
+            // (see SessionManager.stopPostureCapture() for the rationale).
+            sessionManager.stopPostureCapture()
         }
     }
 
