@@ -67,24 +67,24 @@ the currently shipped IMU model (the 2026-07-07 100% windowed run in the
 manual log is what ships).
 
 <!-- TRAIN_RESULTS_START -->
-<!-- BEST_WINDOWED_ACC=0.836650 -->
+<!-- BEST_WINDOWED_ACC=1.000000 -->
 ## Best training run so far (auto-generated)
 
-_Generated 2026-07-01 16:11 UTC by `train_hand_classifier.py` (mode=both, epochs=2). This section keeps the BEST run (highest mean held-out windowed accuracy); it is overwritten only when a later run beats it._
+_Generated 2026-07-09 17:08 UTC by `train_hand_classifier.py` (mode=handynet, epochs=30, imu=off). This section keeps the BEST run (highest mean held-out windowed accuracy); it is overwritten only when a later run beats it._
 
 | Participant | n_train | n_eval | Train acc | Test frame acc | Test windowed acc | Centroid |
 |---|---|---|---|---|---|---|
-| jimmy|chen | 439 | 111 | 0.866 | 0.649 | 0.805 | 0.333 |
-| tran| | 416 | 105 | 0.974 | 0.914 | 0.868 | 0.562 |
-| **MEAN** | 855 | 216 | 0.920 | 0.781 | 0.837 | 0.448 |
+| anonymous| | 1798 | 451 | 0.999 | 1.000 | 1.000 |    nan |
+| jimmy| | 831 | 210 | 1.000 | 0.990 | 1.000 |    nan |
+| **MEAN** | 2629 | 661 | 0.999 | 0.995 | 1.000 |    nan |
 
-**Headline — held-out windowed test accuracy: 83.7%**  ·  test frame acc 78.1%  ·  centroid baseline 44.8%
+**Headline — held-out windowed test accuracy: 100.0%**  ·  test frame acc 99.5%  ·  centroid baseline nan
 
-**jimmy|chen — per-class test accuracy:** both=0.405, left=0.541, right=1.000
-**jimmy|chen — confusion (true→pred):** both->both:15, both->left:14, both->right:8, left->both:8, left->left:20, left->right:9, right->right:37
+**anonymous| — per-class test accuracy:** both=1.000, left=1.000, right=1.000
+**anonymous| — confusion (true→pred):** both->both:150, left->left:150, right->right:151
 
-**tran| — per-class test accuracy:** both=1.000, left=1.000, right=0.743
-**tran| — confusion (true→pred):** both->both:35, left->left:35, right->both:9, right->right:26
+**jimmy| — per-class test accuracy:** both=1.000, left=1.000, right=0.971
+**jimmy| — confusion (true→pred):** both->both:70, left->left:70, right->both:2, right->right:68
 
 _Train acc = in-sample; Test = held-out 20% (time-ordered split); windowed = sliding-window-30 majority vote (HandyTrak metric); Centroid = zero-training baseline._
 <!-- TRAIN_RESULTS_END -->

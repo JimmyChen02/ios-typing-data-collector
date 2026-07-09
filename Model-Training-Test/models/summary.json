@@ -1,10 +1,10 @@
 [
   {
-    "participant": "jimmy|",
-    "n_train": 831,
-    "n_eval": 210,
-    "handynet_train_acc": 1.0,
-    "handynet_frame_acc": 0.9904761904761905,
+    "participant": "anonymous|",
+    "n_train": 1798,
+    "n_eval": 451,
+    "handynet_train_acc": 0.996662958843159,
+    "handynet_frame_acc": 1.0,
     "handynet_windowed_acc": 1.0,
     "centroid_frame_acc": NaN,
     "imu_fusion": false,
@@ -12,12 +12,33 @@
     "handynet_per_class_acc": {
       "both": 1.0,
       "left": 1.0,
-      "right": 0.9714285714285714
+      "right": 1.0
+    },
+    "handynet_confusion": {
+      "left->left": 150,
+      "right->right": 151,
+      "both->both": 150
+    }
+  },
+  {
+    "participant": "jimmy|",
+    "n_train": 831,
+    "n_eval": 210,
+    "handynet_train_acc": 0.9951865222623345,
+    "handynet_frame_acc": 0.9857142857142858,
+    "handynet_windowed_acc": 1.0,
+    "centroid_frame_acc": NaN,
+    "imu_fusion": false,
+    "imu_seq": true,
+    "handynet_per_class_acc": {
+      "both": 1.0,
+      "left": 1.0,
+      "right": 0.9571428571428572
     },
     "handynet_confusion": {
       "left->left": 70,
-      "right->right": 68,
-      "right->both": 2,
+      "right->right": 67,
+      "right->both": 3,
       "both->both": 70
     }
   }
