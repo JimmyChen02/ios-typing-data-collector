@@ -259,28 +259,40 @@ struct WordGenerator {
 
     /// The corpus selected for the current session. Call `selectRandomCorpus()` at session start.
     static var currentCorpus: [String] = corpusSets[0]
+    private static var shuffledCorpus: [String] = corpusSets[0].shuffled()
+    private static var shuffledCursor: Int = 0
 
     /// Picks a corpus set by cycling through available sets in order.
     static func selectCorpus(forSessionIndex index: Int) {
         currentCorpus = corpusSets[index % corpusSets.count]
+        resetShuffleState()
     }
 
     /// Randomly picks one of the corpus sets for this session.
     static func selectRandomCorpus() {
         currentCorpus = corpusSets.randomElement() ?? corpusSets[0]
+        resetShuffleState()
     }
 
     /// Returns `count` shuffled sentences from the current corpus joined by spaces.
     static func randomSentences(count: Int) -> String {
-        var pool = currentCorpus.shuffled()
+        guard !currentCorpus.isEmpty else { return "" }
         var result: [String] = []
-        var idx = 0
+        result.reserveCapacity(count)
         for _ in 0..<count {
-            result.append(pool[idx % pool.count])
-            idx += 1
-            if idx == pool.count { pool = currentCorpus.shuffled() }
+            if shuffledCursor >= shuffledCorpus.count {
+                shuffledCorpus = currentCorpus.shuffled()
+                shuffledCursor = 0
+            }
+            result.append(shuffledCorpus[shuffledCursor])
+            shuffledCursor += 1
         }
         return result.joined(separator: " ")
+    }
+
+    private static func resetShuffleState() {
+        shuffledCorpus = currentCorpus.shuffled()
+        shuffledCursor = 0
     }
 
     /// Legacy shim — converts a rough word count into a sentence count and delegates.

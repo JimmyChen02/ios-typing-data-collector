@@ -264,6 +264,7 @@ final class SessionManager {
     private var modelContext: ModelContext?
     private var sessionTimer: Timer?
     private var timerStarted: Bool = false
+    private var currentTargetTextLength: Int = 0
 
     // Posture training run (D2b) — owns the background HandBurstCapture +
     // per-frame counter for the typing screen. Only touched when
@@ -372,6 +373,7 @@ final class SessionManager {
             targetText: targetText
         )
         currentTrial = trial
+        currentTargetTextLength = targetText.count
         modelContext?.insert(trial)
 
         pendingRawEvents = []
@@ -400,9 +402,11 @@ final class SessionManager {
 
         // Keep target text well ahead of where the user is typing
         if let trial = currentTrial {
-            let remaining = trial.targetText.count - raw.textAfter.count
+            let remaining = currentTargetTextLength - raw.textAfter.count
             if remaining < 200 {
-                trial.targetText += " " + WordGenerator.randomSentences(count: 8)
+                let extensionText = " " + WordGenerator.randomSentences(count: 8)
+                trial.targetText += extensionText
+                currentTargetTextLength += extensionText.count
             }
         }
 
@@ -583,32 +587,39 @@ final class SessionManager {
     // (non-main-actor) extension method — these are pure, stateless lookups
     // so opting out of SessionManager's @MainActor isolation is safe.
     fileprivate nonisolated static func keyRow(for label: String) -> String {
-        let top = Set(["q","w","e","r","t","y","u","i","o","p",
-                       "1","2","3","4","5","6","7","8","9","0"])
-        let mid = Set(["a","s","d","f","g","h","j","k","l",
-                       "-","/",":",";","(",")","$","&","@","\""])
-        let bot = Set(["z","x","c","v","b","n","m",
-                       "delete",".",",","?","!","'"])
-        if top.contains(label) { return "top" }
-        if mid.contains(label) { return "middle" }
-        if bot.contains(label) { return "bottom" }
+        if topRowLabels.contains(label) { return "top" }
+        if middleRowLabels.contains(label) { return "middle" }
+        if bottomRowLabels.contains(label) { return "bottom" }
         return "space"   // space, return, and unknown special keys
     }
 
     fileprivate nonisolated static func keyCol(for label: String) -> Int? {
-        let rows: [[String]] = [
-            ["q","w","e","r","t","y","u","i","o","p"],
-            ["a","s","d","f","g","h","j","k","l"],
-            ["z","x","c","v","b","n","m"],
-            ["1","2","3","4","5","6","7","8","9","0"],
-            ["-","/",":",";","(",")","$","&","@","\""],
-            [".",",","?","!","'"]
-        ]
-        for row in rows {
+        for row in keyColumnRows {
             if let idx = row.firstIndex(of: label) { return idx }
         }
         return nil
     }
+
+    private nonisolated static let topRowLabels: Set<String> = [
+        "q","w","e","r","t","y","u","i","o","p",
+        "1","2","3","4","5","6","7","8","9","0"
+    ]
+    private nonisolated static let middleRowLabels: Set<String> = [
+        "a","s","d","f","g","h","j","k","l",
+        "-","/",":",";","(",")","$","&","@","\""
+    ]
+    private nonisolated static let bottomRowLabels: Set<String> = [
+        "z","x","c","v","b","n","m",
+        "delete",".",",","?","!","'"
+    ]
+    private nonisolated static let keyColumnRows: [[String]] = [
+        ["q","w","e","r","t","y","u","i","o","p"],
+        ["a","s","d","f","g","h","j","k","l"],
+        ["z","x","c","v","b","n","m"],
+        ["1","2","3","4","5","6","7","8","9","0"],
+        ["-","/",":",";","(",")","$","&","@","\""],
+        [".",",","?","!","'"]
+    ]
 
     // MARK: - Trial Submission
 
@@ -806,6 +817,7 @@ final class SessionManager {
         lastEventTimestamp = nil
         lastKeyLabel = ""
         lastLiveWPMUpdateAt = nil
+        currentTargetTextLength = 0
         totalStudySessions = 4
         studyDesign = .classicAndAdaptive
         completedStudySessions = 0
