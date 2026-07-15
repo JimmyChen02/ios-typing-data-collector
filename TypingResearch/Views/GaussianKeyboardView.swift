@@ -21,7 +21,7 @@ private struct KeyboardTouchOverlay: UIViewRepresentable {
     func makeUIView(context: Context) -> TouchOverlayView {
         let v = TouchOverlayView()
         v.backgroundColor = .clear
-        v.isMultipleTouchEnabled = false
+        v.isMultipleTouchEnabled = true
         v.onTap = onTap
         v.onRelease = onRelease
         return v
@@ -36,7 +36,6 @@ private struct KeyboardTouchOverlay: UIViewRepresentable {
 private class TouchOverlayView: UIView {
     var onTap: ((CGPoint) -> Void)?
     var onRelease: (() -> Void)?
-    private var didDispatch = false
     private let haptic = UIImpactFeedbackGenerator(style: .light)
 
     override init(frame: CGRect) {
@@ -50,20 +49,33 @@ private class TouchOverlayView: UIView {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard !didDispatch, let touch = touches.first else { return }
-        didDispatch = true
+        // Dispatch every touch: fast two-thumb typing overlaps touches, and
+        // any touch that begins while another is still down must still count.
+        for touch in touches {
+            onTap?(touch.location(in: self))
+        }
+        // Haptic fires after dispatch so it never delays key delivery.
         haptic.impactOccurred()
-        onTap?(touch.location(in: self))
+        haptic.prepare()
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        didDispatch = false
-        onRelease?()
+        endTouches(touches, with: event)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        didDispatch = false
-        onRelease?()
+        endTouches(touches, with: event)
+    }
+
+    // Clear the pressed-key visual only when no finger remains on the
+    // keyboard, so an overlapping second press keeps its highlight.
+    private func endTouches(_ touches: Set<UITouch>, with event: UIEvent?) {
+        let stillActive = (event?.allTouches ?? touches).contains {
+            $0.phase != .ended && $0.phase != .cancelled
+        }
+        if !stillActive {
+            onRelease?()
+        }
     }
 }
 
@@ -144,17 +156,44 @@ struct GaussianKeyboardView: View {
             : Color(red: 0.816, green: 0.827, blue: 0.851)
     }
 
+    // Actions whose keycaps never show a pressed background (matches the
+    // isSpecial styling in KeyboardVisualLayer).
+    private static let nonHighlightKeys: Set<String> = ["delete", "return", "123", "ABC", "#+="]
+
     var body: some View {
         GeometryReader { geo in
             let layout = computeLayout(size: geo.size)
             ZStack {
-                keyboardVisual(layout: layout)
+                // Static keycaps live in an Equatable child view so per-tap
+                // pressedKey changes don't re-render the whole keyboard.
+                KeyboardVisualLayer(layout: layout,
+                                    overlayMode: overlayMode,
+                                    colorScheme: colorScheme)
+                    .equatable()
 
                 KeyboardTouchOverlay { [layout] point in
                     dispatchTap(at: point, layout: layout)
                 } onRelease: {
                     pressedKey = nil
                     pressedRect = nil
+                }
+
+                // Pressed-key highlight drawn as a lightweight overlay on top
+                // of the static layer (replaces the per-keycap bg change).
+                if let pk = pressedKey, let pr = pressedRect,
+                   !Self.nonHighlightKeys.contains(pk) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(colorScheme == .dark
+                                  ? Color(white: 0.22)
+                                  : Color(white: 0.82))
+                        Text(pk)
+                            .font(keyFont(for: pk))
+                            .foregroundColor(colorScheme == .dark ? .white : .black)
+                    }
+                    .frame(width: pr.width, height: pr.height)
+                    .position(x: pr.midX, y: pr.midY)
+                    .allowsHitTesting(false)
                 }
 
                 // Callout bubble rendered above everything, no hit-testing
@@ -217,74 +256,6 @@ struct GaussianKeyboardView: View {
             keyHeight: Double(rect.height)
         )
         onKeyTap(action, info)
-    }
-
-    // MARK: - Visual Layer
-
-    @ViewBuilder
-    private func keyboardVisual(layout: KeyboardLayout) -> some View {
-        ZStack(alignment: .topLeading) {
-            ForEach(layout.specialList) { s in
-                keyCap(label: s.label, action: s.action, rect: s.rect, isSpecial: true)
-            }
-            if let sp = layout.spaceFrame {
-                keyCap(label: "space", action: "space", rect: sp, isSpecial: false)
-            }
-            ForEach(Array(layout.letterFrames.keys.sorted()), id: \.self) { key in
-                if let rect = layout.letterFrames[key] {
-                    keyCap(label: key, action: key, rect: rect, isSpecial: false)
-                }
-            }
-        }
-    }
-
-    private func keyCap(label: String, action: String, rect: CGRect, isSpecial: Bool) -> some View {
-        let isKeyPressed = pressedKey == action
-        let bg: Color = {
-            if isSpecial {
-                return colorScheme == .dark
-                    ? Color(white: 0.21)
-                    : Color(red: 0.69, green: 0.71, blue: 0.73)
-            }
-            return colorScheme == .dark
-                ? Color(white: isKeyPressed ? 0.22 : 0.31)
-                : (isKeyPressed ? Color(white: 0.82) : .white)
-        }()
-        let labelColor: Color = colorScheme == .dark ? .white : .black
-
-        return Group {
-            if label == "return" {
-                Image(systemName: "return")
-                    .font(.system(size: 15, weight: .regular))
-                    .foregroundColor(labelColor)
-            } else {
-                Text(label)
-                    .font(fontFor(label: label))
-                    .foregroundColor(labelColor)
-            }
-        }
-        .frame(width: rect.width, height: rect.height)
-        .background(
-            RoundedRectangle(cornerRadius: 5)
-                .fill(bg)
-                .shadow(color: Color(white: 0, opacity: overlayMode ? 0.20 : 0.40),
-                        radius: 0, x: 0, y: 1)
-        )
-        .position(x: rect.midX, y: rect.midY)
-        .allowsHitTesting(false)
-    }
-
-    private func fontFor(label: String) -> Font {
-        switch label {
-        case "space", "123", "ABC", "#+=":
-            return .system(size: 16, weight: .regular)
-        case "\u{21E7}":  // ⇧
-            return .system(size: 19, weight: .regular)
-        case "\u{232B}":  // ⌫
-            return .system(size: 21, weight: .regular)
-        default:
-            return .system(size: 22, weight: .regular)
-        }
     }
 
     // MARK: - Layout
@@ -375,16 +346,97 @@ struct GaussianKeyboardView: View {
     }
 }
 
+// MARK: - Visual Layer
+//
+// Static keycaps only — no pressed state. Equatable so SwiftUI skips its
+// body when the layout hasn't changed, which means a keystroke (pressedKey
+// change in the parent) re-renders only the small highlight/callout overlay
+// instead of all ~30 shadowed keycaps twice per tap.
+
+private struct KeyboardVisualLayer: View, Equatable {
+    let layout: KeyboardLayout
+    let overlayMode: Bool
+    let colorScheme: ColorScheme
+
+    static func == (lhs: KeyboardVisualLayer, rhs: KeyboardVisualLayer) -> Bool {
+        lhs.overlayMode == rhs.overlayMode
+            && lhs.colorScheme == rhs.colorScheme
+            && lhs.layout == rhs.layout
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(layout.specialList) { s in
+                keyCap(label: s.label, rect: s.rect, isSpecial: true)
+            }
+            if let sp = layout.spaceFrame {
+                keyCap(label: "space", rect: sp, isSpecial: false)
+            }
+            ForEach(Array(layout.letterFrames.keys.sorted()), id: \.self) { key in
+                if let rect = layout.letterFrames[key] {
+                    keyCap(label: key, rect: rect, isSpecial: false)
+                }
+            }
+        }
+    }
+
+    private func keyCap(label: String, rect: CGRect, isSpecial: Bool) -> some View {
+        let bg: Color = {
+            if isSpecial {
+                return colorScheme == .dark
+                    ? Color(white: 0.21)
+                    : Color(red: 0.69, green: 0.71, blue: 0.73)
+            }
+            return colorScheme == .dark ? Color(white: 0.31) : .white
+        }()
+        let labelColor: Color = colorScheme == .dark ? .white : .black
+
+        return Group {
+            if label == "return" {
+                Image(systemName: "return")
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundColor(labelColor)
+            } else {
+                Text(label)
+                    .font(keyFont(for: label))
+                    .foregroundColor(labelColor)
+            }
+        }
+        .frame(width: rect.width, height: rect.height)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(bg)
+                .shadow(color: Color(white: 0, opacity: overlayMode ? 0.20 : 0.40),
+                        radius: 0, x: 0, y: 1)
+        )
+        .position(x: rect.midX, y: rect.midY)
+        .allowsHitTesting(false)
+    }
+}
+
+fileprivate func keyFont(for label: String) -> Font {
+    switch label {
+    case "space", "123", "ABC", "#+=":
+        return .system(size: 16, weight: .regular)
+    case "\u{21E7}":  // ⇧
+        return .system(size: 19, weight: .regular)
+    case "\u{232B}":  // ⌫
+        return .system(size: 21, weight: .regular)
+    default:
+        return .system(size: 22, weight: .regular)
+    }
+}
+
 // MARK: - Layout Model
 
-private struct KeyboardLayout {
+private struct KeyboardLayout: Equatable {
     var letterFrames: [String: CGRect] = [:]
     var spaceFrame: CGRect? = nil
     var specialList: [SpecialKey] = []
     var specialFrames: [String: CGRect] = [:]
 }
 
-private struct SpecialKey: Identifiable {
+private struct SpecialKey: Identifiable, Equatable {
     let id: String
     let label: String
     let action: String

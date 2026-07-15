@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(xcodebuild -scheme TypingResearch -sdk iphonesimulator -destination 'platform=iOS Simulator,name=iPhone 17' build CODE_SIGNING_ALLOWED=NO)"
+      "Bash(xcodebuild -scheme TypingResearch -sdk iphonesimulator -destination 'platform=iOS Simulator,name=iPhone 17' build CODE_SIGNING_ALLOWED=NO)",
+      "mcp__headroom__headroom_retrieve"
     ]
   }
 }
