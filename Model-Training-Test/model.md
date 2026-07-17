@@ -62,9 +62,13 @@ This file records training results only:
   `.venv-ml/bin/pip install pandas pyarrow numexpr bottleneck`.
 - No normalization between train and serve — raw IMU windows both sides.
 
-The auto-generated "best run" block below is image-era and does not reflect
-the currently shipped IMU model (the 2026-07-07 100% windowed run in the
-manual log is what ships).
+The auto-generated block below IS the current V3 IMU-seq run (2026-07-09,
+3,290 frames) despite its `imu=off` tag — that tag reflects `--use-imu`
+(feature fusion), not `--imu-seq`, a labeling quirk of the md writer
+(`train_hand_classifier.py` ~line 1254). The V3 `anonymous_` model from that
+run is what ships as `posture_imu.mlpackage` (provenance verified 2026-07-15,
+see results log) — i.e. the bundled model is trained on Anonymous data ONLY;
+every other user is effectively a "mock user" (see cross-user entry).
 
 <!-- TRAIN_RESULTS_START -->
 <!-- BEST_WINDOWED_ACC=1.000000 -->
@@ -96,7 +100,49 @@ _Train acc = in-sample; Test = held-out 20% (time-ordered split); windowed = sli
 Manually maintained — unlike the auto-generated "best run" block above, every
 run gets an entry here.
 
-### 2026-07-07 14:25 — IMU-seq causal, 30 epochs ← current bundled model
+### 2026-07-15 — Majority-vote window-size sweep (no training)
+- Script: `scripts/window_sweep.py` — same models/data/metrics as the
+  cross-user eval below, windowed accuracy at vote windows 1..60.
+- Windowed acc (vote window → anon→self / anon→jimmy / jimmy→anon / jimmy→self):
+  - **w=3 (1.5 s @2 Hz): 1.000 / 0.959 / 0.974 / 1.000** ← best overall
+  - w=5: 1.000 / 0.909 / 0.974 / 1.000 · w=10: 1.000 / 0.840 / 0.973 / 1.000
+  - w=30 (current metric, 15 s): 1.000 / 0.904 / 0.914 / 1.000
+- Findings: (1) within-user, w=3 already reaches 100% — w=30 buys nothing but
+  15 s of latency; (2) cross-user, big windows HURT (errors are bursty; the
+  vote commits to them): w=3 beats w=30 by 5–6 points and also beats
+  per-frame. A small vote (3–5) dominates the HandyTrak-style 30 everywhere.
+- NOTE: the live app currently does NO vote smoothing (PosturePredictor
+  publishes the raw 2 Hz label) — adding a 3-vote majority would be a new,
+  cheap app feature matching the best offline setting.
+
+### 2026-07-15 — Cross-user "mock user" eval of the V3 models (no training)
+- Script: `scripts/cross_user_eval.py` — loads the committed `.keras` models
+  and reuses the training code's window builder (`imu_sequence`, window=50
+  causal) and metrics, so numbers are directly comparable to the block above.
+- Each V3 model evaluated on the OTHER participant's full dataset (100% unseen):
+  - `anonymous_` → Jimmy data (n=1041): **frame 0.953 · windowed 0.904**
+  - `jimmy_` → Anonymous data (n=2249): **frame 0.974 · windowed 0.914**
+  - (self held-out reference: anonymous 1.000/1.000, jimmy 0.986/1.000)
+- Weakest class cross-user is `right` (0.937 / 0.946); dominant confusion is
+  right→both — same pattern the within-user confusion showed in miniature.
+- Windowed acc drops BELOW frame acc cross-user (opposite of within-user):
+  errors come in temporal bursts, so the 30-frame majority vote commits to
+  the wrong label instead of rescuing scattered mistakes.
+- Caveats: both users captured on the same device model (iPhone 14 Pro Max)
+  and protocol — this measures new-person, not new-device, generalization.
+- **Provenance check:** bundled `posture_imu.mlpackage` matches
+  `models/anonymous_/hand_model.keras` on 40/40 random windows (argmax; the
+  `jimmy_` model disagrees wildly) → the app ships the Anonymous-only model,
+  so these mock-user numbers are what any OTHER user should expect live.
+
+### 2026-07-15 — V3 retrain reproduction (IMU-seq causal, 30 epochs)
+- Same command + data as V3 (3,290 frames; 2,629 train / 661 eval), model
+  output to a scratch dir (committed models untouched).
+- MEAN TEST frame-acc 0.995 · windowed-acc 1.000 (anonymous 1.000/1.000,
+  jimmy 0.990/1.000) — reproduces the auto-block numbers exactly; result is
+  stable across retrains at 30 epochs (not a lucky initialization).
+
+### 2026-07-07 14:25 — IMU-seq causal, 30 epochs ← bundled model until V3 (2026-07-09)
 - Data: `hand_export_Anonymous_` — 379 frames (127 L / 128 R / 124 both), 302 train / 77 eval
 - Command: `--imu-seq --imu-causal --imu-window 50 --epochs 30` (re-run of the 14:10 recipe)
 - **TEST frame-acc 1.000 · windowed-acc 1.000** · all classes perfect
@@ -132,7 +178,7 @@ run gets an entry here.
 - TEST frame-acc 0.771 · **windowed-acc 0.829** · centroid baseline 0.333 (collapsed to predicting "both")
 - Reading: the CNN beat the zero-training geometric baseline by ~50 points — real signal, not a geometric trick; in the ballpark of HandyTrak's ~89% (which used far more data + tuning).
 
-_Held-out = last 20% of frames per class in capture order (time-ordered split, no shuffle). Windowed = 30-frame sliding majority vote. Within-user only — cross-user generalization not yet measured._
+_Held-out = last 20% of frames per class in capture order (time-ordered split, no shuffle). Windowed = 30-frame sliding majority vote. Cross-user generalization first measured 2026-07-15 (entry above): ~0.95–0.97 frame / ~0.90–0.91 windowed on a fully unseen person._
 
 ---
 
