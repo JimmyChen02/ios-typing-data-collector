@@ -26,7 +26,17 @@ struct RootView: View {
         if sessionManager.isSessionActive || sessionManager.isSessionComplete {
             SessionView(sessionManager: sessionManager)
         } else {
-            ParticipantSetupView(sessionManager: sessionManager)
+            TabView {
+                AdaptiveKeyboardHomeView()
+                    .tabItem {
+                        Label("Keyboard", systemImage: "keyboard")
+                    }
+
+                ParticipantSetupView(sessionManager: sessionManager)
+                    .tabItem {
+                        Label("Study", systemImage: "chart.xyaxis.line")
+                    }
+            }
         }
     }
 }

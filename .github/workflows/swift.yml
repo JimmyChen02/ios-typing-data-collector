@@ -21,3 +21,15 @@ jobs:
             -scheme TypingResearch \
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO
+
+      - name: Test adaptive keyboard core
+        run: |
+          DESTINATION_ID="$(
+            xcrun simctl list devices available -j |
+            python3 -c 'import json,sys; data=json.load(sys.stdin)["devices"]; print(next(device["udid"] for runtime in data.values() for device in runtime if "iPhone" in device["name"]))'
+          )"
+          xcodebuild test \
+            -project TypingResearch.xcodeproj \
+            -scheme TypingResearch \
+            -destination "platform=iOS Simulator,id=${DESTINATION_ID}" \
+            CODE_SIGNING_ALLOWED=NO

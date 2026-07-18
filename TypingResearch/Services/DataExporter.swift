@@ -76,7 +76,7 @@ final class DataExporter {
                 csvEscape(event.sessionMode),
                 String(event.studySessionIndex + 1),
                 csvEscape(event.trialId.uuidString),
-                String(event.studySessionIndex + 1),
+                String(event.trialIndex + 1),
                 csvEscape(event.eventType.rawValue),
                 csvEscape(event.keyLabel),
                 String(format: "%.4f", event.tapLocalX),
