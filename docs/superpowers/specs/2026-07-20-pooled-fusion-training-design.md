@@ -1,6 +1,8 @@
 # Pooled + Leave-One-User-Out Training with IMU+Silhouette Fusion
 
-Status: approved by Jimmy 2026-07-20 (Sections 1 and 2 confirmed in conversation).
+Status: approved by Jimmy 2026-07-20 (Sections 1 and 2 confirmed in
+conversation; revised same day to sweep window sizes per mentor guidance
+instead of assuming a fixed default — see Evaluation protocol).
 
 ## Context
 
@@ -42,6 +44,17 @@ does affect the *windowed accuracy* evaluation metric, whose window has
 historically been specified as a raw frame count (`window_size=30`)
 calibrated to mean "15 s" at the old 2 Hz rate. Section on evaluation below
 fixes this so old-rate and new-rate sessions are scored on equal footing.
+
+This design also carries forward the mentor guidance that already drove the
+live-predictor smoothing work: test multiple window sizes, and if windowed
+accuracy already beats per-frame accuracy at a small window, prefer the
+smaller window over a larger one. That guidance was previously applied only
+to the live app's vote window (`dense_window_sweep.py` → 1.5 s); the
+evaluation protocol below applies the same sweep-and-select methodology to
+this offline pooled/LOUO/fusion metric independently, rather than assuming
+the live app's answer transfers. The frame-rate half of the guidance (~30
+fps) is already satisfied by the prior work and needs no further changes
+here.
 
 ## Goals
 
@@ -145,44 +158,72 @@ tested utility. What changes is how callers compute that count:
   (via `captured_at_iso`) — not a hardcoded 2 or 30. This makes the
   evaluation correct regardless of future capture-rate changes, with no
   further code changes needed.
-- Convert the desired time window (default **1.5 s**, matching the live
-  app's tuned `voteWindowSize` smoothing horizon from
-  `dense_window_sweep.py` — this eval should measure what the shipped app
-  actually does, not the original HandyTrak paper's 15 s convention) to a
-  per-session frame count: `round(1.5 / median_dt)`, floor 1.
-- Call `windowed_accuracy()` once per session with that session's own frame
-  count, then combine into one number as a frame-count-weighted mean across
-  sessions (mirrors `dense_window_sweep.py`'s per-session accumulation
-  pattern). Sessions with too few frames for even a 1-frame window fall
-  back to frame accuracy only for that session's contribution (same
-  short-session handling `windowed_accuracy` already has, just applied
-  per-session instead of per-participant).
-- A `--window-seconds` flag (default 1.5) controls this; existing
-  `--window-size` (raw frame count) stays available for anyone reproducing
-  the original paper-style 30-frame/2 Hz metric directly.
+- A given time window `w` seconds converts to a per-session frame count as
+  `round(w / median_dt)`, floor 1.
+- `windowed_accuracy()` is called once per session with that session's own
+  frame count, then combined into one number as a frame-count-weighted mean
+  across sessions (mirrors `dense_window_sweep.py`'s per-session
+  accumulation pattern). Sessions with too few frames for even a 1-frame
+  window fall back to frame accuracy only for that session's contribution
+  (same short-session handling `windowed_accuracy` already has, just
+  applied per-session instead of per-participant).
+
+### Window-size sweep, not a fixed default
+
+Per the mentor's guidance (test multiple window sizes; if windowed accuracy
+already beats per-frame accuracy at a small window, prefer the smaller
+window over a larger one), the pooled/LOUO/fusion eval does **not** assume
+a single window. It reports windowed accuracy across a grid of candidate
+seconds values — `WINDOW_SECONDS_GRID = [0, 0.1, 0.5, 1.0, 1.5, 3.0, 5.0,
+10.0, 15.0]` (0 = per-frame accuracy; 15.0 kept for continuity with the
+original 30-frame/2 Hz HandyTrak metric) — for every {model, target} combo,
+in the same table-per-window-size shape `window_sweep.py` and
+`dense_window_sweep.py` already use.
+
+**Selection rule**, applied per model (IMU-only and fusion get their own
+answer, which may differ from each other and from the live app's 1.5 s):
+walk the grid from smallest to largest; take the smallest window whose
+windowed accuracy is within a small tolerance (0.002, matching
+`dense_window_sweep.py`'s precedent) of the best accuracy anywhere in the
+grid. This is the same rule already applied once to tune the live
+predictor's `voteWindowSize` — applying it here too means the offline
+metric's window is *derived from this data*, not assumed from the live
+app's unrelated latency/stability trade-off. Report the chosen window
+alongside the full grid so the reasoning is auditable, not just the
+final number.
+
+`--window-seconds` becomes a grid (or a single override for ad-hoc runs);
+existing `--window-size` (raw frame count) stays available for anyone
+reproducing the original paper-style 30-frame/2 Hz metric directly.
 
 ### Recomputed baseline
 
 The existing single-user cross-user numbers (0.904 / 0.914 windowed) were
 measured at the old 30-frame/15 s window and are not directly comparable to
-a 1.5 s metric. Before D2's decision gate is evaluated, the single-user
-cross-user baseline is **recomputed at the new 1.5 s time-based window**
-(same session-median-rate logic above) so the gate compares equivalent
-quantities. Concretely: `scripts/cross_user_eval.py` gains the same
-`--window-seconds` flag and switches its hardcoded `VOTE_WINDOW = 30` to
-the per-session time-based computation — it already loads the trained
-per-participant models and runs the same A→B evaluation, so this is a
-small edit to that script, not a retrain and not new code elsewhere.
+a swept, session-rate-aware metric. Before D2's decision gate is evaluated,
+the single-user cross-user baseline is **recomputed across the same
+`WINDOW_SECONDS_GRID`** (same session-median-rate logic above) so the gate
+compares equivalent quantities at whichever window the selection rule picks.
+Concretely: `scripts/cross_user_eval.py` gains the grid sweep and switches
+its hardcoded `VOTE_WINDOW = 30` to the per-session time-based computation —
+it already loads the trained per-participant models and runs the same A→B
+evaluation, so this is a small edit to that script, not a retrain and not
+new code elsewhere.
 
 ## Decision gate (feeds D2)
 
-Pooled/LOUO windowed accuracy (1.5 s) must beat the recomputed single-user
-cross-user baseline before a pooled model proceeds to D3 (train final) /
-D4 (export to Core ML). Separately, fusion is judged against IMU-only on
-the identical LOUO split: fusion is "worth it" only if its cross-user/LOUO
-windowed accuracy beats IMU-only's, on the same row-eligibility-filtered
-frames. Within-user numbers are reported for continuity but do not gate
-anything (IMU-only is already near-ceiling there).
+Pooled/LOUO windowed accuracy, at each model's own selected window from the
+sweep, must beat the recomputed single-user cross-user baseline at its
+selected window before a pooled model proceeds to D3 (train final) / D4
+(export to Core ML). Separately, fusion is judged against IMU-only on the
+identical LOUO split at each model's own selected window: fusion is "worth
+it" only if its cross-user/LOUO windowed accuracy beats IMU-only's, on the
+same row-eligibility-filtered frames. Within-user numbers are reported for
+continuity but do not gate anything (IMU-only is already near-ceiling
+there). If the selected windows for IMU-only vs. fusion differ, that
+difference is itself worth reporting (e.g. fusion needing less temporal
+smoothing would be a second, independent point in its favor beyond raw
+accuracy).
 
 ## Where the code lives
 
@@ -205,16 +246,18 @@ anything (IMU-only is already near-ceiling there).
 
 - Unit-level: a small synthetic-data smoke test for the time-based window
   conversion (fixed synthetic inter-frame gaps → known expected frame
-  count), and for the row-eligibility filter (rows with a missing image or
-  all-zero IMU window are dropped, counts match expected).
+  count per grid entry), for the selection rule (synthetic accuracy-by-window
+  arrays with a known smallest-within-tolerance answer), and for the
+  row-eligibility filter (rows with a missing image or all-zero IMU window
+  are dropped, counts match expected).
 - Integration: run both new scripts against the real
   `hand_manifest_combined.csv` (2 participants today) end-to-end; confirm
-  LOUO output is numerically identical to the existing
-  `cross_user_eval.py` numbers once the 1.5 s window is applied to both
-  (this is the concrete regression check — with 2 participants LOUO *must*
-  equal single-user cross-user, per the Context section's math).
-  Discrepancy here means a bug in the new grouping/windowing code, not a
-  real result.
+  LOUO output is numerically identical to the existing `cross_user_eval.py`
+  numbers at every grid window once the grid sweep is applied to both (this
+  is the concrete regression check — with 2 participants LOUO *must* equal
+  single-user cross-user at each window size, per the Context section's
+  math). Discrepancy here means a bug in the new grouping/windowing code,
+  not a real result.
 - Cache correctness: run once, note wall-clock time; run again, confirm
   cache hits (near-zero image-stage time) and identical output numbers.
 
