@@ -865,7 +865,7 @@ before `print("\nFuture work:")` at line 1195), add:
 - [ ] **Step 7: Run the full test class to verify it passes**
 
 Run: `.venv-ml/bin/python -m pytest tests/test_pooled_fusion.py::TestPooledLouoFlags -v`
-Expected: all 6 tests PASS
+Expected: all 5 tests PASS
 
 - [ ] **Step 8: Run the pre-existing test suite to confirm no regression**
 
