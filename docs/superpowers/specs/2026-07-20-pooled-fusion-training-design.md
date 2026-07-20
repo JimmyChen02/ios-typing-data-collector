@@ -88,7 +88,9 @@ here.
 Reuses tested pipeline stages rather than re-implementing them:
 `hand_dataset.load_dataset_records` (manifest → records), `preprocess` /
 `segment` / `extract_features` from `train_hand_classifier.py` (FCN-ResNet101
-→ binary silhouette → VGG16 4096-d feature vector), and `imu_sequence` for
+→ binary silhouette → VGG16 feature vector — 25088-d, the flattened 7×7×512
+conv output; `extract_features()` does not pass through VGG16's FC layers),
+and `imu_sequence` for
 the per-frame causal 50×12 IMU windows (same as the shipped model).
 
 Segmentation + VGG16 is the only slow stage, so each image's feature vector
@@ -119,9 +121,11 @@ trainable end-to-end silhouette CNN, which is more prone to overfitting on
 tests whether the two signals disagree usefully but does not let them learn
 jointly):
 
-- **Image branch:** cached 4096-d VGG16 feature vector → `Dense(128)`
-  projection layer (trainable; image features themselves stay frozen —
-  they come from a fixed pretrained backbone).
+- **Image branch:** cached VGG16 feature vector (25088-d paper-faithful, or
+  1024-d in the no-keras 32×32-flatten fallback — the branch reads its input
+  dimension from the actual cached vectors at run time rather than assuming
+  one) → `Dense(128)` projection layer (trainable; image features themselves
+  stay frozen — they come from a fixed pretrained backbone).
 - **IMU branch:** same Conv1D encoder architecture as the shipped
   `--imu-seq` model, with its softmax head removed — trainable end-to-end,
   producing a ~64-d embedding.
