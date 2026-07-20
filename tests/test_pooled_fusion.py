@@ -269,3 +269,160 @@ class TestPooledLouoFlags(unittest.TestCase):
         self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
         self.assertIn("Pooled model saved to:", result.stdout)
         self.assertIn("held_out='alice|alpha'", result.stdout)
+
+
+# ---------------------------------------------------------------------------
+# fusion_pooled_train.py: cache + row eligibility
+# ---------------------------------------------------------------------------
+
+def _make_solid_image(path: Path, color=(200, 100, 100), size=(64, 64)) -> None:
+    from PIL import Image
+    img = Image.new("RGB", size, color=color)
+    img.save(str(path), format="JPEG", quality=80)
+
+
+_IMU_HEADER = [
+    "t_ms", "attitude_roll", "attitude_pitch", "attitude_yaw",
+    "grav_x", "grav_y", "grav_z", "acc_x", "acc_y", "acc_z",
+    "rot_x", "rot_y", "rot_z",
+]
+
+
+def _write_imu_csv(path: Path, rows: list) -> None:
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(_IMU_HEADER)
+        for row in rows:
+            writer.writerow(row)
+
+
+class TestFeatureCache(unittest.TestCase):
+
+    def setUp(self):
+        import fusion_pooled_train as fpt
+        self.fpt = fpt
+        self._tmp = tempfile.TemporaryDirectory(prefix="fusion_cache_")
+        self._orig_cache_dir = fpt.CACHE_DIR
+        fpt.CACHE_DIR = Path(self._tmp.name) / "cache"
+
+    def tearDown(self):
+        self.fpt.CACHE_DIR = self._orig_cache_dir
+        self._tmp.cleanup()
+
+    def test_cache_miss_then_hit_same_values(self):
+        with tempfile.TemporaryDirectory(prefix="fusion_img_") as tmp:
+            img_path = Path(tmp) / "sample.jpg"
+            _make_solid_image(img_path)
+
+            self.assertFalse(self.fpt.image_feature_cache_path(str(img_path)).exists())
+            feat1 = self.fpt.cached_image_feature(str(img_path))
+            self.assertTrue(self.fpt.image_feature_cache_path(str(img_path)).exists())
+            feat2 = self.fpt.cached_image_feature(str(img_path))
+
+        self.assertTrue(np.array_equal(feat1, feat2))
+
+    def test_refresh_recomputes(self):
+        with tempfile.TemporaryDirectory(prefix="fusion_img_") as tmp:
+            img_path = Path(tmp) / "sample.jpg"
+            _make_solid_image(img_path)
+            self.fpt.cached_image_feature(str(img_path))
+            cache_path = self.fpt.image_feature_cache_path(str(img_path))
+            mtime_before = cache_path.stat().st_mtime_ns
+            self.fpt.cached_image_feature(str(img_path), refresh=True)
+            mtime_after = cache_path.stat().st_mtime_ns
+        self.assertGreaterEqual(mtime_after, mtime_before)
+
+
+class TestEligibleRecords(unittest.TestCase):
+
+    def setUp(self):
+        import fusion_pooled_train as fpt
+        self.fpt = fpt
+        self._tmp = tempfile.TemporaryDirectory(prefix="fusion_cache_")
+        self._orig_cache_dir = fpt.CACHE_DIR
+        fpt.CACHE_DIR = Path(self._tmp.name) / "cache"
+
+    def tearDown(self):
+        self.fpt.CACHE_DIR = self._orig_cache_dir
+        self._tmp.cleanup()
+
+    def test_drops_rows_with_unreadable_imu(self):
+        with tempfile.TemporaryDirectory(prefix="fusion_elig_") as tmp:
+            tmp_path = Path(tmp)
+            img_dir = tmp_path / "hand_images"
+            img_dir.mkdir()
+            imu_dir = tmp_path / "imu"
+            imu_dir.mkdir()
+
+            _make_solid_image(img_dir / "good.jpg")
+            good_imu = imu_dir / "good.csv"
+            _write_imu_csv(good_imu, [[0.0] + [1.0] * 12, [20.0] + [1.0] * 12])
+
+            _make_solid_image(img_dir / "no_imu.jpg")
+            # No IMU CSV written for this row -> imu_path resolves to None
+            # (hand_dataset treats a missing file as "no IMU", not skipped).
+
+            records = [
+                {
+                    "image_path": str(img_dir / "good.jpg"),
+                    "label": "left",
+                    "participant_key": "p1",
+                    "sort_key": (0, "2026-01-01T00:00:00Z", "hand_images/good.jpg"),
+                    "imu_path": str(good_imu),
+                    "captured_at_iso": "2026-01-01T00:00:00Z",
+                },
+                {
+                    "image_path": str(img_dir / "no_imu.jpg"),
+                    "label": "right",
+                    "participant_key": "p1",
+                    "sort_key": (1, "2026-01-01T00:00:01Z", "hand_images/no_imu.jpg"),
+                    "imu_path": None,
+                    "captured_at_iso": "2026-01-01T00:00:01Z",
+                },
+            ]
+
+            kept, dropped = self.fpt.eligible_records(records)
+
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0]["label"], "left")
+        self.assertEqual(dropped, {"p1": 1})
+
+    def test_unknown_label_rows_excluded_not_counted_as_dropped(self):
+        with tempfile.TemporaryDirectory(prefix="fusion_elig_") as tmp:
+            tmp_path = Path(tmp)
+            img_dir = tmp_path / "hand_images"
+            img_dir.mkdir()
+            _make_solid_image(img_dir / "u.jpg")
+            records = [{
+                "image_path": str(img_dir / "u.jpg"),
+                "label": "unknown",
+                "participant_key": "p1",
+                "sort_key": (0, "2026-01-01T00:00:00Z", "hand_images/u.jpg"),
+                "imu_path": None,
+                "captured_at_iso": "2026-01-01T00:00:00Z",
+            }]
+            kept, dropped = self.fpt.eligible_records(records)
+        self.assertEqual(kept, [])
+        self.assertEqual(dropped, {})
+
+    def test_all_eligible_rows_kept(self):
+        with tempfile.TemporaryDirectory(prefix="fusion_elig_") as tmp:
+            tmp_path = Path(tmp)
+            img_dir = tmp_path / "hand_images"
+            img_dir.mkdir()
+            imu_dir = tmp_path / "imu"
+            imu_dir.mkdir()
+            _make_solid_image(img_dir / "a.jpg")
+            imu_csv = imu_dir / "a.csv"
+            _write_imu_csv(imu_csv, [[0.0] + [1.0] * 12])
+            records = [{
+                "image_path": str(img_dir / "a.jpg"),
+                "label": "both",
+                "participant_key": "p1",
+                "sort_key": (0, "2026-01-01T00:00:00Z", "hand_images/a.jpg"),
+                "imu_path": str(imu_csv),
+                "captured_at_iso": "2026-01-01T00:00:00Z",
+            }]
+            kept, dropped = self.fpt.eligible_records(records)
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(dropped, {})
