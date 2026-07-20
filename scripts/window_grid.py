@@ -96,3 +96,71 @@ def frames_for_seconds(dt_ms: "float | None", seconds: float) -> int:
     if seconds <= 0 or dt_ms is None or dt_ms <= 0:
         return 1
     return max(1, round(seconds * 1000.0 / dt_ms))
+
+
+def windowed_accuracy_at_seconds(
+    records: "list[dict]",
+    indices: "list[int]",
+    pred_labels: "list[str]",
+    true_labels: "list[str]",
+    seconds: float,
+) -> float:
+    """windowed_accuracy() at a TIME window, grouped by session (imu_path) so
+    no window straddles a session boundary, combined as a frame-count-
+    weighted mean across sessions. `indices` are absolute indices into
+    `records`, positionally parallel to `pred_labels`/`true_labels`.
+    """
+    from train_hand_classifier import windowed_accuracy, sliding_window_majority_vote
+
+    groups: "dict[str | None, list[int]]" = {}
+    for pos, i in enumerate(indices):
+        groups.setdefault(records[i].get("imu_path"), []).append(pos)
+
+    total_correct = 0.0
+    total_windows = 0
+    for _session_key, positions in groups.items():
+        positions.sort(key=lambda pos: records[indices[pos]]["sort_key"])
+        session_record_idx = [indices[p] for p in positions]
+        dt_ms = session_capture_dt_ms(records, session_record_idx)
+        frames = frames_for_seconds(dt_ms, seconds)
+
+        pred_seq = [pred_labels[p] for p in positions]
+        true_seq = [true_labels[p] for p in positions]
+        acc = windowed_accuracy(pred_seq, true_seq, window_size=frames)
+        if math.isnan(acc):
+            continue
+        n_windows = len(sliding_window_majority_vote(pred_seq, window_size=frames))
+        total_correct += acc * n_windows
+        total_windows += n_windows
+
+    if total_windows == 0:
+        return float("nan")
+    return total_correct / total_windows
+
+
+def sweep_window_sizes(
+    records: "list[dict]",
+    indices: "list[int]",
+    pred_labels: "list[str]",
+    true_labels: "list[str]",
+    grid: "list[float]" = WINDOW_SECONDS_GRID,
+) -> "dict[float, float]":
+    """windowed_accuracy_at_seconds() for every value in `grid`."""
+    return {
+        s: windowed_accuracy_at_seconds(records, indices, pred_labels, true_labels, s)
+        for s in grid
+    }
+
+
+def select_window(results: "dict[float, float]", tol: float = 0.002) -> "float | None":
+    """Smallest window whose accuracy is within `tol` of the best accuracy in
+    `results` (mentor guidance: test multiple window sizes; prefer a smaller
+    window when it already matches a larger one's accuracy). None if every
+    value is NaN (no session produced any windows at any grid size).
+    """
+    finite = {s: a for s, a in results.items() if not math.isnan(a)}
+    if not finite:
+        return None
+    best = max(finite.values())
+    eligible = [s for s, a in finite.items() if a >= best - tol]
+    return min(eligible)

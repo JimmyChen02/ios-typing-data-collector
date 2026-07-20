@@ -129,3 +129,76 @@ class TestFramesForSeconds(unittest.TestCase):
         """33.33ms/frame (30Hz), 1.5s -> 45 frames (dense_window_sweep.py's
         2026-07-17 finding, now PosturePredictor.voteWindowSize)."""
         self.assertEqual(wg.frames_for_seconds(1000.0 / 30.0, 1.5), 45)
+
+
+class TestWindowedAccuracyAtSeconds(unittest.TestCase):
+
+    def test_matches_direct_call_single_session(self):
+        """One session, one window size -> matches calling windowed_accuracy
+        directly with the frame count frames_for_seconds() computes.
+        1Hz spacing -> session_capture_dt_ms recovers exactly 1000.0 (whole
+        seconds, no truncation error), so this equality is exact."""
+        from train_hand_classifier import windowed_accuracy
+        records = _records_one_session(20, 1000.0)  # 1Hz, exact
+        pred = ["left"] * 12 + ["right"] * 8
+        true = ["left"] * 20
+        seconds = 3.0  # -> 3 frames at 1Hz
+        got = wg.windowed_accuracy_at_seconds(records, list(range(20)), pred, true, seconds)
+        want = windowed_accuracy(pred, true, window_size=3)
+        self.assertAlmostEqual(got, want, places=6)
+
+    def test_never_crosses_session_boundary(self):
+        """Two sessions concatenated -> result equals the manually-computed
+        frame-count-weighted mean of each session's OWN windowed_accuracy,
+        proving no window spans the boundary between them."""
+        from train_hand_classifier import windowed_accuracy, sliding_window_majority_vote
+        recs_a = _records_one_session(10, 1000.0, imu_path="a.csv")
+        recs_b = _records_one_session(10, 1000.0, imu_path="b.csv")
+        records = recs_a + recs_b
+        pred = ["left"] * 6 + ["right"] * 4 + ["right"] * 7 + ["left"] * 3
+        true = ["left"] * 10 + ["right"] * 10
+        seconds = 3.0  # -> 3 frames at 1Hz
+
+        got = wg.windowed_accuracy_at_seconds(records, list(range(20)), pred, true, seconds)
+
+        acc_a = windowed_accuracy(pred[:10], true[:10], window_size=3)
+        acc_b = windowed_accuracy(pred[10:], true[10:], window_size=3)
+        n_a = len(sliding_window_majority_vote(pred[:10], window_size=3))
+        n_b = len(sliding_window_majority_vote(pred[10:], window_size=3))
+        want = (acc_a * n_a + acc_b * n_b) / (n_a + n_b)
+        self.assertAlmostEqual(got, want, places=6)
+
+    def test_seconds_zero_equals_frame_accuracy(self):
+        records = _records_one_session(10, 1000.0)
+        pred = ["left"] * 7 + ["right"] * 3
+        true = ["left"] * 10
+        got = wg.windowed_accuracy_at_seconds(records, list(range(10)), pred, true, 0)
+        self.assertAlmostEqual(got, 0.7, places=6)
+
+
+class TestSweepAndSelect(unittest.TestCase):
+
+    def test_sweep_returns_one_entry_per_grid_value(self):
+        records = _records_one_session(20, 1000.0)
+        pred = ["left"] * 20
+        true = ["left"] * 20
+        grid = [0, 1.5, 15.0]
+        results = wg.sweep_window_sizes(records, list(range(20)), pred, true, grid=grid)
+        self.assertEqual(set(results.keys()), set(grid))
+        for acc in results.values():
+            self.assertAlmostEqual(acc, 1.0, places=6)
+
+    def test_select_window_prefers_smaller_within_tolerance(self):
+        """Best accuracy at 15.0s (0.952); 0.5s and 1.5s are within tol=0.002
+        of it -> smallest of those (0.5) is selected, not the raw best."""
+        results = {0: 0.80, 0.5: 0.951, 1.5: 0.9515, 15.0: 0.952}
+        selected = wg.select_window(results, tol=0.002)
+        self.assertEqual(selected, 0.5)
+
+    def test_select_window_single_best_no_ties(self):
+        results = {0: 0.5, 1.5: 0.6, 15.0: 0.99}
+        self.assertEqual(wg.select_window(results, tol=0.002), 15.0)
+
+    def test_select_window_all_nan_returns_none(self):
+        results = {0: float("nan"), 1.5: float("nan")}
+        self.assertIsNone(wg.select_window(results))
