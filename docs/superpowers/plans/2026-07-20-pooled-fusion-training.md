@@ -1595,17 +1595,29 @@ def main() -> None:
 
     from train_hand_classifier import split_train_eval_indices, _predict_labels, _save_model
 
-    participant_splits: "dict[str, tuple[list[int], list[int]]]" = {}
+    participant_splits: "dict[str, tuple[list[int], list[int], list[int]]]" = {}
     for p_key, p_indices in participant_to_indices.items():
         labels_ = [kept[i]["label"] for i in p_indices]
         keys_ = [kept[i]["sort_key"] for i in p_indices]
-        local_train, _local_eval = split_train_eval_indices(keys_, labels_, train_frac=0.8)
+        local_train, local_eval = split_train_eval_indices(keys_, labels_, train_frac=0.8)
         train_labels_here = [labels_[li] for li in local_train]
         if len(set(train_labels_here)) < 2:
             print(f"  skipping participant {p_key!r} (< 2 distinct labels in train split)")
             continue
         abs_train = [p_indices[li] for li in local_train]
-        participant_splits[p_key] = (abs_train, p_indices)
+        abs_eval = [p_indices[li] for li in local_eval]
+        # (train, local held-out 20%, full known data). Pooled evaluates on
+        # the local eval slot (continuity number, not literally unseen — the
+        # model saw other frames from the same participant); LOUO evaluates
+        # on the full slot for the held-out participant (genuinely 100%
+        # unseen — the decision-relevant number). Conflating these two was a
+        # real data-leakage bug in an earlier draft: using the full set for
+        # pooled eval let it include frames the model was directly trained
+        # on, inflating pooled's reported accuracy. See
+        # .superpowers/sdd/task-3-report.md's "Fix: pooled-eval data
+        # leakage" section for the equivalent fix already applied to
+        # train_hand_classifier.py's _run_pooled_and_louo.
+        participant_splits[p_key] = (abs_train, abs_eval, p_indices)
 
     if len(participant_splits) < 2:
         print("Fewer than 2 usable participants after filtering — pooled/LOUO "
@@ -1651,8 +1663,10 @@ def main() -> None:
 
     if args.pooled:
         print("\n=== Pooled ===")
-        pooled_train_idx = [i for (t, _e) in participant_splits.values() for i in t]
-        pooled_eval_idx = [i for (_t, e) in participant_splits.values() for i in e]
+        pooled_train_idx = [i for (t, _e, _k) in participant_splits.values() for i in t]
+        pooled_eval_idx = [i for (_t, e, _k) in participant_splits.values() for i in e]
+        assert not (set(pooled_train_idx) & set(pooled_eval_idx)), \
+            "pooled eval set must not overlap pooled train set"
         models, unique_labels = _train_and_eval(pooled_train_idx, pooled_eval_idx, "pooled")
         _save("fusion_pooled_", models["fusion"], unique_labels)
         _save("imu_only_pooled_", models["imu_only"], unique_labels)
@@ -1661,10 +1675,10 @@ def main() -> None:
         print("\n=== Leave-one-user-out ===")
         for held_out_key in sorted(participant_splits):
             train_idx = [
-                i for p_key, (t, _e) in participant_splits.items()
+                i for p_key, (t, _e, _k) in participant_splits.items()
                 if p_key != held_out_key for i in t
             ]
-            eval_idx = participant_splits[held_out_key][1]  # FULL data
+            eval_idx = participant_splits[held_out_key][2]  # FULL data, 100% unseen
             models, unique_labels = _train_and_eval(
                 train_idx, eval_idx, f"LOUO held_out={held_out_key!r}"
             )
