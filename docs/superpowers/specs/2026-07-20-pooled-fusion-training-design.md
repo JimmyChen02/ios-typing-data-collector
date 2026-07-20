@@ -157,13 +157,31 @@ tested utility. What changes is how callers compute that count:
 - Windows never cross a session boundary (same rule
   `scripts/dense_window_sweep.py` already established for the live vote
   replay — a session is one IMU CSV / one `imu_path` group).
-- For each session, infer its empirical capture rate as the **median
-  inter-frame interval** between that session's consecutive labeled frames
-  (via `captured_at_iso`) — not a hardcoded 2 or 30. This makes the
-  evaluation correct regardless of future capture-rate changes, with no
-  further code changes needed.
+- For each session, infer its empirical capture rate from `captured_at_iso`
+  — not a hardcoded 2 or 30 — so the evaluation is correct regardless of
+  future capture-rate changes, with no further code changes needed. **Not**
+  a median of consecutive-frame deltas: `captured_at_iso` is written by
+  `ISO8601DateFormatter()` with default options
+  (`TypingResearch/Services/DataExporter.swift:181`), which has **second-level
+  precision only** — no fractional seconds. Verified empirically: at a real
+  session's frame density (60 frames/30s at 2 Hz, 900 frames/30s at 30 fps),
+  a naive median-of-pairwise-deltas collapses to `0.0` for *both* rates
+  (most consecutive frames land in the same integer second; the
+  1000 ms/0 ms quantization noise swamps the true ~500 ms/~33 ms signal),
+  which `frames_for_seconds` would then treat as invalid and silently fall
+  back to a 1-frame window — quietly defeating the entire sweep on exactly
+  the real data it exists to evaluate. The estimator instead computes the
+  session's **average** rate as `(last_timestamp − first_timestamp) /
+  (frame_count − 1)` — the 1-second quantization error is fixed-size
+  regardless of session length, so it shrinks to a few percent for any
+  session spanning more than a handful of seconds (every real capture here:
+  30 s guided bursts, full typing trials). Verified to ~2–5% accuracy
+  against both rates at realistic session sizes. Sessions too short for the
+  span to exceed a handful of seconds return `None` (not a crash) and fall
+  back to a 1-frame window for that session's contribution, same as before.
 - A given time window `w` seconds converts to a per-session frame count as
-  `round(w / median_dt)`, floor 1.
+  `round(w / dt)`, floor 1, where `dt` is that session's estimated average
+  inter-frame interval above.
 - `windowed_accuracy()` is called once per session with that session's own
   frame count, then combined into one number as a frame-count-weighted mean
   across sessions (mirrors `dense_window_sweep.py`'s per-session
@@ -206,7 +224,7 @@ The existing single-user cross-user numbers (0.904 / 0.914 windowed) were
 measured at the old 30-frame/15 s window and are not directly comparable to
 a swept, session-rate-aware metric. Before D2's decision gate is evaluated,
 the single-user cross-user baseline is **recomputed across the same
-`WINDOW_SECONDS_GRID`** (same session-median-rate logic above) so the gate
+`WINDOW_SECONDS_GRID`** (same session-rate-estimation logic above) so the gate
 compares equivalent quantities at whichever window the selection rule picks.
 Concretely: `scripts/cross_user_eval.py` gains the grid sweep and switches
 its hardcoded `VOTE_WINDOW = 30` to the per-session time-based computation —
