@@ -202,3 +202,70 @@ class TestSweepAndSelect(unittest.TestCase):
     def test_select_window_all_nan_returns_none(self):
         results = {0: float("nan"), 1.5: float("nan")}
         self.assertIsNone(wg.select_window(results))
+
+
+# ---------------------------------------------------------------------------
+# train_hand_classifier.py --pooled / --pooled-louo
+# ---------------------------------------------------------------------------
+
+class TestPooledLouoFlags(unittest.TestCase):
+
+    def _run(self, extra_args, out_dir=None, timeout=300):
+        script = SCRIPTS_DIR / "train_hand_classifier.py"
+        args = [sys.executable, str(script), "--demo", "--epochs", "1"] + extra_args
+        if out_dir is not None:
+            args += ["--out", str(out_dir)]
+        return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+
+    def test_pooled_without_imu_seq_errors(self):
+        result = self._run(["--pooled"])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--imu-seq", result.stdout + result.stderr)
+
+    def test_pooled_louo_without_imu_seq_errors(self):
+        result = self._run(["--pooled-louo"])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--imu-seq", result.stdout + result.stderr)
+
+    def test_pooled_demo_end_to_end(self):
+        with tempfile.TemporaryDirectory(prefix="thc_pooled_") as tmp:
+            result = self._run(
+                ["--imu-seq", "--imu-causal", "--pooled"], out_dir=None,
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+            self.assertIn("Pooled model saved to:", result.stdout)
+
+            model_out_line = next(
+                l for l in result.stdout.splitlines() if l.startswith("Model out:")
+            )
+            model_out = Path(model_out_line.split("Model out:", 1)[1].strip())
+            pooled_dir = model_out / "pooled_"
+            self.assertTrue((pooled_dir / "hand_model.keras").exists()
+                             or (pooled_dir / "hand_model.pkl").exists())
+            self.assertTrue((pooled_dir / "labels.json").exists())
+            with (pooled_dir / "labels.json").open() as fh:
+                labels = json.load(fh)
+            self.assertEqual(labels, ["both", "left", "right"])
+
+    def test_pooled_louo_demo_end_to_end(self):
+        result = self._run(["--imu-seq", "--imu-causal", "--pooled-louo"])
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        # Demo has 2 participants: alice|alpha and bob|beta
+        self.assertIn("held_out='alice|alpha'", result.stdout)
+        self.assertIn("held_out='bob|beta'", result.stdout)
+
+        model_out_line = next(
+            l for l in result.stdout.splitlines() if l.startswith("Model out:")
+        )
+        model_out = Path(model_out_line.split("Model out:", 1)[1].strip())
+        for safe_key in ("alice_alpha", "bob_beta"):
+            louo_dir = model_out / f"louo_{safe_key}"
+            self.assertTrue((louo_dir / "hand_model.keras").exists()
+                             or (louo_dir / "hand_model.pkl").exists())
+            self.assertTrue((louo_dir / "labels.json").exists())
+
+    def test_pooled_and_louo_together(self):
+        result = self._run(["--imu-seq", "--imu-causal", "--pooled", "--pooled-louo"])
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("Pooled model saved to:", result.stdout)
+        self.assertIn("held_out='alice|alpha'", result.stdout)

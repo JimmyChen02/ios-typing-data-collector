@@ -848,6 +848,99 @@ def _save_model(model, out_dir: Path) -> None:
         print(f"    Model saved to: {model_path_pkl}  (pickle format)")
 
 
+def _run_pooled_and_louo(
+    records: "list[dict]",
+    participant_to_indices: "dict[str, list[int]]",
+    features_arr: "np.ndarray",
+    train_frac: float,
+    epochs: int,
+    out_dir: Path,
+    do_pooled: bool,
+    do_louo: bool,
+) -> None:
+    """Pooled + leave-one-user-out (LOUO) training for the IMU-sequence model.
+    See docs/superpowers/specs/2026-07-20-pooled-fusion-training-design.md
+    "Evaluation protocol". Reuses split_train_eval_indices per participant
+    (same 80/20 time-ordered convention as the per-participant loop above)
+    to get each participant's own train split, then unions those splits
+    across participants for pooled training and leave-one-user-out training.
+    LOUO evaluates on the held-out participant's FULL data (100% unseen),
+    matching cross_user_eval.py's "MOCK USER" evaluation.
+    """
+    import window_grid
+    import imu_sequence
+
+    participant_splits: "dict[str, tuple[list[int], list[int]]]" = {}
+    for p_key, p_indices in participant_to_indices.items():
+        known = [i for i in p_indices if records[i]["label"] != "unknown"]
+        if not known:
+            continue
+        labels_ = [records[i]["label"] for i in known]
+        keys_ = [records[i]["sort_key"] for i in known]
+        local_train, _local_eval = split_train_eval_indices(keys_, labels_, train_frac=train_frac)
+        train_labels_here = [labels_[li] for li in local_train]
+        if len(set(train_labels_here)) < 2:
+            print(f"  pooled/LOUO: skipping participant {p_key!r} "
+                  "(< 2 distinct labels in its train split)")
+            continue
+        abs_train = [known[li] for li in local_train]
+        participant_splits[p_key] = (abs_train, known)
+
+    if len(participant_splits) < 2:
+        print("  pooled/LOUO: fewer than 2 usable participants — skipping "
+              "(pooling/LOUO requires at least 2).")
+        return
+
+    def _train_and_eval(train_idx: "list[int]", eval_idx: "list[int]", tag: str) -> dict:
+        train_labels = [records[i]["label"] for i in train_idx]
+        model = imu_sequence.train_imu_sequence_model(
+            features_arr[train_idx], train_labels, epochs=epochs
+        )
+        eval_labels = [records[i]["label"] for i in eval_idx]
+        eval_preds = _predict_labels(model, features_arr[eval_idx])
+        frame_acc = float(np.mean(np.array(eval_preds) == np.array(eval_labels)))
+        grid = window_grid.sweep_window_sizes(records, eval_idx, eval_preds, eval_labels)
+        selected = window_grid.select_window(grid)
+        win_acc = grid[selected] if selected is not None else float("nan")
+        print(f"  [{tag}] n_train={len(train_idx)} n_eval={len(eval_idx)} "
+              f"frame-acc={frame_acc:.3f} windowed-acc={_fmt(win_acc)} "
+              f"(selected window={selected}s)")
+        print("    grid: " + ", ".join(f"{s}s={_fmt(a)}" for s, a in sorted(grid.items())))
+        return {"model": model}
+
+    if do_pooled:
+        print("\n=== Pooled (IMU-only) ===")
+        pooled_train_idx = [i for (t, _e) in participant_splits.values() for i in t]
+        pooled_eval_idx = [i for (_t, e) in participant_splits.values() for i in e]
+        result = _train_and_eval(pooled_train_idx, pooled_eval_idx,
+                                  "pooled (own held-out per participant)")
+        p_out_dir = out_dir / "pooled_"
+        p_out_dir.mkdir(parents=True, exist_ok=True)
+        unique_labels_p = sorted(set(records[i]["label"] for i in pooled_train_idx))
+        with (p_out_dir / "labels.json").open("w", encoding="utf-8") as fh:
+            json.dump(unique_labels_p, fh, indent=2)
+        _save_model(result["model"], p_out_dir)
+        print(f"  Pooled model saved to: {p_out_dir}")
+
+    if do_louo:
+        print("\n=== Leave-one-user-out (IMU-only) ===")
+        for held_out_key in sorted(participant_splits):
+            train_idx = [
+                i for p_key, (t, _e) in participant_splits.items()
+                if p_key != held_out_key for i in t
+            ]
+            eval_idx = participant_splits[held_out_key][1]  # FULL data, 100% unseen
+            result = _train_and_eval(train_idx, eval_idx, f"LOUO held_out={held_out_key!r}")
+            safe_key = re.sub(r"[^a-z0-9]+", "_", held_out_key) or "participant"
+            p_out_dir = out_dir / f"louo_{safe_key}"
+            p_out_dir.mkdir(parents=True, exist_ok=True)
+            unique_labels_p = sorted(set(records[i]["label"] for i in train_idx))
+            with (p_out_dir / "labels.json").open("w", encoding="utf-8") as fh:
+                json.dump(unique_labels_p, fh, indent=2)
+            _save_model(result["model"], p_out_dir)
+            print(f"  LOUO model (held out {held_out_key!r}) saved to: {p_out_dir}")
+
+
 def main() -> None:
     args = _parse_args()
 
@@ -875,6 +968,11 @@ def main() -> None:
             "path with image features is skipped).",
             stacklevel=2,
         )
+
+    if (args.pooled or args.pooled_louo) and not args.imu_seq:
+        print("Error: --pooled/--pooled-louo require --imu-seq (pooled "
+              "training is only implemented for the IMU-sequence model).")
+        sys.exit(1)
 
     # IMU fusion banner. NOTE: `_write_markdown_results` keeps only the single
     # BEST run by windowed accuracy — an image+IMU run and an image-only run
@@ -1192,6 +1290,12 @@ def main() -> None:
                                    imu_fusion=args.use_imu):
             print(f"Results chart written to: {md_out}")
 
+    if args.imu_seq and (args.pooled or args.pooled_louo):
+        _run_pooled_and_louo(
+            records, participant_to_indices, features_arr,
+            train_frac, epochs, out_dir, args.pooled, args.pooled_louo,
+        )
+
     print("\nFuture work:")
     print("  - On-device Core ML conversion")
     print("  - Landscape-mode capture")
@@ -1410,6 +1514,20 @@ def _parse_args() -> argparse.Namespace:
              "--imu-seq. Trailing windows match what the on-device live "
              "model can compute (no future samples available at inference "
              "time); centered windows are for offline training/eval only.",
+    )
+    parser.add_argument(
+        "--pooled",
+        action="store_true",
+        help="Also train one IMU-sequence model on ALL participants' pooled "
+             "train-splits (saved to <out>/pooled_/). Requires --imu-seq.",
+    )
+    parser.add_argument(
+        "--pooled-louo",
+        action="store_true",
+        help="Also run leave-one-user-out (LOUO): for each participant, train "
+             "an IMU-sequence model on every OTHER participant's train-split "
+             "and evaluate on that participant's FULL data (100%% unseen), "
+             "saved to <out>/louo_<participant>/. Requires --imu-seq.",
     )
     return parser.parse_args()
 
