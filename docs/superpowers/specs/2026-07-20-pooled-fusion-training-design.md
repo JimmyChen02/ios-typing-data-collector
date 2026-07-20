@@ -255,13 +255,21 @@ accuracy).
   row-eligibility filter (rows with a missing image or all-zero IMU window
   are dropped, counts match expected).
 - Integration: run both new scripts against the real
-  `hand_manifest_combined.csv` (2 participants today) end-to-end; confirm
-  LOUO output is numerically identical to the existing `cross_user_eval.py`
-  numbers at every grid window once the grid sweep is applied to both (this
-  is the concrete regression check — with 2 participants LOUO *must* equal
-  single-user cross-user at each window size, per the Context section's
-  math). Discrepancy here means a bug in the new grouping/windowing code,
-  not a real result.
+  `hand_manifest_combined.csv` (2 participants today) end-to-end. The
+  concrete regression check is at the **data level, not the accuracy
+  level**: with 2 participants, LOUO's train-index set for held-out
+  participant X must equal the *other* participant's own train-split
+  indices (same `split_train_eval_indices` call the per-participant loop
+  already uses), and LOUO's eval-index set for X must equal X's full
+  known-label indices — both exactly checkable, deterministic set
+  equality, no training involved. Trained *accuracy* will be close to but
+  not bit-identical to the existing `cross_user_eval.py` numbers, because
+  Conv1D training is stochastic (no fixed random seed anywhere in this
+  codebase) — a fresh training run on identical data is not expected to
+  reproduce the old run's numbers to the decimal. A large accuracy gap
+  (not a small one) on identical index sets means a bug; index-set
+  mismatch means a bug in the new grouping/windowing code regardless of
+  accuracy.
 - Cache correctness: run once, note wall-clock time; run again, confirm
   cache hits (near-zero image-stage time) and identical output numbers.
 
