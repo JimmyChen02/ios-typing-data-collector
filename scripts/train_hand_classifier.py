@@ -864,27 +864,43 @@ def _run_pooled_and_louo(
     (same 80/20 time-ordered convention as the per-participant loop above)
     to get each participant's own train split, then unions those splits
     across participants for pooled training and leave-one-user-out training.
-    LOUO evaluates on the held-out participant's FULL data (100% unseen),
-    matching cross_user_eval.py's "MOCK USER" evaluation.
+
+    The two modes use DIFFERENT, deliberately-different eval sets per
+    participant — participant_splits stores both:
+      - Pooled evaluates each participant on their own LOCAL 20% held-out
+        split (`abs_eval` below) — the same held-out frames excluded from
+        that participant's contribution to `abs_train`. This is a
+        continuity/sanity number, not a genuinely "unseen" one: the pooled
+        model still saw OTHER frames from the same participant during
+        training (just not these specific eval frames). Using the
+        participant's FULL known set here instead would leak, since
+        `abs_train` is a subset of that full set and the pooled model would
+        then be evaluated on data it was directly trained on.
+      - LOUO evaluates the held-out participant on their FULL data (`known`
+        below, 100% unseen) since no data from that participant appears
+        anywhere in that round's training set (all training data comes from
+        OTHER participants). This is the decision-relevant, genuinely-unseen
+        number, matching cross_user_eval.py's "MOCK USER" evaluation.
     """
     import window_grid
     import imu_sequence
 
-    participant_splits: "dict[str, tuple[list[int], list[int]]]" = {}
+    participant_splits: "dict[str, tuple[list[int], list[int], list[int]]]" = {}
     for p_key, p_indices in participant_to_indices.items():
         known = [i for i in p_indices if records[i]["label"] != "unknown"]
         if not known:
             continue
         labels_ = [records[i]["label"] for i in known]
         keys_ = [records[i]["sort_key"] for i in known]
-        local_train, _local_eval = split_train_eval_indices(keys_, labels_, train_frac=train_frac)
+        local_train, local_eval = split_train_eval_indices(keys_, labels_, train_frac=train_frac)
         train_labels_here = [labels_[li] for li in local_train]
         if len(set(train_labels_here)) < 2:
             print(f"  pooled/LOUO: skipping participant {p_key!r} "
                   "(< 2 distinct labels in its train split)")
             continue
         abs_train = [known[li] for li in local_train]
-        participant_splits[p_key] = (abs_train, known)
+        abs_eval = [known[li] for li in local_eval]
+        participant_splits[p_key] = (abs_train, abs_eval, known)
 
     if len(participant_splits) < 2:
         print("  pooled/LOUO: fewer than 2 usable participants — skipping "
@@ -910,8 +926,11 @@ def _run_pooled_and_louo(
 
     if do_pooled:
         print("\n=== Pooled (IMU-only) ===")
-        pooled_train_idx = [i for (t, _e) in participant_splits.values() for i in t]
-        pooled_eval_idx = [i for (_t, e) in participant_splits.values() for i in e]
+        pooled_train_idx = [i for (t, _e, _k) in participant_splits.values() for i in t]
+        pooled_eval_idx = [i for (_t, e, _k) in participant_splits.values() for i in e]
+        assert not (set(pooled_train_idx) & set(pooled_eval_idx)), (
+            "pooled eval set must not overlap pooled train set"
+        )
         result = _train_and_eval(pooled_train_idx, pooled_eval_idx,
                                   "pooled (own held-out per participant)")
         p_out_dir = out_dir / "pooled_"
@@ -926,10 +945,10 @@ def _run_pooled_and_louo(
         print("\n=== Leave-one-user-out (IMU-only) ===")
         for held_out_key in sorted(participant_splits):
             train_idx = [
-                i for p_key, (t, _e) in participant_splits.items()
+                i for p_key, (t, _e, _k) in participant_splits.items()
                 if p_key != held_out_key for i in t
             ]
-            eval_idx = participant_splits[held_out_key][1]  # FULL data, 100% unseen
+            eval_idx = participant_splits[held_out_key][2]  # FULL data, 100% unseen
             result = _train_and_eval(train_idx, eval_idx, f"LOUO held_out={held_out_key!r}")
             safe_key = re.sub(r"[^a-z0-9]+", "_", held_out_key) or "participant"
             p_out_dir = out_dir / f"louo_{safe_key}"
