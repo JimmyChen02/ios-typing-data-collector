@@ -40,26 +40,28 @@ from train_hand_classifier import (  # noqa: E402
     windowed_accuracy,
 )
 
+import window_grid  # noqa: E402
 import keras  # noqa: E402
 
 MODELS_DIR = REPO / "Model-Training-Test" / "models"
 MANIFEST = REPO / "Model-Training-Test" / "hand_manifest_combined.csv"
 IMAGES_ROOT = REPO / "Model-Training-Test"
 WINDOW = 50          # IMU window (samples) — matches the shipped model
-VOTE_WINDOW = 30     # majority-vote eval window (frames) — HandyTrak metric
 
 
 def slug(key: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", key)
 
 
-def evaluate(model, classes, feats, true_labels):
+def evaluate(records, indices, model, classes, feats, true_labels):
     probs = model.predict(feats, verbose=0)
     pred = [classes[j] for j in np.asarray(probs).argmax(axis=1)]
     frame_acc = float(np.mean(np.array(pred) == np.array(true_labels)))
     per_class, conf = _per_class_and_confusion(true_labels, pred, classes)
-    win_acc = windowed_accuracy(pred, true_labels, window_size=VOTE_WINDOW)
-    return frame_acc, win_acc, per_class, conf
+    grid = window_grid.sweep_window_sizes(records, indices, pred, true_labels)
+    selected = window_grid.select_window(grid)
+    win_acc = grid[selected] if selected is not None else float("nan")
+    return frame_acc, win_acc, selected, grid, per_class, conf
 
 
 def main() -> None:
@@ -104,21 +106,27 @@ def main() -> None:
             else:
                 tag = "MOCK USER (100% unseen)"
             true = [records[i]["label"] for i in idxs]
-            fa, wa, pc, conf = evaluate(model, classes, X[idxs], true)
-            rows.append((model_key, target_key, tag, len(idxs), fa, wa))
+            fa, wa, sel, grid, pc, conf = evaluate(records, idxs, model, classes, X[idxs], true)
+            rows.append((model_key, target_key, tag, len(idxs), fa, wa, sel))
             print(f"\n=== model[{slug(model_key)}] -> data[{slug(target_key)}]"
                   f"  ({tag}, n={len(idxs)}) ===")
-            print(f"  frame-acc={fa:.3f}   windowed-acc={wa:.3f}")
+            print(f"  frame-acc={fa:.3f}   windowed-acc={wa:.3f}"
+                  f"  (selected window={sel}s)")
+            print("  window grid: " + ", ".join(
+                f"{s}s={a:.3f}" if a == a else f"{s}s=nan"
+                for s, a in sorted(grid.items())))
             print("  per-class: " + ", ".join(f"{c}={v:.3f}" for c, v in pc.items()))
             conf_str = ", ".join(f"{t}->{p}:{n}" for (t, p), n in sorted(conf.items()))
             print(f"  confusion (true->pred): {conf_str}")
 
-    print("\n" + "=" * 78)
-    print(f"{'model':<14}{'evaluated on':<14}{'condition':<26}{'n':>6}{'frame':>9}{'windowed':>10}")
-    print("-" * 78)
-    for mk, tk, tag, n, fa, wa in rows:
-        print(f"{slug(mk):<14}{slug(tk):<14}{tag:<26}{n:>6}{fa:>9.3f}{wa:>10.3f}")
-    print("=" * 78)
+    print("\n" + "=" * 88)
+    print(f"{'model':<14}{'evaluated on':<14}{'condition':<26}{'n':>6}"
+          f"{'frame':>9}{'windowed':>10}{'sel(s)':>8}")
+    print("-" * 88)
+    for mk, tk, tag, n, fa, wa, sel in rows:
+        print(f"{slug(mk):<14}{slug(tk):<14}{tag:<26}{n:>6}{fa:>9.3f}"
+              f"{wa:>10.3f}{sel!s:>8}")
+    print("=" * 88)
 
 
 if __name__ == "__main__":
