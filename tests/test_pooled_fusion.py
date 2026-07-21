@@ -493,3 +493,87 @@ class TestFusionModel(unittest.TestCase):
                 (out_dir / "hand_model.keras").exists()
                 or (out_dir / "hand_model.pkl").exists()
             )
+
+
+# ---------------------------------------------------------------------------
+# fusion_pooled_train.py: CLI
+# ---------------------------------------------------------------------------
+
+class TestFusionCli(unittest.TestCase):
+
+    def _run(self, extra_args, timeout=600):
+        script = SCRIPTS_DIR / "fusion_pooled_train.py"
+        args = [sys.executable, str(script), "--demo", "--epochs", "1"] + extra_args
+        return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+
+    def test_requires_pooled_or_louo(self):
+        result = self._run([])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--pooled", result.stdout + result.stderr)
+
+    def test_pooled_demo_end_to_end(self):
+        result = self._run(["--pooled"])
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("=== Pooled ===", result.stdout)
+
+        model_out_line = next(
+            l for l in result.stdout.splitlines() if l.startswith("Model out:")
+        )
+        model_out = Path(model_out_line.split("Model out:", 1)[1].strip())
+        for name in ("fusion_pooled_", "imu_only_pooled_"):
+            d = model_out / name
+            self.assertTrue((d / "hand_model.keras").exists()
+                             or (d / "hand_model.pkl").exists(), msg=str(d))
+            self.assertTrue((d / "labels.json").exists())
+
+    def test_louo_demo_end_to_end(self):
+        result = self._run(["--pooled-louo"])
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("=== Leave-one-user-out ===", result.stdout)
+        self.assertIn("held_out='alice|alpha'", result.stdout)
+        self.assertIn("held_out='bob|beta'", result.stdout)
+
+        model_out_line = next(
+            l for l in result.stdout.splitlines() if l.startswith("Model out:")
+        )
+        model_out = Path(model_out_line.split("Model out:", 1)[1].strip())
+        for prefix in ("fusion_louo_", "imu_only_louo_"):
+            for safe_key in ("alice_alpha", "bob_beta"):
+                d = model_out / f"{prefix}{safe_key}"
+                self.assertTrue((d / "hand_model.keras").exists()
+                                 or (d / "hand_model.pkl").exists(), msg=str(d))
+
+    def test_dropped_rows_reported_when_manifest_has_no_imu(self):
+        """A manifest with images but zero IMU coverage -> every row dropped,
+        script reports it and exits cleanly (0 usable participants after
+        filtering) instead of crashing."""
+        with tempfile.TemporaryDirectory(prefix="fusion_noimu_") as tmp:
+            tmp_path = Path(tmp)
+            img_dir = tmp_path / "hand_images"
+            img_dir.mkdir()
+            for i, label in enumerate(["left", "right", "both"]):
+                _make_solid_image(img_dir / f"img_{i}.jpg")
+            fieldnames = [
+                "participant_first", "participant_last", "study_id", "session_id",
+                "study_session_index", "captured_at_iso", "holding_hand",
+                "image_relative_path", "image_pixel_width", "image_pixel_height",
+                "camera_position", "device_model", "system_version", "notes",
+            ]
+            manifest_path = tmp_path / "manifest.csv"
+            with manifest_path.open("w", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(fh, fieldnames=fieldnames)
+                writer.writeheader()
+                for i, label in enumerate(["left", "right", "both"]):
+                    writer.writerow({
+                        "holding_hand": label,
+                        "image_relative_path": f"hand_images/img_{i}.jpg",
+                    })
+
+            script = SCRIPTS_DIR / "fusion_pooled_train.py"
+            result = subprocess.run(
+                [sys.executable, str(script), str(manifest_path),
+                 "--images-root", str(tmp_path), "--pooled", "--epochs", "1"],
+                capture_output=True, text=True, timeout=120,
+            )
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("0 eligible", result.stdout)

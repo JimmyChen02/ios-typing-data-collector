@@ -226,6 +226,198 @@ def predict_labels_fusion(
     return [classes[i] for i in idx]
 
 
+# ---------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------
+
+def _fmt(v: float) -> str:
+    import math
+    return f"{v:.3f}" if not math.isnan(v) else "   nan"
+
+
+def main() -> None:
+    args = _parse_args()
+
+    if not (args.pooled or args.pooled_louo):
+        print("Error: pass --pooled and/or --pooled-louo (fusion has no "
+              "per-participant mode — see the D1 design's Non-goals).")
+        sys.exit(1)
+
+    if args.demo:
+        from hand_dataset import _make_demo_manifest_and_images
+        tmp = Path(tempfile.mkdtemp(prefix="fusion_demo_"))
+        manifest_path, images_root = _make_demo_manifest_and_images(tmp)
+        out_dir = tmp / "model"
+        print(f"Manifest : {manifest_path}")
+        print(f"Images   : {images_root}")
+        print(f"Model out: {out_dir}")
+    else:
+        if not args.manifest:
+            print("Error: provide a manifest CSV path, or use --demo")
+            sys.exit(1)
+        manifest_path = args.manifest
+        images_root = args.images_root
+        out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    from hand_dataset import load_dataset_records
+    all_records = load_dataset_records(manifest_path, images_root)
+    kept, dropped = eligible_records(all_records, refresh_cache=args.refresh_cache)
+    print(f"Loaded {len(all_records)} records; {len(kept)} eligible "
+          f"(both image and IMU readable), {sum(dropped.values())} dropped")
+    for p_key, n in sorted(dropped.items()):
+        print(f"  dropped {n} row(s) for participant {p_key!r}")
+
+    if not kept:
+        print("No eligible rows — nothing to train. Exiting.")
+        return
+
+    import imu_sequence
+    imu_windows, _imu_labels, _imu_sort_keys = imu_sequence.build_sequence_dataset(
+        kept, window=IMU_WINDOW, causal=IMU_CAUSAL
+    )
+    img_feats = np.stack(
+        [cached_image_feature(r["image_path"]) for r in kept], axis=0
+    )
+
+    participant_to_indices: "dict[str, list[int]]" = {}
+    for i, rec in enumerate(kept):
+        participant_to_indices.setdefault(rec["participant_key"], []).append(i)
+
+    from train_hand_classifier import split_train_eval_indices, _predict_labels, _save_model
+
+    participant_splits: "dict[str, tuple[list[int], list[int], list[int]]]" = {}
+    for p_key, p_indices in participant_to_indices.items():
+        labels_ = [kept[i]["label"] for i in p_indices]
+        keys_ = [kept[i]["sort_key"] for i in p_indices]
+        local_train, local_eval = split_train_eval_indices(keys_, labels_, train_frac=0.8)
+        train_labels_here = [labels_[li] for li in local_train]
+        if len(set(train_labels_here)) < 2:
+            print(f"  skipping participant {p_key!r} (< 2 distinct labels in train split)")
+            continue
+        abs_train = [p_indices[li] for li in local_train]
+        abs_eval = [p_indices[li] for li in local_eval]
+        # (train, local held-out 20%, full known data). Pooled evaluates on
+        # the local eval slot (continuity number, not literally unseen — the
+        # model saw other frames from the same participant); LOUO evaluates
+        # on the full slot for the held-out participant (genuinely 100%
+        # unseen — the decision-relevant number). Conflating these two was a
+        # real data-leakage bug in an earlier draft: using the full set for
+        # pooled eval let it include frames the model was directly trained
+        # on, inflating pooled's reported accuracy. See
+        # .superpowers/sdd/task-3-report.md's "Fix: pooled-eval data
+        # leakage" section for the equivalent fix already applied to
+        # train_hand_classifier.py's _run_pooled_and_louo.
+        participant_splits[p_key] = (abs_train, abs_eval, p_indices)
+
+    if len(participant_splits) < 2:
+        print("Fewer than 2 usable participants after filtering — pooled/LOUO "
+              "need at least 2. Nothing to do.")
+        return
+
+    import window_grid
+
+    def _train_and_eval(train_idx: "list[int]", eval_idx: "list[int]", tag: str) -> None:
+        train_labels = [kept[i]["label"] for i in train_idx]
+        fusion_model = train_fusion_model(
+            img_feats[train_idx], imu_windows[train_idx], train_labels, epochs=args.epochs
+        )
+        imu_only_model = imu_sequence.train_imu_sequence_model(
+            imu_windows[train_idx], train_labels, epochs=args.epochs
+        )
+        unique_labels = sorted(set(train_labels))
+        eval_labels = [kept[i]["label"] for i in eval_idx]
+
+        fusion_preds = predict_labels_fusion(
+            fusion_model, img_feats[eval_idx], imu_windows[eval_idx], unique_labels
+        )
+        imu_only_preds = _predict_labels(imu_only_model, imu_windows[eval_idx])
+
+        models = {"fusion": fusion_model, "imu_only": imu_only_model}
+        for name, preds in (("fusion", fusion_preds), ("imu_only", imu_only_preds)):
+            frame_acc = float(np.mean(np.array(preds) == np.array(eval_labels)))
+            grid = window_grid.sweep_window_sizes(kept, eval_idx, preds, eval_labels)
+            selected = window_grid.select_window(grid)
+            win_acc = grid[selected] if selected is not None else float("nan")
+            print(f"  [{tag}] {name}: n_train={len(train_idx)} n_eval={len(eval_idx)} "
+                  f"frame-acc={frame_acc:.3f} windowed-acc={_fmt(win_acc)} "
+                  f"(selected window={selected}s)")
+        return models, unique_labels
+
+    def _save(prefix: str, model, unique_labels: "list[str]") -> None:
+        p_out_dir = out_dir / prefix
+        p_out_dir.mkdir(parents=True, exist_ok=True)
+        with (p_out_dir / "labels.json").open("w", encoding="utf-8") as fh:
+            json.dump(unique_labels, fh, indent=2)
+        _save_model(model, p_out_dir)
+        print(f"  saved: {p_out_dir}")
+
+    if args.pooled:
+        print("\n=== Pooled ===")
+        pooled_train_idx = [i for (t, _e, _k) in participant_splits.values() for i in t]
+        pooled_eval_idx = [i for (_t, e, _k) in participant_splits.values() for i in e]
+        assert not (set(pooled_train_idx) & set(pooled_eval_idx)), \
+            "pooled eval set must not overlap pooled train set"
+        models, unique_labels = _train_and_eval(pooled_train_idx, pooled_eval_idx, "pooled")
+        _save("fusion_pooled_", models["fusion"], unique_labels)
+        _save("imu_only_pooled_", models["imu_only"], unique_labels)
+
+    if args.pooled_louo:
+        print("\n=== Leave-one-user-out ===")
+        for held_out_key in sorted(participant_splits):
+            train_idx = [
+                i for p_key, (t, _e, _k) in participant_splits.items()
+                if p_key != held_out_key for i in t
+            ]
+            eval_idx = participant_splits[held_out_key][2]  # FULL data, 100% unseen
+            models, unique_labels = _train_and_eval(
+                train_idx, eval_idx, f"LOUO held_out={held_out_key!r}"
+            )
+            safe_key = re.sub(r"[^a-z0-9]+", "_", held_out_key) or "participant"
+            _save(f"fusion_louo_{safe_key}", models["fusion"], unique_labels)
+            _save(f"imu_only_louo_{safe_key}", models["imu_only"], unique_labels)
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "manifest", nargs="?",
+        help="Path to the hand manifest CSV. Omit with --demo.",
+    )
+    parser.add_argument(
+        "--images-root", default=".",
+        help="Directory that image_relative_path/imu_relative_path values are resolved against.",
+    )
+    parser.add_argument(
+        "--out", default="fusion_model_out",
+        help="Output directory for the trained models and labels.json files.",
+    )
+    parser.add_argument(
+        "--demo", action="store_true",
+        help="Run end-to-end on synthetic data (no real data needed).",
+    )
+    parser.add_argument(
+        "--pooled", action="store_true",
+        help="Train one fusion + one IMU-only model on ALL participants' "
+             "pooled train-splits.",
+    )
+    parser.add_argument(
+        "--pooled-louo", action="store_true",
+        help="Leave-one-user-out: for each participant, train fusion + "
+             "IMU-only models on every OTHER participant's train-split and "
+             "evaluate on that participant's FULL data (100%% unseen).",
+    )
+    parser.add_argument(
+        "--epochs", type=int, default=10,
+        help="Training epochs for both the fusion and IMU-only models (default 10).",
+    )
+    parser.add_argument(
+        "--refresh-cache", action="store_true",
+        help="Recompute cached VGG16 image features instead of reusing "
+             "Model-Training-Test/cache/img_features/*.npy.",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    print("fusion_pooled_train.py: CLI not yet implemented (Task 6)", file=sys.stderr)
-    sys.exit(1)
+    main()
