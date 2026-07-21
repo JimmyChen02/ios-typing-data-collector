@@ -143,10 +143,10 @@ def build_fusion_model(
     image_feature_dim: int, imu_window: int, imu_channels: int, n_classes: int
 ):
     """Two-branch feature-level fusion:
-      image_features (image_feature_dim,) --Dense(128)--> image_128
+      image_features (image_feature_dim,) --Dense(128)->Dropout(0.5)--> image_128
       imu_window (imu_window, imu_channels)
         --Conv1D(32,5)->BN->ReLU->Conv1D(64,5)->GlobalAvgPool->Dropout(0.5)--> imu_64
-      concat(image_128, imu_64) --Dense(128, relu)--> Dense(n_classes, softmax)
+      concat(image_128, imu_64) --Dense(128, relu)->Dropout(0.5)--> Dense(n_classes, softmax)
 
     image_feature_dim is read from the actual cached feature vectors at call
     time (25088-d paper-faithful VGG16-conv-flatten, or 1024-d in the no-
@@ -155,6 +155,15 @@ def build_fusion_model(
     are installed. The IMU branch mirrors imu_sequence._train_conv1d's
     architecture up to (not including) its softmax head, so it starts from
     the same proven shape as the shipped IMU-only model.
+
+    Dropout(0.5) on the image projection and the fusion head (added after
+    .claude/process/2026-07-20-pooled-fusion-training.md's real-data run
+    found fusion losing badly to the IMU-only model cross-user, with an
+    unregularized ~3.2M-parameter image projection fit on as few as 831 rows
+    from a single participant as the leading hypothesis) matches the rate
+    already used on the IMU branch here and on train_hand_classifier.
+    _train_handynet's head -- not a new hyperparameter choice, the same one
+    used everywhere else in this codebase.
 
     Compiled with Adam / sparse_categorical_crossentropy, ready for .fit().
     """
@@ -167,6 +176,7 @@ def build_fusion_model(
 
     img_in = Input(shape=(image_feature_dim,), name="image_features")
     img_x = layers.Dense(128, activation="relu", name="image_projection")(img_in)
+    img_x = layers.Dropout(0.5)(img_x)
 
     imu_in = Input(shape=(imu_window, imu_channels), name="imu_window")
     imu_x = layers.Conv1D(32, 5, padding="same")(imu_in)
@@ -178,6 +188,7 @@ def build_fusion_model(
 
     fused = layers.Concatenate()([img_x, imu_x])
     fused = layers.Dense(128, activation="relu")(fused)
+    fused = layers.Dropout(0.5)(fused)
     out = layers.Dense(n_classes, activation="softmax")(fused)
 
     model = Model(inputs=[img_in, imu_in], outputs=out)

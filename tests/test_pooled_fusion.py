@@ -459,6 +459,37 @@ class TestFusionModel(unittest.TestCase):
         # Softmax rows sum to ~1
         self.assertTrue(np.allclose(probs.sum(axis=1), 1.0, atol=1e-4))
 
+    def test_build_fusion_model_regularizes_image_branch_and_head(self):
+        """Both previously-unregularized spots (the image projection and the
+        fusion head, flagged in code review as the likely overfitting culprit
+        behind the LOUO cross-user finding in .claude/process/2026-07-20-
+        pooled-fusion-training.md) must now have Dropout, matching the
+        Dropout(0.5) already used everywhere else in this codebase (the IMU
+        branch here, and train_hand_classifier._train_handynet's head)."""
+        import fusion_pooled_train as fpt
+        from tensorflow import keras as tfkeras
+
+        model = fpt.build_fusion_model(
+            image_feature_dim=1024, imu_window=50, imu_channels=12, n_classes=3
+        )
+        dropout_layers = [l for l in model.layers if isinstance(l, tfkeras.layers.Dropout)]
+        # 1 pre-existing (IMU branch) + 1 new (image branch) + 1 new (fusion head)
+        self.assertEqual(len(dropout_layers), 3)
+        for layer in dropout_layers:
+            self.assertEqual(layer.rate, 0.5)
+
+        # The image projection's output must flow through a Dropout before
+        # reaching the Concatenate (not just have a Dropout somewhere else
+        # in the graph that happens to satisfy the count above).
+        image_projection = model.get_layer("image_projection")
+        consumers = [
+            l for l in model.layers
+            if any(t is image_projection.output for t in
+                   (l.input if isinstance(l.input, list) else [l.input]))
+        ]
+        self.assertEqual(len(consumers), 1)
+        self.assertIsInstance(consumers[0], tfkeras.layers.Dropout)
+
     def test_train_fusion_model_fits_and_predicts(self):
         import fusion_pooled_train as fpt
         np.random.seed(0)
