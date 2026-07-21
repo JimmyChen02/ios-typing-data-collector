@@ -23,6 +23,7 @@ import tempfile
 import unittest
 import warnings
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -322,15 +323,26 @@ class TestFeatureCache(unittest.TestCase):
         self.assertTrue(np.array_equal(feat1, feat2))
 
     def test_refresh_recomputes(self):
+        """A cache hit must NOT recompute; refresh=True must recompute even
+        on a hit. mtime alone can't prove this (an unchanged mtime satisfies
+        mtime_after >= mtime_before just as well as a real recompute would),
+        so this asserts on extract_features() call counts instead."""
+        import train_hand_classifier as thc
         with tempfile.TemporaryDirectory(prefix="fusion_img_") as tmp:
             img_path = Path(tmp) / "sample.jpg"
             _make_solid_image(img_path)
-            self.fpt.cached_image_feature(str(img_path))
-            cache_path = self.fpt.image_feature_cache_path(str(img_path))
-            mtime_before = cache_path.stat().st_mtime_ns
-            self.fpt.cached_image_feature(str(img_path), refresh=True)
-            mtime_after = cache_path.stat().st_mtime_ns
-        self.assertGreaterEqual(mtime_after, mtime_before)
+
+            with mock.patch.object(
+                thc, "extract_features", wraps=thc.extract_features
+            ) as spy:
+                self.fpt.cached_image_feature(str(img_path))  # cache miss
+                self.assertEqual(spy.call_count, 1)
+
+                self.fpt.cached_image_feature(str(img_path))  # cache hit
+                self.assertEqual(spy.call_count, 1)
+
+                self.fpt.cached_image_feature(str(img_path), refresh=True)
+                self.assertEqual(spy.call_count, 2)
 
 
 class TestEligibleRecords(unittest.TestCase):
