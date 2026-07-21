@@ -151,11 +151,18 @@ it is not a one-off unlucky initialization.
   (mathematically, not just empirically -- see the design doc's Context
   section). The pooling question needs a 3rd participant (Part C,
   scripts/merge_hand_export.sh) to mean anything beyond what
-  cross_user_eval.py already measured. Confirmed empirically here: LOUO
-  IMU-only's windowed-acc (1.000 / 1.000) is a near-exact match to
-  cross_user_eval.py's recomputed baseline (0.999 / 1.000) — a "close call,"
-  as the design doc predicted, not a clear pooling win, because with 2
-  participants the LOUO train set literally IS the baseline's training data.
+  cross_user_eval.py already measured. Confirmed empirically here: the
+  `fusion_pooled_train.py` run's LOUO IMU-only comparison model's
+  windowed-acc (1.000 / 1.000, table above under step 4) is a near-exact
+  match to cross_user_eval.py's recomputed baseline (0.999 / 1.000) — a
+  "close call," as the design doc predicted, not a clear pooling win,
+  because with 2 participants the LOUO train set literally IS the
+  baseline's training data. (Note: `train_hand_classifier.py`'s own
+  separately-trained LOUO IMU-only model, step 3's table, landed at
+  1.000 / 0.999 instead of 1.000 / 1.000 — a different model instance
+  than either of the two just compared, since training is stochastic
+  with no fixed seed anywhere in this codebase; all three numbers are
+  real, independently trained models, not one figure copied around.)
 - windowed_accuracy()'s window_size is STILL a raw frame count -- unchanged,
   still the right choice for that low-level function. Callers now compute
   the count via scripts/window_grid.py from each session's OWN measured
