@@ -441,6 +441,63 @@ class TestEligibleRecords(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# fusion_pooled_train.py: cache_images_batch (NOT wired into eligible_
+# records() by default -- see that function's docstring for the measured-
+# slower-on-CPU finding. Tested here in isolation since it's a correct,
+# available utility for GPU-accelerated hardware.)
+# ---------------------------------------------------------------------------
+
+class TestCacheImagesBatch(unittest.TestCase):
+
+    def setUp(self):
+        import fusion_pooled_train as fpt
+        self.fpt = fpt
+        self._tmp = tempfile.TemporaryDirectory(prefix="fusion_cache_")
+        self._orig_cache_dir = fpt.CACHE_DIR
+        fpt.CACHE_DIR = Path(self._tmp.name) / "cache"
+
+    def tearDown(self):
+        self.fpt.CACHE_DIR = self._orig_cache_dir
+        self._tmp.cleanup()
+
+    def test_batch_with_one_corrupt_image_isolates_it(self):
+        """A corrupt image inside a batch must not take the rest of that
+        batch down with it -- a whole-batch failure falls back to
+        cached_image_feature() one image at a time for that specific batch."""
+        with tempfile.TemporaryDirectory(prefix="fusion_batch_") as tmp:
+            tmp_path = Path(tmp)
+            good_a = tmp_path / "a.jpg"
+            bad = tmp_path / "b.jpg"
+            good_c = tmp_path / "c.jpg"
+            _make_solid_image(good_a)
+            bad.write_bytes(b"not a real jpeg")
+            _make_solid_image(good_c)
+
+            # batch_size=3 forces all three into one batch together.
+            ok = self.fpt.cache_images_batch(
+                [str(good_a), str(bad), str(good_c)], batch_size=3
+            )
+
+        self.assertEqual(ok, {str(good_a): True, str(bad): False, str(good_c): True})
+        self.assertTrue(self.fpt.image_feature_cache_path(str(good_a)).exists())
+        self.assertTrue(self.fpt.image_feature_cache_path(str(good_c)).exists())
+        self.assertFalse(self.fpt.image_feature_cache_path(str(bad)).exists())
+
+    def test_already_cached_paths_skipped(self):
+        with tempfile.TemporaryDirectory(prefix="fusion_batch_") as tmp:
+            img_path = Path(tmp) / "a.jpg"
+            _make_solid_image(img_path)
+            self.fpt.cached_image_feature(str(img_path))  # pre-populate cache
+            cache_path = self.fpt.image_feature_cache_path(str(img_path))
+            mtime_before = cache_path.stat().st_mtime_ns
+
+            ok = self.fpt.cache_images_batch([str(img_path)], batch_size=8)
+
+        self.assertEqual(ok, {str(img_path): True})
+        self.assertEqual(cache_path.stat().st_mtime_ns, mtime_before)  # untouched
+
+
+# ---------------------------------------------------------------------------
 # fusion_pooled_train.py: model architecture
 # ---------------------------------------------------------------------------
 

@@ -434,6 +434,63 @@ class TestTrainHandClassifier(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# NEW: batched segment()/extract_features() (2026-07-21 fusion-cache speedup)
+# ---------------------------------------------------------------------------
+
+class TestBatchedInference(unittest.TestCase):
+    """segment_batch()/extract_features_batch() must produce EXACTLY the same
+    output as calling segment()/extract_features() once per image -- batching
+    is purely a speed optimization (one FCN-ResNet101/VGG16 forward pass per
+    N images instead of N passes), not a behavior change. These are additive
+    functions; segment()/extract_features() themselves are untouched."""
+
+    def _make_images(self, n):
+        import numpy as np
+        with tempfile.TemporaryDirectory(prefix="thc_batch_") as tmp:
+            paths = []
+            for i in range(n):
+                p = Path(tmp) / f"img_{i}.jpg"
+                # Distinct colors per image so a batching bug that mixed up
+                # ordering would produce a detectably different feature set.
+                _make_solid_image(p, color=(20 * i % 255, 100, 200 - 10 * i))
+                paths.append(p)
+            return [thc.preprocess(str(p)) for p in paths]
+
+    def test_segment_batch_matches_single_image_calls(self):
+        import numpy as np
+        images = self._make_images(5)
+        batched = thc.segment_batch(images)
+        individual = np.stack([thc.segment(img) for img in images], axis=0)
+        self.assertEqual(batched.shape, (5, 224, 224))
+        self.assertTrue(np.array_equal(batched, individual))
+
+    def test_extract_features_batch_matches_single_image_calls(self):
+        import numpy as np
+        images = self._make_images(4)
+        silhouettes = [thc.segment(img) for img in images]
+        batched = thc.extract_features_batch(silhouettes)
+        individual = np.stack(
+            [thc.extract_features(s) for s in silhouettes], axis=0
+        )
+        self.assertEqual(batched.shape, individual.shape)
+        # Real VGG16/FCN inference isn't bit-exact between a single-image
+        # forward pass and the same image inside a larger batch (batch-norm
+        # and floating-point summation order differ) -- assert close, not
+        # exactly equal, matching how this codebase already treats model
+        # non-determinism elsewhere (e.g. no fixed training seed).
+        self.assertTrue(np.allclose(batched, individual, atol=1e-3))
+
+    def test_extract_features_batch_single_image(self):
+        """N=1 must work (not just N>1) -- the boundary case a batching
+        implementation is most likely to mishandle."""
+        import numpy as np
+        images = self._make_images(1)
+        silhouettes = [thc.segment(img) for img in images]
+        batched = thc.extract_features_batch(silhouettes)
+        self.assertEqual(batched.shape[0], 1)
+
+
+# ---------------------------------------------------------------------------
 # Pillow-guard message test
 # ---------------------------------------------------------------------------
 

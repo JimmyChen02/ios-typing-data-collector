@@ -254,6 +254,54 @@ def _segment_fcn(
     return binary
 
 
+def segment_batch(images: "list[np.ndarray]") -> "np.ndarray":
+    """Batched segment(): runs FCN-ResNet101 on N images (each 224x224x3
+    float32) in ONE forward pass instead of N. Returns (N, 224, 224) uint8,
+    identical values to calling segment() once per image (verified by
+    tests/test_hand_pipeline.py::TestBatchedInference) -- purely a speed
+    optimization for bulk pre-caching (see fusion_pooled_train.py), not a
+    behavior change. segment() itself is unchanged and still the right
+    choice for a single image.
+
+    Falls back to `segment()` per image (same as segment()'s own fallback
+    trigger conditions) if torch/torchvision are unavailable or the batched
+    call fails for any reason -- a single malformed image in the batch
+    raises out of the batched torch call, so this fallback also protects
+    against ANY batch containing a bad image, not just missing deps.
+    """
+    torch, torchvision = _try_import_torch()
+    if torch is not None and torchvision is not None:
+        try:
+            return _segment_fcn_batch(images, torch, torchvision)
+        except Exception as exc:
+            warnings.warn(
+                f"Batched FCN-ResNet101 segmentation failed ({exc}); "
+                "falling back to segment() per image.",
+                stacklevel=2,
+            )
+    return np.stack([segment(img) for img in images], axis=0)
+
+
+def _segment_fcn_batch(
+    images: "list[np.ndarray]", torch, torchvision
+) -> "np.ndarray":
+    """Batched FCN-ResNet101 segmentation (paper-faithful path)."""
+    model, transform = _get_fcn_model(torch, torchvision)
+
+    tensors = torch.stack([
+        transform(Image.fromarray((img * 255).astype(np.uint8)))
+        for img in images
+    ])  # (N, 3, 224, 224)
+
+    with torch.no_grad():
+        output = model(tensors)["out"]  # (N, 21, H, W)
+
+    PERSON_CLASS = 15
+    person_prob = torch.softmax(output, dim=1)[:, PERSON_CLASS].numpy()  # (N, H, W)
+    binary = (person_prob > 0.5).astype(np.uint8) * 255
+    return binary
+
+
 # ---------------------------------------------------------------------------
 # Pipeline stage 3 — extract_features
 # ---------------------------------------------------------------------------
@@ -322,6 +370,53 @@ def _features_vgg16(silhouette: "np.ndarray", keras) -> "np.ndarray":
     x = preprocess_input(rgb[np.newaxis, ...])  # (1, 224, 224, 3)
     features = backbone.predict(x, verbose=0)  # (1, 7, 7, 512)
     return features.flatten()
+
+
+def extract_features_batch(silhouettes: "list[np.ndarray]") -> "np.ndarray":
+    """Batched extract_features(): runs VGG16 on N silhouettes in ONE
+    forward pass instead of N. Returns (N, 25088) [paper-faithful] or
+    (N, 1024) [fallback], numerically equivalent to calling
+    extract_features() once per silhouette (verified by tests/
+    test_hand_pipeline.py::TestBatchedInference) -- purely a speed
+    optimization for bulk pre-caching (see fusion_pooled_train.py), not a
+    behavior change. extract_features() itself is unchanged and still the
+    right choice for a single silhouette.
+
+    Falls back to `extract_features()` per silhouette (same as extract_
+    features()'s own fallback trigger conditions) if keras/tensorflow are
+    unavailable or the batched call fails for any reason -- a single
+    malformed silhouette raises out of the batched keras call, so this
+    fallback also protects against ANY batch containing a bad input, not
+    just missing deps.
+    """
+    _, keras = _try_import_keras()
+    if keras is not None:
+        try:
+            return _features_vgg16_batch(silhouettes, keras)
+        except Exception as exc:
+            warnings.warn(
+                f"Batched VGG16 feature extraction failed ({exc}); "
+                "falling back to extract_features() per image.",
+                stacklevel=2,
+            )
+    return np.stack([extract_features(s) for s in silhouettes], axis=0)
+
+
+def _features_vgg16_batch(silhouettes: "list[np.ndarray]", keras) -> "np.ndarray":
+    """Batched VGG16 backbone features (paper-faithful path)."""
+    backbone, preprocess_input = _get_vgg16_backbone()
+
+    rgb_batch = []
+    for silhouette in silhouettes:
+        rgb = np.stack([silhouette, silhouette, silhouette], axis=-1).astype(np.float32)
+        if rgb.shape[:2] != (224, 224):
+            pil = Image.fromarray(rgb.astype(np.uint8)).resize((224, 224))
+            rgb = np.array(pil, dtype=np.float32)
+        rgb_batch.append(rgb)
+
+    x = preprocess_input(np.stack(rgb_batch, axis=0))  # (N, 224, 224, 3)
+    features = backbone.predict(x, verbose=0)  # (N, 7, 7, 512)
+    return features.reshape(features.shape[0], -1)  # (N, 25088)
 
 
 # ---------------------------------------------------------------------------

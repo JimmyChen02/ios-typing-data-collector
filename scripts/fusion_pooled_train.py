@@ -54,6 +54,13 @@ CACHE_DIR = REPO / "Model-Training-Test" / "cache" / "img_features"
 IMU_WINDOW = 50   # samples, ~1.0s at 50Hz -- matches the shipped model
 IMU_CAUSAL = True  # trailing window -- matches what the live model can compute
 
+# eligible_records()'s image pass processes this many images per FCN-
+# ResNet101/VGG16 forward pass (see cache_images_batch below). 32 matches
+# the batch size train_fusion_model()/train_imu_sequence_model() already
+# use for .fit() elsewhere in this codebase -- not tuned independently,
+# just consistent with the rest of the pipeline.
+DEFAULT_CACHE_BATCH_SIZE = 32
+
 
 # ---------------------------------------------------------------------------
 # Feature cache
@@ -90,6 +97,72 @@ def cached_image_feature(image_path: str, refresh: bool = False) -> "np.ndarray"
     return feat
 
 
+def cache_images_batch(
+    image_paths: "list[str]",
+    batch_size: int = DEFAULT_CACHE_BATCH_SIZE,
+    refresh: bool = False,
+) -> "dict[str, bool]":
+    """Populate the feature cache for every path in `image_paths`, using
+    train_hand_classifier.segment_batch()/extract_features_batch() to run
+    `batch_size` images through one FCN-ResNet101/VGG16 forward pass instead
+    of one image at a time.
+
+    MEASURED SLOWER, NOT FASTER, on this project's dev hardware (CPU-only
+    Mac, no CUDA/MPS acceleration): a fair warm-process A/B on 128 real
+    images each gave 233 img/min single-image (cached_image_feature() in a
+    loop) vs 115 img/min batched (batch_size=32) -- roughly 2x SLOWER, not
+    faster. Batching wins by keeping a GPU's parallel lanes fed; on CPU-only
+    inference there are no idle lanes to fill, and the larger per-batch
+    working set (N images' worth of activations at once) plausibly blows
+    past L2/L3 cache and becomes memory-bandwidth-bound instead. See
+    .claude/process/2026-07-21-batched-caching-negative-result.md.
+
+    NOT called by eligible_records() or anything else in this file's normal
+    path for that reason -- kept as a tested, correct, documented utility in
+    case this pipeline ever runs on GPU-accelerated hardware, where the
+    result would likely flip. Do not wire this into the default path again
+    without re-measuring on the actual target hardware first.
+
+    Returns {path: ok}, same semantics cached_image_feature() had via
+    raising: a row whose image can't be processed maps to False rather than
+    raising, so callers can drop it.
+
+    A whole-batch failure (e.g. one corrupt image breaks the batched torch/
+    keras call for every image in that batch) falls back to processing that
+    SPECIFIC batch one image at a time via cached_image_feature(), so a
+    single bad file only costs its own batch, not the whole call.
+    """
+    ok: "dict[str, bool]" = {}
+    to_process = [
+        p for p in image_paths
+        if refresh or not image_feature_cache_path(p).exists()
+    ]
+
+    from train_hand_classifier import preprocess, segment_batch, extract_features_batch
+
+    for start in range(0, len(to_process), batch_size):
+        batch_paths = to_process[start:start + batch_size]
+        try:
+            images = [preprocess(p) for p in batch_paths]
+            silhouettes = segment_batch(images)
+            feats = extract_features_batch(list(silhouettes))
+            CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            for p, feat in zip(batch_paths, feats):
+                np.save(image_feature_cache_path(p), feat)
+                ok[p] = True
+        except Exception:
+            for p in batch_paths:
+                try:
+                    cached_image_feature(p, refresh=refresh)
+                    ok[p] = True
+                except Exception:
+                    ok[p] = False
+
+    for p in image_paths:
+        ok.setdefault(p, True)  # already cached before this call, refresh=False
+    return ok
+
+
 # ---------------------------------------------------------------------------
 # Row eligibility
 # ---------------------------------------------------------------------------
@@ -103,6 +176,11 @@ def eligible_records(
     docstring). Also excludes 'unknown'-label rows (never usable for
     training, not counted as "dropped" -- that count is reserved for rows
     that WOULD have been usable but for a missing modality).
+
+    Processes images one at a time via cached_image_feature() -- measured
+    faster than the batched cache_images_batch() on this project's CPU-only
+    dev hardware (see that function's docstring); do not switch this to
+    batching without re-measuring first.
 
     Returns (kept_records, dropped_counts) where dropped_counts is
     {participant_key: n_dropped}, printed by main() so a bad merge (e.g. a
