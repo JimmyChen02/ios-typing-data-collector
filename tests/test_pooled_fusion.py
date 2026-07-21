@@ -438,3 +438,58 @@ class TestEligibleRecords(unittest.TestCase):
             kept, dropped = self.fpt.eligible_records(records)
         self.assertEqual(len(kept), 1)
         self.assertEqual(dropped, {})
+
+
+# ---------------------------------------------------------------------------
+# fusion_pooled_train.py: model architecture
+# ---------------------------------------------------------------------------
+
+class TestFusionModel(unittest.TestCase):
+
+    def test_build_fusion_model_shapes_and_predict(self):
+        import fusion_pooled_train as fpt
+        model = fpt.build_fusion_model(
+            image_feature_dim=1024, imu_window=50, imu_channels=12, n_classes=3
+        )
+        self.assertEqual(len(model.inputs), 2)
+        img_feats = np.random.randn(4, 1024).astype("float32")
+        imu_windows = np.random.randn(4, 50, 12).astype("float32")
+        probs = model.predict([img_feats, imu_windows], verbose=0)
+        self.assertEqual(probs.shape, (4, 3))
+        # Softmax rows sum to ~1
+        self.assertTrue(np.allclose(probs.sum(axis=1), 1.0, atol=1e-4))
+
+    def test_train_fusion_model_fits_and_predicts(self):
+        import fusion_pooled_train as fpt
+        np.random.seed(0)
+        n = 12
+        img_feats = np.random.randn(n, 64).astype("float32")
+        imu_windows = np.random.randn(n, 50, 12).astype("float32")
+        labels = ["left"] * 4 + ["right"] * 4 + ["both"] * 4
+
+        model = fpt.train_fusion_model(img_feats, imu_windows, labels, epochs=1)
+
+        self.assertEqual(sorted(model._hand_classes), ["both", "left", "right"])
+        preds = fpt.predict_labels_fusion(model, img_feats, imu_windows, model._hand_classes)
+        self.assertEqual(len(preds), n)
+        for p in preds:
+            self.assertIn(p, ["left", "right", "both"])
+
+    def test_train_fusion_model_is_savable(self):
+        """The fusion model must be savable via train_hand_classifier._save_model
+        (reused as-is -- it just needs .save() to exist, which a keras
+        functional Model has)."""
+        import fusion_pooled_train as fpt
+        from train_hand_classifier import _save_model
+        img_feats = np.random.randn(6, 32).astype("float32")
+        imu_windows = np.random.randn(6, 50, 12).astype("float32")
+        labels = ["left"] * 3 + ["right"] * 3
+        model = fpt.train_fusion_model(img_feats, imu_windows, labels, epochs=1)
+
+        with tempfile.TemporaryDirectory(prefix="fusion_save_") as tmp:
+            out_dir = Path(tmp)
+            _save_model(model, out_dir)
+            self.assertTrue(
+                (out_dir / "hand_model.keras").exists()
+                or (out_dir / "hand_model.pkl").exists()
+            )

@@ -135,6 +135,97 @@ def eligible_records(
     return kept, dropped
 
 
+# ---------------------------------------------------------------------------
+# Fusion model architecture
+# ---------------------------------------------------------------------------
+
+def build_fusion_model(
+    image_feature_dim: int, imu_window: int, imu_channels: int, n_classes: int
+):
+    """Two-branch feature-level fusion:
+      image_features (image_feature_dim,) --Dense(128)--> image_128
+      imu_window (imu_window, imu_channels)
+        --Conv1D(32,5)->BN->ReLU->Conv1D(64,5)->GlobalAvgPool->Dropout(0.5)--> imu_64
+      concat(image_128, imu_64) --Dense(128, relu)--> Dense(n_classes, softmax)
+
+    image_feature_dim is read from the actual cached feature vectors at call
+    time (25088-d paper-faithful VGG16-conv-flatten, or 1024-d in the no-
+    keras 32x32-flatten fallback -- see train_hand_classifier.extract_
+    features) rather than assumed, since it depends on which optional deps
+    are installed. The IMU branch mirrors imu_sequence._train_conv1d's
+    architecture up to (not including) its softmax head, so it starts from
+    the same proven shape as the shipped IMU-only model.
+
+    Compiled with Adam / sparse_categorical_crossentropy, ready for .fit().
+    """
+    try:
+        from tensorflow import keras as tfkeras
+        Input, layers, Model = tfkeras.Input, tfkeras.layers, tfkeras.Model
+    except Exception:
+        import keras as k
+        Input, layers, Model = k.Input, k.layers, k.Model
+
+    img_in = Input(shape=(image_feature_dim,), name="image_features")
+    img_x = layers.Dense(128, activation="relu", name="image_projection")(img_in)
+
+    imu_in = Input(shape=(imu_window, imu_channels), name="imu_window")
+    imu_x = layers.Conv1D(32, 5, padding="same")(imu_in)
+    imu_x = layers.BatchNormalization()(imu_x)
+    imu_x = layers.ReLU()(imu_x)
+    imu_x = layers.Conv1D(64, 5, padding="same")(imu_x)
+    imu_x = layers.GlobalAveragePooling1D(name="imu_embedding")(imu_x)
+    imu_x = layers.Dropout(0.5)(imu_x)
+
+    fused = layers.Concatenate()([img_x, imu_x])
+    fused = layers.Dense(128, activation="relu")(fused)
+    out = layers.Dense(n_classes, activation="softmax")(fused)
+
+    model = Model(inputs=[img_in, imu_in], outputs=out)
+    model.compile(optimizer="adam", loss="sparse_categorical_crossentropy",
+                  metrics=["accuracy"])
+    return model
+
+
+def train_fusion_model(
+    img_feats: "np.ndarray", imu_windows: "np.ndarray", labels: "list[str]",
+    epochs: int = 10,
+):
+    """Trains build_fusion_model() end-to-end (image projection + IMU encoder
+    + fusion head all update; only the frozen VGG16 backbone that produced
+    img_feats does not). Attaches ._hand_classes = sorted(unique labels),
+    same convention as train()/train_imu_sequence_model(), so the model is
+    savable via train_hand_classifier._save_model unchanged.
+    """
+    unique_labels = sorted(set(labels))
+    label_to_idx = {l: i for i, l in enumerate(unique_labels)}
+    y = np.array([label_to_idx[l] for l in labels])
+
+    model = build_fusion_model(
+        image_feature_dim=img_feats.shape[1],
+        imu_window=imu_windows.shape[1],
+        imu_channels=imu_windows.shape[2],
+        n_classes=len(unique_labels),
+    )
+    model.fit([img_feats, imu_windows], y, epochs=epochs, batch_size=32, verbose=0)
+    model._hand_classes = unique_labels
+    print(f"Trained fusion model  (n={len(labels)}, classes={unique_labels}, "
+          f"epochs={epochs})")
+    return model
+
+
+def predict_labels_fusion(
+    model, img_feats: "np.ndarray", imu_windows: "np.ndarray", classes: "list[str]"
+) -> "list[str]":
+    """Decode the fusion model's two-input softmax output to string labels.
+    Separate from train_hand_classifier._predict_labels because that
+    function's contract is single-input (features: np.ndarray); the fusion
+    model takes a [image_features, imu_window] list.
+    """
+    probs = model.predict([img_feats, imu_windows], verbose=0)
+    idx = np.asarray(probs).argmax(axis=1)
+    return [classes[i] for i in idx]
+
+
 if __name__ == "__main__":
     print("fusion_pooled_train.py: CLI not yet implemented (Task 6)", file=sys.stderr)
     sys.exit(1)
