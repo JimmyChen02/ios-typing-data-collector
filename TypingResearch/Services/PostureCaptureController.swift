@@ -21,8 +21,15 @@ import UIKit
 @Observable
 final class PostureCaptureController {
 
-    /// Target sampling rate — same cadence as HandCaptureView's guided burst.
-    private static let targetFPS: Double = 2.0
+    /// Target sampling rate — same cadence as HandCaptureView's guided burst
+    /// (30 fps; was 2 Hz HandyTrak parity).
+    private static let targetFPS: Double = 30.0
+
+    /// Serial background queue for JPEG encode + disk write — at 30 fps the
+    /// ~5–8 ms encode per frame would otherwise land on the main actor and
+    /// compete with keystroke handling (the exact latency PR #29 fought).
+    /// Serial so HandSample insertion order matches capture order.
+    private static let imageWriteQueue = DispatchQueue(label: "PostureCaptureController.imageWrite", qos: .utility)
 
     private var capture: HandBurstCapture?
     private var frameIndex: Int = 0
@@ -103,6 +110,12 @@ final class PostureCaptureController {
     // Mirrors HandCaptureView.saveFrame (lines 455-490) exactly: JPEG via
     // HandImageStore.shared.saveImage; on disk-write failure a label-only
     // HandSample is still saved (never crashes, never drops the label).
+    /// capturedAt / studySessionIndex are stamped synchronously at frame
+    /// arrival; the JPEG encode + disk write run on imageWriteQueue, then
+    /// the HandSample insert + onSample hop back to the main actor. A frame
+    /// still in the write queue when stop() is called finishes normally —
+    /// its sample is real training data, same rationale as stop()'s
+    /// keep-everything policy above.
     private func saveFrame(
         _ image: UIImage,
         participant: Participant,
@@ -113,38 +126,37 @@ final class PostureCaptureController {
         onSample: @escaping (HandSample) -> Void
     ) {
         let id = UUID()
-        var rel = ""
-        var w   = 0
-        var h   = 0
-
-        if let result = HandImageStore.shared.saveImage(image, id: id) {
-            rel = result.relativePath
-            w   = result.pixelWidth
-            h   = result.pixelHeight
-        }
-        // Label-only row is valid even when saveImage fails — no crash.
-
-        let sample = HandSample(
-            participantId: participant.id,
-            sessionId: sessionId,
-            studyId: studyId,
-            // studySessionIndex = per-frame counter (0,1,2,…), same
-            // strictly-increasing tie-free primary sort-key convention as
-            // HandCaptureView.saveFrame.
-            studySessionIndex: frameIndex,
-            capturedAt: Date(),
-            holdingHand: posture,
-            imageRelativePath: rel,
-            imuRelativePath: sessionId.map { "imu/\($0.uuidString).csv" } ?? "",
-            imagePixelWidth: w,
-            imagePixelHeight: h,
-            cameraPosition: "front",
-            deviceModel: participant.deviceModel,
-            systemVersion: participant.systemVersion,
-            notes: "posture_training_run"
-        )
-        modelContext.insert(sample)
-        onSample(sample)
+        let capturedAt = Date()
+        let index = frameIndex
         frameIndex += 1
+
+        Self.imageWriteQueue.async {
+            // HandImageStore is documented safe to call from any queue.
+            let result = HandImageStore.shared.saveImage(image, id: id)
+            // Label-only row is valid even when saveImage fails — no crash.
+            Task { @MainActor in
+                let sample = HandSample(
+                    participantId: participant.id,
+                    sessionId: sessionId,
+                    studyId: studyId,
+                    // studySessionIndex = per-frame counter (0,1,2,…), same
+                    // strictly-increasing tie-free primary sort-key convention
+                    // as HandCaptureView.saveFrame.
+                    studySessionIndex: index,
+                    capturedAt: capturedAt,
+                    holdingHand: posture,
+                    imageRelativePath: result?.relativePath ?? "",
+                    imuRelativePath: sessionId.map { "imu/\($0.uuidString).csv" } ?? "",
+                    imagePixelWidth: result?.pixelWidth ?? 0,
+                    imagePixelHeight: result?.pixelHeight ?? 0,
+                    cameraPosition: "front",
+                    deviceModel: participant.deviceModel,
+                    systemVersion: participant.systemVersion,
+                    notes: "posture_training_run"
+                )
+                modelContext.insert(sample)
+                onSample(sample)
+            }
+        }
     }
 }

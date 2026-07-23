@@ -439,6 +439,36 @@ class TestEligibleRecords(unittest.TestCase):
         self.assertEqual(len(kept), 1)
         self.assertEqual(dropped, {})
 
+    def test_show_progress_false_produces_no_stderr_output(self):
+        """show_progress=False must fully suppress the tqdm bar (for tests/
+        scripted runs) without changing the return value."""
+        import io
+        import contextlib
+        with tempfile.TemporaryDirectory(prefix="fusion_elig_") as tmp:
+            tmp_path = Path(tmp)
+            img_dir = tmp_path / "hand_images"
+            img_dir.mkdir()
+            imu_dir = tmp_path / "imu"
+            imu_dir.mkdir()
+            _make_solid_image(img_dir / "a.jpg")
+            imu_csv = imu_dir / "a.csv"
+            _write_imu_csv(imu_csv, [[0.0] + [1.0] * 12])
+            records = [{
+                "image_path": str(img_dir / "a.jpg"),
+                "label": "both",
+                "participant_key": "p1",
+                "sort_key": (0, "2026-01-01T00:00:00Z", "hand_images/a.jpg"),
+                "imu_path": str(imu_csv),
+                "captured_at_iso": "2026-01-01T00:00:00Z",
+            }]
+            captured = io.StringIO()
+            with contextlib.redirect_stderr(captured):
+                kept, dropped = self.fpt.eligible_records(records, show_progress=False)
+
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(dropped, {})
+        self.assertEqual(captured.getvalue(), "")
+
 
 # ---------------------------------------------------------------------------
 # fusion_pooled_train.py: cache_images_batch (NOT wired into eligible_

@@ -168,7 +168,7 @@ def cache_images_batch(
 # ---------------------------------------------------------------------------
 
 def eligible_records(
-    records: "list[dict]", refresh_cache: bool = False
+    records: "list[dict]", refresh_cache: bool = False, show_progress: bool = True
 ) -> "tuple[list[dict], dict[str, int]]":
     """Filter `records` (from hand_dataset.load_dataset_records) down to rows
     with BOTH a readable image and a readable IMU series -- fusion training
@@ -182,17 +182,33 @@ def eligible_records(
     dev hardware (see that function's docstring); do not switch this to
     batching without re-measuring first.
 
+    show_progress=True (default) prints a tqdm progress bar with a live ETA
+    over `records` to stderr -- this loop is the pipeline's actual
+    bottleneck on a cold cache (a fresh image needs a full FCN-ResNet101 +
+    VGG16 forward pass; a cached one is a near-instant np.load), so it is
+    the one place in this script silent enough to look hung without one.
+    tqdm auto-detects a non-interactive stderr (e.g. piped to a log file)
+    and switches to periodic line-based updates instead of in-place
+    carriage-return redraws, so this is safe for both live terminal use and
+    redirected/piped runs. Set False for tests or scripted/quiet runs.
+
     Returns (kept_records, dropped_counts) where dropped_counts is
     {participant_key: n_dropped}, printed by main() so a bad merge (e.g. a
     session recorded without IMU) is visible per participant, not silent.
     """
     import imu_sequence
+    from tqdm import tqdm
 
     imu_ok_cache: "dict[str | None, bool]" = {}
     kept: "list[dict]" = []
     dropped: "dict[str, int]" = {}
+    n_cache_hits = 0
 
-    for rec in records:
+    iterator = tqdm(
+        records, desc="Checking eligibility / caching image features",
+        unit="img", disable=not show_progress,
+    )
+    for rec in iterator:
         if rec["label"] == "unknown":
             continue
         imu_path = rec.get("imu_path")
@@ -203,12 +219,18 @@ def eligible_records(
         if not imu_ok_cache[imu_path]:
             dropped[rec["participant_key"]] = dropped.get(rec["participant_key"], 0) + 1
             continue
+        was_cached = image_feature_cache_path(rec["image_path"]).exists() and not refresh_cache
         try:
             cached_image_feature(rec["image_path"], refresh=refresh_cache)
         except Exception:
             dropped[rec["participant_key"]] = dropped.get(rec["participant_key"], 0) + 1
             continue
+        if was_cached:
+            n_cache_hits += 1
         kept.append(rec)
+        iterator.set_postfix(
+            cached=n_cache_hits, kept=len(kept), dropped=sum(dropped.values())
+        )
 
     return kept, dropped
 

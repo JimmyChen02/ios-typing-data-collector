@@ -22,8 +22,20 @@ final class HandBurstCapture: NSObject {
 
     // MARK: - Tunable constants
 
-    /// Target sampling rate matching HandyTrak (~2 Hz).
+    /// Target sampling rate. Callers set 30 for full-rate capture; the
+    /// original HandyTrak-parity cadence was 2. Above
+    /// `highRatePresetThreshold` the session drops from .photo to 720p —
+    /// per-frame CIImage→CGImage conversion of .photo-sized buffers cannot
+    /// sustain tens of fps, so full-res frames would silently collapse the
+    /// real rate back to a few fps.
     var targetFPS: Double = 2.0
+
+    /// Above this rate configureAndStart() uses .hd1280x720 instead of .photo.
+    private static let highRatePresetThreshold: Double = 10.0
+
+    // CIContext is thread-safe (Sendable); one shared instance instead of
+    // per-frame creation, which is far too slow at 30 fps.
+    private static let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 
     // MARK: - Callbacks (assign before calling start())
 
@@ -108,7 +120,9 @@ final class HandBurstCapture: NSObject {
         }
 
         let session = AVCaptureSession()
-        session.sessionPreset = .photo   // high-res, still-like frames
+        // High-res still-like frames at low rates; 720p when the caller
+        // asks for a rate .photo conversion can't sustain (see targetFPS).
+        session.sessionPreset = targetFPS > Self.highRatePresetThreshold ? .hd1280x720 : .photo
 
         // Input
         guard let input = try? AVCaptureDeviceInput(device: device),
@@ -139,7 +153,12 @@ final class HandBurstCapture: NSObject {
         captureSession = session
         isConfigured = true
         lastEmittedPTS = .invalid
-        throttleInterval = 1.0 / max(targetFPS, 0.1)
+        // 8 ms tolerance: when targetFPS matches the camera's native rate
+        // (30), successive PTS deltas are exactly 1/30 s, and a strict
+        // `elapsed >= 1/30` gate would reject every other frame on float
+        // jitter, halving the real rate. Negligible at low rates (0.5 s →
+        // 0.492 s).
+        throttleInterval = max(1.0 / max(targetFPS, 0.1) - 0.008, 0.0)
 
         // startRunning can block; run it off the main thread
         sessionQueue.async {
@@ -173,9 +192,7 @@ extension HandBurstCapture: AVCaptureVideoDataOutputSampleBufferDelegate {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        // CIContext is thread-safe; create per-frame to avoid sharing state.
-        let context = CIContext(options: [.useSoftwareRenderer: false])
-        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return }
+        guard let cgImage = Self.ciContext.createCGImage(ciImage, from: ciImage.extent) else { return }
 
         // Front camera output is mirrored. Apply .upMirrored so the saved JPEG
         // shows the real spatial orientation (left side of screen = left in image),

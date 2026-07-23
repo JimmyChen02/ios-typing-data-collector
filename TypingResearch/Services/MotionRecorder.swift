@@ -24,6 +24,13 @@ final class MotionRecorder {
     // Set to true (and set before calling start) to activate recording.
     var isEnabled: Bool = true
 
+    /// True while a session-style recording (start(sessionId:) … stop())
+    /// is in flight. HandCaptureView checks this before starting its own
+    /// per-condition recording so a live session recording is never
+    /// clobbered, and after start() to learn whether recording actually
+    /// began (start() no-ops when device motion is unavailable).
+    var isSessionRecording: Bool { sessionIdForCSV != nil }
+
     // MARK: - Live-callback hook (D3)
     //
     // Optional, nil by default (guarded — normal runs never set this).
