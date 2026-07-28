@@ -179,13 +179,11 @@ final class PredictionTextView: UITextView {
 
     @objc private func handleTap(_ recognizer: UITapGestureRecognizer) {
         guard let range = underlinedRange,
-              let original = correctionOriginal,
-              let replacement = lastAppliedState.correctionReplacement
+              let original = correctionOriginal
         else { return }
 
         let point = recognizer.location(in: self)
-        if let pos = closestPosition(to: point),
-           let start = position(from: beginningOfDocument, offset: range.location),
+        if let start = position(from: beginningOfDocument, offset: range.location),
            let end = position(from: beginningOfDocument, offset: NSMaxRange(range)),
            let textRange = textRange(from: start, to: end) {
             let rects = selectionRects(for: textRange)
@@ -202,7 +200,6 @@ final class PredictionTextView: UITextView {
             cleared.correctionReplacement = nil
             cleared.correctionExpires = nil
             SharedKeyboardPreferences.shared.livePrediction = cleared
-            _ = replacement
         }
     }
 

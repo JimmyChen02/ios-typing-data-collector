@@ -48,6 +48,9 @@ final class KeyboardViewController: UIInputViewController {
     private var lastAutocorrect: (original: String, replacement: String, timestamp: Date)?
     private var lastLoggedCandidateTexts: [String] = []
     private var activeInlineCompletion: DecoderCandidate?
+    private var lastPublishedPrediction = KeyboardLivePredictionState.empty
+    private var pendingPrediction: KeyboardLivePredictionState?
+    private var publishWorkItem: DispatchWorkItem?
     private let haptic = UIImpactFeedbackGenerator(style: .light)
 
     private var isLandscape: Bool {
@@ -56,8 +59,9 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private var preferredHeight: CGFloat {
-        let base: CGFloat = isLandscape ? 172 : 252
-        let bar: CGFloat = preferences.predictiveEnabled ? (isLandscape ? 36 : 44) : 0
+        // Match stock iOS proportions more closely: shorter key stack, less stretch.
+        let base: CGFloat = isLandscape ? 160 : 204
+        let bar: CGFloat = preferences.predictiveEnabled ? (isLandscape ? 34 : 42) : 0
         return base + bar
     }
 
@@ -228,7 +232,8 @@ final class KeyboardViewController: UIInputViewController {
     private func publishLivePrediction(candidates: [DecoderCandidate]) {
         let context = textDocumentProxy.documentContextBeforeInput ?? ""
         var state = KeyboardLivePredictionState.empty
-        state.contextBeforeCaret = context
+        // Keep payload small to avoid input lag from frequent cross-process writes.
+        state.contextBeforeCaret = String(context.suffix(80))
         state.currentWord = currentWord
         state.updatedAt = Date()
 
@@ -250,7 +255,25 @@ final class KeyboardViewController: UIInputViewController {
             state.correctionExpires = autocorrect.timestamp.addingTimeInterval(4)
         }
 
-        preferences.livePrediction = state
+        scheduleLivePredictionPublish(state)
+    }
+
+    private func scheduleLivePredictionPublish(_ state: KeyboardLivePredictionState) {
+        guard state != lastPublishedPrediction else { return }
+        pendingPrediction = state
+        publishWorkItem?.cancel()
+        let immediate =
+            state.hasActiveCorrection != lastPublishedPrediction.hasActiveCorrection
+            || state.inlineSuffix.isEmpty != lastPublishedPrediction.inlineSuffix.isEmpty
+        let delay: TimeInterval = immediate ? 0 : 0.08
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, let pending = self.pendingPrediction else { return }
+            self.preferences.livePrediction = pending
+            self.lastPublishedPrediction = pending
+            self.pendingPrediction = nil
+        }
+        publishWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     private func preserveCasing(_ word: String, matching literal: String) -> String {
@@ -735,7 +758,7 @@ private final class ResearchKeyboardView: UIView {
 
     private var candidateBarHeight: CGFloat {
         guard showsCandidateBar else { return 0 }
-        return isLandscape ? 36 : 44
+        return isLandscape ? 34 : 42
     }
 
     private let haptic = UIImpactFeedbackGenerator(style: .light)
