@@ -9,26 +9,30 @@ struct AdaptiveKeyboardHomeView: View {
     @State private var statusMessage: String?
     @State private var eventCount = 0
     @State private var showingDeleteConfirmation = false
+    @State private var autoCapitalization = SharedKeyboardPreferences.shared.autoCapitalizationEnabled
+    @State private var autocorrection = SharedKeyboardPreferences.shared.autocorrectionEnabled
+    @State private var predictive = SharedKeyboardPreferences.shared.predictiveEnabled
+    @State private var characterPreview = SharedKeyboardPreferences.shared.characterPreviewEnabled
+    @State private var capsLock = SharedKeyboardPreferences.shared.capsLockEnabled
+    @State private var smartPunctuation = SharedKeyboardPreferences.shared.smartPunctuationEnabled
+    @State private var oneHandedMode = SharedKeyboardPreferences.shared.oneHandedMode
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    Text("Colorful Research Keyboard")
+                    Text("Research Keyboard")
                         .font(.title2.weight(.bold))
-                    Text("Stage 1: iOS-style layout, no calibration. Keys are colorful so you can tell this keyboard is active. Every tap is logged.")
+                    Text("Stage 3+: stock iOS look with inline gray predictions, temporary autocorrect underline, key popups, accents, emoji, one-handed/landscape, and logging.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
 
                 Section("Type here") {
-                    TextEditor(text: $typedText)
+                    PredictionAwareTextEditor(text: $typedText)
                         .frame(minHeight: 160)
-                        .font(.body)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
                     if typedText.isEmpty {
-                        Text("Tap this field, switch to Adaptive Keyboard (globe key), then type. Your raw text appears here.")
+                        Text("Tap this field, switch to Adaptive Keyboard (globe key), then type. Try “th” + space for inline fill, or “teh ” for autocorrect with a gray underline.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {
@@ -50,6 +54,45 @@ struct AdaptiveKeyboardHomeView: View {
                     }
                 }
 
+                Section {
+                    Toggle("Auto-Capitalization", isOn: $autoCapitalization)
+                        .onChange(of: autoCapitalization) { _, value in
+                            SharedKeyboardPreferences.shared.autoCapitalizationEnabled = value
+                        }
+                    Toggle("Auto-Correction", isOn: $autocorrection)
+                        .onChange(of: autocorrection) { _, value in
+                            SharedKeyboardPreferences.shared.autocorrectionEnabled = value
+                        }
+                    Toggle("Predictive", isOn: $predictive)
+                        .onChange(of: predictive) { _, value in
+                            SharedKeyboardPreferences.shared.predictiveEnabled = value
+                        }
+                    Toggle("Character Preview", isOn: $characterPreview)
+                        .onChange(of: characterPreview) { _, value in
+                            SharedKeyboardPreferences.shared.characterPreviewEnabled = value
+                        }
+                    Toggle("Enable Caps Lock", isOn: $capsLock)
+                        .onChange(of: capsLock) { _, value in
+                            SharedKeyboardPreferences.shared.capsLockEnabled = value
+                        }
+                    Toggle("Smart Punctuation", isOn: $smartPunctuation)
+                        .onChange(of: smartPunctuation) { _, value in
+                            SharedKeyboardPreferences.shared.smartPunctuationEnabled = value
+                        }
+                    Picker("One-Handed Keyboard", selection: $oneHandedMode) {
+                        Text("Off").tag(OneHandedMode.off)
+                        Text("Left").tag(OneHandedMode.left)
+                        Text("Right").tag(OneHandedMode.right)
+                    }
+                    .onChange(of: oneHandedMode) { _, value in
+                        SharedKeyboardPreferences.shared.oneHandedMode = value
+                    }
+                } header: {
+                    Text("Keyboard behavior")
+                } footer: {
+                    Text("Mirrors Settings → General → Keyboard. One-handed mode is also reachable by holding the globe key.")
+                }
+
                 Section("Logging") {
                     Toggle("Pause recording", isOn: Binding(
                         get: { recordingPaused },
@@ -59,7 +102,7 @@ struct AdaptiveKeyboardHomeView: View {
                         }
                     ))
                     Label(
-                        recordingPaused ? "Recording paused" : "Recording every tap + raw text",
+                        recordingPaused ? "Recording paused" : "Recording taps, suggestions, autocorrect, and raw text",
                         systemImage: recordingPaused ? "pause.circle" : "record.circle"
                     )
                     .foregroundStyle(recordingPaused ? Color.secondary : Color.red)
@@ -99,7 +142,7 @@ struct AdaptiveKeyboardHomeView: View {
                 }
 
                 Section("Notes") {
-                    Text("iOS replaces third-party keyboards in password fields. Apple autocorrect and dictation are not available to this keyboard.")
+                    Text("Inline gray predictions and the temporary autocorrect underline render fully in this app’s typing field. In other apps the extension cannot style the host text, so the same feedback appears on the suggestion bar (gray suffix / underlined correction chip). Dictation and QuickPath remain out of scope. Autocorrect still uses the small local word list.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
