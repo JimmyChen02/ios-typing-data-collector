@@ -8,9 +8,27 @@ Pillow>=10.0
 scikit-learn>=1.3
 torch>=2.2
 torchvision>=0.17
+# Progress bar + ETA for fusion_pooled_train.py's eligible_records() image
+# cache loop (the pipeline's slow, silent stage on a cold cache). Already
+# present as a transitive dep of torch/tensorflow in practice, but listed
+# explicitly since it's now a direct import, not incidental.
+tqdm>=4.60
 # numpy-2.x- and py3.12-compatible TensorFlow (Apple-Silicon-capable generic wheel).
 # See OPEN QUESTION 1 before tightening this pin.
 tensorflow>=2.16,<2.20
+# pandas' optional accelerators/backends (numexpr, bottleneck, pyarrow). Not
+# imported directly by this project's code, but pandas always attempts to
+# load them, and the Anaconda base env's copies (numexpr 2.8.7, bottleneck
+# 1.3.7, pyarrow 16.1.0) predate numpy 2.x support -- since .venv-ml is
+# created with --system-site-packages (see setup_ml_env.sh) and those stale
+# copies are otherwise the only ones visible, every pandas import throws
+# noisy (non-fatal, caught internally) NumPy-1.x/2.x ABI-mismatch
+# tracebacks. Pinning numpy-2.x-compatible versions here installs them INTO
+# .venv-ml, which shadows the Anaconda base copies without touching the
+# base env itself.
+numexpr>=2.10
+bottleneck>=1.4.0
+pyarrow>=17.0
 # Used ONLY for the on-device Core ML export step (scripts/export_imu_coreml.py,
 # D3). Keep the same numpy-2.x pin caveat as tensorflow above — coremltools
 # releases can lag numpy's latest major version; if install fails, check

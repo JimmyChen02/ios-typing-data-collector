@@ -254,6 +254,54 @@ def _segment_fcn(
     return binary
 
 
+def segment_batch(images: "list[np.ndarray]") -> "np.ndarray":
+    """Batched segment(): runs FCN-ResNet101 on N images (each 224x224x3
+    float32) in ONE forward pass instead of N. Returns (N, 224, 224) uint8,
+    identical values to calling segment() once per image (verified by
+    tests/test_hand_pipeline.py::TestBatchedInference) -- purely a speed
+    optimization for bulk pre-caching (see fusion_pooled_train.py), not a
+    behavior change. segment() itself is unchanged and still the right
+    choice for a single image.
+
+    Falls back to `segment()` per image (same as segment()'s own fallback
+    trigger conditions) if torch/torchvision are unavailable or the batched
+    call fails for any reason -- a single malformed image in the batch
+    raises out of the batched torch call, so this fallback also protects
+    against ANY batch containing a bad image, not just missing deps.
+    """
+    torch, torchvision = _try_import_torch()
+    if torch is not None and torchvision is not None:
+        try:
+            return _segment_fcn_batch(images, torch, torchvision)
+        except Exception as exc:
+            warnings.warn(
+                f"Batched FCN-ResNet101 segmentation failed ({exc}); "
+                "falling back to segment() per image.",
+                stacklevel=2,
+            )
+    return np.stack([segment(img) for img in images], axis=0)
+
+
+def _segment_fcn_batch(
+    images: "list[np.ndarray]", torch, torchvision
+) -> "np.ndarray":
+    """Batched FCN-ResNet101 segmentation (paper-faithful path)."""
+    model, transform = _get_fcn_model(torch, torchvision)
+
+    tensors = torch.stack([
+        transform(Image.fromarray((img * 255).astype(np.uint8)))
+        for img in images
+    ])  # (N, 3, 224, 224)
+
+    with torch.no_grad():
+        output = model(tensors)["out"]  # (N, 21, H, W)
+
+    PERSON_CLASS = 15
+    person_prob = torch.softmax(output, dim=1)[:, PERSON_CLASS].numpy()  # (N, H, W)
+    binary = (person_prob > 0.5).astype(np.uint8) * 255
+    return binary
+
+
 # ---------------------------------------------------------------------------
 # Pipeline stage 3 — extract_features
 # ---------------------------------------------------------------------------
@@ -322,6 +370,53 @@ def _features_vgg16(silhouette: "np.ndarray", keras) -> "np.ndarray":
     x = preprocess_input(rgb[np.newaxis, ...])  # (1, 224, 224, 3)
     features = backbone.predict(x, verbose=0)  # (1, 7, 7, 512)
     return features.flatten()
+
+
+def extract_features_batch(silhouettes: "list[np.ndarray]") -> "np.ndarray":
+    """Batched extract_features(): runs VGG16 on N silhouettes in ONE
+    forward pass instead of N. Returns (N, 25088) [paper-faithful] or
+    (N, 1024) [fallback], numerically equivalent to calling
+    extract_features() once per silhouette (verified by tests/
+    test_hand_pipeline.py::TestBatchedInference) -- purely a speed
+    optimization for bulk pre-caching (see fusion_pooled_train.py), not a
+    behavior change. extract_features() itself is unchanged and still the
+    right choice for a single silhouette.
+
+    Falls back to `extract_features()` per silhouette (same as extract_
+    features()'s own fallback trigger conditions) if keras/tensorflow are
+    unavailable or the batched call fails for any reason -- a single
+    malformed silhouette raises out of the batched keras call, so this
+    fallback also protects against ANY batch containing a bad input, not
+    just missing deps.
+    """
+    _, keras = _try_import_keras()
+    if keras is not None:
+        try:
+            return _features_vgg16_batch(silhouettes, keras)
+        except Exception as exc:
+            warnings.warn(
+                f"Batched VGG16 feature extraction failed ({exc}); "
+                "falling back to extract_features() per image.",
+                stacklevel=2,
+            )
+    return np.stack([extract_features(s) for s in silhouettes], axis=0)
+
+
+def _features_vgg16_batch(silhouettes: "list[np.ndarray]", keras) -> "np.ndarray":
+    """Batched VGG16 backbone features (paper-faithful path)."""
+    backbone, preprocess_input = _get_vgg16_backbone()
+
+    rgb_batch = []
+    for silhouette in silhouettes:
+        rgb = np.stack([silhouette, silhouette, silhouette], axis=-1).astype(np.float32)
+        if rgb.shape[:2] != (224, 224):
+            pil = Image.fromarray(rgb.astype(np.uint8)).resize((224, 224))
+            rgb = np.array(pil, dtype=np.float32)
+        rgb_batch.append(rgb)
+
+    x = preprocess_input(np.stack(rgb_batch, axis=0))  # (N, 224, 224, 3)
+    features = backbone.predict(x, verbose=0)  # (N, 7, 7, 512)
+    return features.reshape(features.shape[0], -1)  # (N, 25088)
 
 
 # ---------------------------------------------------------------------------
@@ -848,6 +943,118 @@ def _save_model(model, out_dir: Path) -> None:
         print(f"    Model saved to: {model_path_pkl}  (pickle format)")
 
 
+def _run_pooled_and_louo(
+    records: "list[dict]",
+    participant_to_indices: "dict[str, list[int]]",
+    features_arr: "np.ndarray",
+    train_frac: float,
+    epochs: int,
+    out_dir: Path,
+    do_pooled: bool,
+    do_louo: bool,
+) -> None:
+    """Pooled + leave-one-user-out (LOUO) training for the IMU-sequence model.
+    See docs/superpowers/specs/2026-07-20-pooled-fusion-training-design.md
+    "Evaluation protocol". Reuses split_train_eval_indices per participant
+    (same 80/20 time-ordered convention as the per-participant loop above)
+    to get each participant's own train split, then unions those splits
+    across participants for pooled training and leave-one-user-out training.
+
+    The two modes use DIFFERENT, deliberately-different eval sets per
+    participant — participant_splits stores both:
+      - Pooled evaluates each participant on their own LOCAL 20% held-out
+        split (`abs_eval` below) — the same held-out frames excluded from
+        that participant's contribution to `abs_train`. This is a
+        continuity/sanity number, not a genuinely "unseen" one: the pooled
+        model still saw OTHER frames from the same participant during
+        training (just not these specific eval frames). Using the
+        participant's FULL known set here instead would leak, since
+        `abs_train` is a subset of that full set and the pooled model would
+        then be evaluated on data it was directly trained on.
+      - LOUO evaluates the held-out participant on their FULL data (`known`
+        below, 100% unseen) since no data from that participant appears
+        anywhere in that round's training set (all training data comes from
+        OTHER participants). This is the decision-relevant, genuinely-unseen
+        number, matching cross_user_eval.py's "MOCK USER" evaluation.
+    """
+    import window_grid
+    import imu_sequence
+
+    participant_splits: "dict[str, tuple[list[int], list[int], list[int]]]" = {}
+    for p_key, p_indices in participant_to_indices.items():
+        known = [i for i in p_indices if records[i]["label"] != "unknown"]
+        if not known:
+            continue
+        labels_ = [records[i]["label"] for i in known]
+        keys_ = [records[i]["sort_key"] for i in known]
+        local_train, local_eval = split_train_eval_indices(keys_, labels_, train_frac=train_frac)
+        train_labels_here = [labels_[li] for li in local_train]
+        if len(set(train_labels_here)) < 2:
+            print(f"  pooled/LOUO: skipping participant {p_key!r} "
+                  "(< 2 distinct labels in its train split)")
+            continue
+        abs_train = [known[li] for li in local_train]
+        abs_eval = [known[li] for li in local_eval]
+        participant_splits[p_key] = (abs_train, abs_eval, known)
+
+    if len(participant_splits) < 2:
+        print("  pooled/LOUO: fewer than 2 usable participants — skipping "
+              "(pooling/LOUO requires at least 2).")
+        return
+
+    def _train_and_eval(train_idx: "list[int]", eval_idx: "list[int]", tag: str) -> dict:
+        train_labels = [records[i]["label"] for i in train_idx]
+        model = imu_sequence.train_imu_sequence_model(
+            features_arr[train_idx], train_labels, epochs=epochs
+        )
+        eval_labels = [records[i]["label"] for i in eval_idx]
+        eval_preds = _predict_labels(model, features_arr[eval_idx])
+        frame_acc = float(np.mean(np.array(eval_preds) == np.array(eval_labels)))
+        grid = window_grid.sweep_window_sizes(records, eval_idx, eval_preds, eval_labels)
+        selected = window_grid.select_window(grid)
+        win_acc = grid[selected] if selected is not None else float("nan")
+        print(f"  [{tag}] n_train={len(train_idx)} n_eval={len(eval_idx)} "
+              f"frame-acc={frame_acc:.3f} windowed-acc={_fmt(win_acc)} "
+              f"(selected window={selected}s)")
+        print("    grid: " + ", ".join(f"{s}s={_fmt(a)}" for s, a in sorted(grid.items())))
+        return {"model": model}
+
+    if do_pooled:
+        print("\n=== Pooled (IMU-only) ===")
+        pooled_train_idx = [i for (t, _e, _k) in participant_splits.values() for i in t]
+        pooled_eval_idx = [i for (_t, e, _k) in participant_splits.values() for i in e]
+        assert not (set(pooled_train_idx) & set(pooled_eval_idx)), (
+            "pooled eval set must not overlap pooled train set"
+        )
+        result = _train_and_eval(pooled_train_idx, pooled_eval_idx,
+                                  "pooled (own held-out per participant)")
+        p_out_dir = out_dir / "pooled_"
+        p_out_dir.mkdir(parents=True, exist_ok=True)
+        unique_labels_p = sorted(set(records[i]["label"] for i in pooled_train_idx))
+        with (p_out_dir / "labels.json").open("w", encoding="utf-8") as fh:
+            json.dump(unique_labels_p, fh, indent=2)
+        _save_model(result["model"], p_out_dir)
+        print(f"  Pooled model saved to: {p_out_dir}")
+
+    if do_louo:
+        print("\n=== Leave-one-user-out (IMU-only) ===")
+        for held_out_key in sorted(participant_splits):
+            train_idx = [
+                i for p_key, (t, _e, _k) in participant_splits.items()
+                if p_key != held_out_key for i in t
+            ]
+            eval_idx = participant_splits[held_out_key][2]  # FULL data, 100% unseen
+            result = _train_and_eval(train_idx, eval_idx, f"LOUO held_out={held_out_key!r}")
+            safe_key = re.sub(r"[^a-z0-9]+", "_", held_out_key) or "participant"
+            p_out_dir = out_dir / f"louo_{safe_key}"
+            p_out_dir.mkdir(parents=True, exist_ok=True)
+            unique_labels_p = sorted(set(records[i]["label"] for i in train_idx))
+            with (p_out_dir / "labels.json").open("w", encoding="utf-8") as fh:
+                json.dump(unique_labels_p, fh, indent=2)
+            _save_model(result["model"], p_out_dir)
+            print(f"  LOUO model (held out {held_out_key!r}) saved to: {p_out_dir}")
+
+
 def main() -> None:
     args = _parse_args()
 
@@ -875,6 +1082,11 @@ def main() -> None:
             "path with image features is skipped).",
             stacklevel=2,
         )
+
+    if (args.pooled or args.pooled_louo) and not args.imu_seq:
+        print("Error: --pooled/--pooled-louo require --imu-seq (pooled "
+              "training is only implemented for the IMU-sequence model).")
+        sys.exit(1)
 
     # IMU fusion banner. NOTE: `_write_markdown_results` keeps only the single
     # BEST run by windowed accuracy — an image+IMU run and an image-only run
@@ -1192,6 +1404,12 @@ def main() -> None:
                                    imu_fusion=args.use_imu):
             print(f"Results chart written to: {md_out}")
 
+    if args.imu_seq and (args.pooled or args.pooled_louo):
+        _run_pooled_and_louo(
+            records, participant_to_indices, features_arr,
+            train_frac, epochs, out_dir, args.pooled, args.pooled_louo,
+        )
+
     print("\nFuture work:")
     print("  - On-device Core ML conversion")
     print("  - Landscape-mode capture")
@@ -1410,6 +1628,20 @@ def _parse_args() -> argparse.Namespace:
              "--imu-seq. Trailing windows match what the on-device live "
              "model can compute (no future samples available at inference "
              "time); centered windows are for offline training/eval only.",
+    )
+    parser.add_argument(
+        "--pooled",
+        action="store_true",
+        help="Also train one IMU-sequence model on ALL participants' pooled "
+             "train-splits (saved to <out>/pooled_/). Requires --imu-seq.",
+    )
+    parser.add_argument(
+        "--pooled-louo",
+        action="store_true",
+        help="Also run leave-one-user-out (LOUO): for each participant, train "
+             "an IMU-sequence model on every OTHER participant's train-split "
+             "and evaluate on that participant's FULL data (100%% unseen), "
+             "saved to <out>/louo_<participant>/. Requires --imu-seq.",
     )
     return parser.parse_args()
 

@@ -26,6 +26,8 @@
 		AA000000000000000000014 /* GaussianModelStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000014 /* GaussianModelStore.swift */; };
 		AA000000000000000000015 /* GaussianKeyboardExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000015 /* GaussianKeyboardExporter.swift */; };
 		AA000000000000000000016 /* GaussianKeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000016 /* GaussianKeyboardView.swift */; };
+		FW000000000000000000001 /* FreeWritingTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FW000000000000000000002 /* FreeWritingTextView.swift */; };
+		FW000000000000000000003 /* FreeWritingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FW000000000000000000004 /* FreeWritingView.swift */; };
 		HC000000000000000000001 /* HandSample.swift in Sources */ = {isa = PBXBuildFile; fileRef = HC000000000000000000002 /* HandSample.swift */; };
 		HC000000000000000000003 /* HandImageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = HC000000000000000000004 /* HandImageStore.swift */; };
 		HC000000000000000000005 /* MotionRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = HC000000000000000000006 /* MotionRecorder.swift */; };
@@ -37,8 +39,6 @@
 		PD000000000000000000005 /* PostureCaptureController.swift in Sources */ = {isa = PBXBuildFile; fileRef = PD000000000000000000006 /* PostureCaptureController.swift */; };
 		PD000000000000000000007 /* PosturePredictor.swift in Sources */ = {isa = PBXBuildFile; fileRef = PD000000000000000000008 /* PosturePredictor.swift */; };
 		PD000000000000000000009 /* LivePostureDemoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = PD00000000000000000000A /* LivePostureDemoView.swift */; };
-		FW000000000000000000001 /* FreeWritingTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FW000000000000000000002 /* FreeWritingTextView.swift */; };
-		FW000000000000000000003 /* FreeWritingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FW000000000000000000004 /* FreeWritingView.swift */; };
 		QT20000000000000000001 /* FreeWritingPromptsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QT10000000000000000001 /* FreeWritingPromptsTests.swift */; };
 		QT20000000000000000002 /* DataExporterFreeWritingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QT10000000000000000002 /* DataExporterFreeWritingTests.swift */; };
 		QT20000000000000000003 /* SessionManagerFreeWritingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QT10000000000000000003 /* SessionManagerFreeWritingTests.swift */; };
@@ -76,6 +76,8 @@
 		BB000000000000000000015 /* GaussianKeyboardExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaussianKeyboardExporter.swift; sourceTree = "<group>"; };
 		BB000000000000000000016 /* GaussianKeyboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaussianKeyboardView.swift; sourceTree = "<group>"; };
 		BB000000000000000000099 /* TypingResearch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TypingResearch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		FW000000000000000000002 /* FreeWritingTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FreeWritingTextView.swift; sourceTree = "<group>"; };
+		FW000000000000000000004 /* FreeWritingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FreeWritingView.swift; sourceTree = "<group>"; };
 		HC000000000000000000002 /* HandSample.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandSample.swift; sourceTree = "<group>"; };
 		HC000000000000000000004 /* HandImageStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandImageStore.swift; sourceTree = "<group>"; };
 		HC000000000000000000006 /* MotionRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionRecorder.swift; sourceTree = "<group>"; };
@@ -87,8 +89,6 @@
 		PD000000000000000000006 /* PostureCaptureController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostureCaptureController.swift; sourceTree = "<group>"; };
 		PD000000000000000000008 /* PosturePredictor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PosturePredictor.swift; sourceTree = "<group>"; };
 		PD00000000000000000000A /* LivePostureDemoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePostureDemoView.swift; sourceTree = "<group>"; };
-		FW000000000000000000002 /* FreeWritingTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FreeWritingTextView.swift; sourceTree = "<group>"; };
-		FW000000000000000000004 /* FreeWritingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FreeWritingView.swift; sourceTree = "<group>"; };
 		QT00000000000000000002 /* TypingResearchTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TypingResearchTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		QT10000000000000000001 /* FreeWritingPromptsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FreeWritingPromptsTests.swift; sourceTree = "<group>"; };
 		QT10000000000000000002 /* DataExporterFreeWritingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataExporterFreeWritingTests.swift; sourceTree = "<group>"; };
@@ -515,7 +515,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = jimmychen.typingresearch;
+				PRODUCT_BUNDLE_IDENTIFIER = jimmyx.typingresearch;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -546,7 +546,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.jimmychen.typingresearch;
+				PRODUCT_BUNDLE_IDENTIFIER = jimmyx.typingresearch;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;

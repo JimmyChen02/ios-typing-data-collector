@@ -30,6 +30,17 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 SRC="$1"
 [ -e "$SRC" ] || die "no such file or folder: $SRC"
 
+# Normalize to an absolute path so the "already in exports/" case-match
+# below (line ~47) works regardless of whether the caller passed a relative
+# or absolute path — a relative path pointing at an existing exports/<...>
+# folder previously failed that string match and made a redundant second
+# provenance copy of the same data instead of resuming from the first one.
+if [ -d "$SRC" ]; then
+    SRC="$(cd "$SRC" && pwd)"
+else
+    SRC="$(cd "$(dirname "$SRC")" && pwd)/$(basename "$SRC")"
+fi
+
 # --- 1. Land the raw export under exports/ (provenance) -------------------
 mkdir -p "$EXPORTS"
 if [[ "$SRC" == *.zip ]]; then
@@ -83,12 +94,16 @@ done
 [ "$dupes" -eq 0 ] || die "$dupes image(s) from this export already exist in $DEST/hand_images — this export looks already merged. Nothing was copied."
 
 # --- 3. Merge --------------------------------------------------------------
+# `cp SRC/* DEST/` shell-globs every filename onto one command line, which
+# blows past ARG_MAX on large exports (hit at ~16,900 files with 30fps
+# capture); `cp -R SRC/. DEST/` copies directory CONTENTS as a single
+# argument instead, sidestepping the glob entirely.
 n_img="$(ls "$RAW/hand_images" | wc -l | tr -d ' ')"
-cp "$RAW/hand_images"/* "$DEST/hand_images/"
+cp -R "$RAW/hand_images/." "$DEST/hand_images/"
 n_imu=0
 if [ -d "$RAW/imu" ]; then
     n_imu="$(ls "$RAW/imu" | wc -l | tr -d ' ')"
-    cp "$RAW/imu"/* "$DEST/imu/"
+    cp -R "$RAW/imu/." "$DEST/imu/"
 fi
 n_rows="$(tail -n +2 "$MANIFEST" | wc -l | tr -d ' ')"
 tail -n +2 "$MANIFEST" >> "$COMBINED"

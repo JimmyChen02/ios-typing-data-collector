@@ -7,9 +7,9 @@ import CoreML
 // D3 — loads the bundled IMU-only Core ML posture model (exported by
 // scripts/export_imu_coreml.py from the D1 `--imu-seq --imu-causal` model),
 // buffers the last `window` IMU samples from the live 50 Hz MotionRecorder
-// stream via its onFrame hook, and runs prediction on a timer (~2 Hz, to
-// match the D2c tag cadence). Publishes `livePredictedPosture: HoldingHand`
-// + `confidence`.
+// stream via its onFrame hook, and runs prediction on a 30 Hz timer.
+// Publishes `livePredictedPosture: HoldingHand` + `confidence`, smoothed by
+// a majority vote over the last `voteWindowSize` raw predictions.
 //
 // Resolves OPEN QUESTION 1 = (A): IMU-only inference, no camera needed. The
 // camera preview in D2c is display-only; this predictor never touches image
@@ -46,8 +46,23 @@ final class PosturePredictor {
     /// imu_sequence.IMU_CHANNELS / train_hand_classifier._IMU_CHANNELS.
     static let channelCount = 12
 
-    /// Prediction cadence — matches the D2c tag's ~2 Hz update rate.
-    private static let predictionInterval: TimeInterval = 0.5
+    /// Prediction cadence. Raised from the original ~3 Hz (D2c tag cadence)
+    /// to 30 Hz so vote smoothing costs little wall-clock latency; the
+    /// Conv1D is small enough that per-tick inference is sub-millisecond.
+    private static let predictionInterval: TimeInterval = 1.0 / 30.0
+
+    /// Majority-vote smoothing width: the published posture is the majority
+    /// of the last `voteWindowSize` raw predictions (ties keep the previous
+    /// published label). Tuned at THIS 30 Hz cadence by
+    /// scripts/dense_window_sweep.py (2026-07-17): cross-user accuracy is
+    /// flat in w (consecutive windows overlap ~96%, votes are correlated),
+    /// but label stability keeps improving — 45 (1.5 s of votes, ~2.3
+    /// switches/min vs 7.1 at w=1) was the steadiest and most accurate
+    /// window that still follows a grip change within the ~1–2 s target
+    /// (majority flips ~0.75 s after a clean transition). The old w=3 came
+    /// from scripts/window_sweep.py at the retired ~2 Hz cadence and does
+    /// not transfer.
+    private static let voteWindowSize = 45
 
     // MARK: - Published state
 
@@ -69,6 +84,14 @@ final class PosturePredictor {
     private var buffer: [[Double]] = []
     private var predictionTimer: Timer?
     private var isRunning: Bool = false
+
+    // Raw per-tick predictions feeding the majority vote (most recent last;
+    // at most `voteWindowSize` entries).
+    private var recentPredictions: [HoldingHand] = []
+    // Latest raw confidence seen per label, so the published confidence
+    // always describes the published (voted) label rather than whatever the
+    // newest raw tick predicted.
+    private var latestConfidence: [HoldingHand: Double] = [:]
 
     private init() {
         loadModel()
@@ -118,6 +141,8 @@ final class PosturePredictor {
             MotionRecorder.shared.onFrame = nil
         }
         buffer.removeAll(keepingCapacity: true)
+        recentPredictions.removeAll(keepingCapacity: true)
+        latestConfidence.removeAll(keepingCapacity: true)
         livePredictedPosture = .unknown
         confidence = 0.0
     }
@@ -210,7 +235,8 @@ final class PosturePredictor {
 
     /// Decodes a Core ML classifier output (string class label +
     /// probabilities dict, as emitted by export_imu_coreml.py's
-    /// ClassifierConfig) into livePredictedPosture + confidence.
+    /// ClassifierConfig), feeds it into the majority vote, and publishes
+    /// the voted label + its confidence.
     private func decodePrediction(_ output: MLFeatureProvider) {
         guard let labelValue = output.featureValue(for: "classLabel")?.stringValue,
               let hand = HoldingHand(rawValue: labelValue)
@@ -227,7 +253,30 @@ final class PosturePredictor {
             conf = probsValue[labelValue]?.doubleValue ?? 0.0
         }
 
-        livePredictedPosture = hand
-        confidence = conf
+        latestConfidence[hand] = conf
+        recentPredictions.append(hand)
+        if recentPredictions.count > Self.voteWindowSize {
+            recentPredictions.removeFirst(recentPredictions.count - Self.voteWindowSize)
+        }
+
+        // Majority vote over the recent raw predictions. A 3-way tie is
+        // possible with 3 votes and 3 classes; keep the currently published
+        // posture in that case so a tie never causes flicker.
+        var counts: [HoldingHand: Int] = [:]
+        for p in recentPredictions { counts[p, default: 0] += 1 }
+        let maxCount = counts.values.max() ?? 0
+        let winners = counts.filter { $0.value == maxCount }.map(\.key)
+
+        let voted: HoldingHand
+        if winners.count == 1 {
+            voted = winners[0]
+        } else if winners.contains(livePredictedPosture) {
+            voted = livePredictedPosture
+        } else {
+            voted = hand
+        }
+
+        livePredictedPosture = voted
+        confidence = latestConfidence[voted] ?? conf
     }
 }
