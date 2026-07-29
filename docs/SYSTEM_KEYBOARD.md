@@ -72,16 +72,21 @@ in portrait.
 - Shift key turns white when engaged; blue Return for go/search/send/done/…
 - Character preview popup + press highlight + slide-to-neighbor
 - Long-press accent and punctuation alternates with slide-to-select
+- Momentary 123 / #+= gesture: hold the layout key, slide to a symbol, and
+  release to insert it while returning to the original layout
 - Emoji page: 8 categories + recents, ABC/globe/delete, delete repeat
 - Landscape metrics (shorter rows, tighter gaps) and one-handed left/right mode
   with an expand handle; also reachable by holding the globe key
-- Space-bar trackpad on long press; short scrub still nudges the cursor
-- Delete repeat escalating to word deletion
+- Space-bar trackpad on long press with accumulated fine horizontal movement,
+  hold-movement tolerance, and best-effort vertical line movement
+- Accelerating delete repeat, escalating from characters to word deletion
 - Smart punctuation (curly quotes, `--` → em dash), double-space → period
 - Suggestion bar (local decoder, up to 3 candidates), autocorrect on
   space/return + undo via backspace
-- Inline completion acceptance on space/return (logged as
-  `inlinePredictionAccepted`)
+- Autocorrect covers confident substitutions, adjacent transpositions, and
+  one-character insertion/deletion typos; sentence punctuation also commits it
+- Longer completions remain suggestions until explicitly tapped; pressing space
+  commits the typed literal unless a qualifying typo autocorrection applies
 - Temporary autocorrect correction chip in the suggestion bar with underlined
   replacement and tap-to-revert quoted original
 - Settings parity: Auto-Capitalization, Auto-Correction, Predictive, Character
@@ -93,9 +98,8 @@ in portrait.
 ### Deferred / out of reach
 - Dictation and QuickPath (explicitly out of scope)
 - Emoji search field, skin-tone variant picker
-- Apple's language model and true host-app inline styling in arbitrary apps;
-  gray inline prediction/underline are fully rendered in the TypingResearch
-  app field and approximated in the keyboard suggestion bar elsewhere
+- Apple's language model and host-app inline prediction styling in arbitrary
+  apps (the inline-prediction feature has been removed from this keyboard)
 - Text replacement shortcuts, contact suggestions, multilingual auto-switching
 - iPad floating / split / undocked layouts
 - Adaptive Gaussian personalization

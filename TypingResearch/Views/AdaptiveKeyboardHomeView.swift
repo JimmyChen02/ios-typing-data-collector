@@ -23,16 +23,19 @@ struct AdaptiveKeyboardHomeView: View {
                 Section {
                     Text("Research Keyboard")
                         .font(.title2.weight(.bold))
-                    Text("Stage 3+: stock iOS look with inline gray predictions, temporary autocorrect underline, key popups, accents, emoji, one-handed/landscape, and logging.")
+                    Text("Stock iOS-style keyboard with a three-candidate suggestion bar, autocorrect feedback, key popups, accents, emoji, one-handed/landscape layouts, and logging.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
 
                 Section("Type here") {
-                    PredictionAwareTextEditor(text: $typedText)
+                    TextEditor(text: $typedText)
                         .frame(minHeight: 160)
+                        .font(.body)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
                     if typedText.isEmpty {
-                        Text("Tap this field, switch to Adaptive Keyboard (globe key), then type. Try “th” + space for inline fill, or “teh ” for autocorrect with a gray underline.")
+                        Text("Tap this field, switch to Adaptive Keyboard (globe key), then type. Tap a suggestion to accept it, or type “teh ” to try autocorrect.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {
@@ -142,7 +145,7 @@ struct AdaptiveKeyboardHomeView: View {
                 }
 
                 Section("Notes") {
-                    Text("Inline gray predictions and the temporary autocorrect underline render fully in this app’s typing field. In other apps the extension cannot style the host text, so the same feedback appears on the suggestion bar (gray suffix / underlined correction chip). Dictation and QuickPath remain out of scope. Autocorrect still uses the small local word list.")
+                    Text("The keyboard uses a three-candidate suggestion bar. Longer suggestions are inserted only when tapped; space/return only apply qualifying typo autocorrections. Dictation and QuickPath remain out of scope. Autocorrect still uses the local language model.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

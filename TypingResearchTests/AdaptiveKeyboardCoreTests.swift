@@ -149,57 +149,25 @@ final class AdaptiveKeyboardCoreTests: XCTestCase {
         XCTAssertEqual(correction?.text, "the")
     }
 
-    func testInlineCompletionProvidesGraySuffix() {
-        let candidates = LocalLanguageDecoder().candidates(for: "th", previousWord: nil)
-        let completion = CorrectionFeedbackPolicy.inlineCompletion(
-            from: candidates,
-            literal: "th"
+    func testAutomaticCorrectionHandlesMissingAndExtraCharacter() {
+        let missing = LocalLanguageDecoder().candidates(for: "helo", previousWord: nil)
+        XCTAssertEqual(
+            CorrectionFeedbackPolicy.automaticCorrection(from: missing, literal: "helo")?.text,
+            "hello"
         )
-        XCTAssertNotNil(completion)
-        XCTAssertTrue(completion!.text.hasPrefix("th"))
-        XCTAssertGreaterThan(completion!.text.count, 2)
-        let suffix = CorrectionFeedbackPolicy.inlineSuffix(for: completion!, literal: "th")
-        XCTAssertFalse(suffix.isEmpty)
-        XCTAssertEqual("th" + suffix, completion!.text)
+
+        let extra = LocalLanguageDecoder().candidates(for: "helllo", previousWord: nil)
+        XCTAssertEqual(
+            CorrectionFeedbackPolicy.automaticCorrection(from: extra, literal: "helllo")?.text,
+            "hello"
+        )
     }
 
-    func testInlineCompletionRejectedForSameLengthTypo() {
-        let candidates = LocalLanguageDecoder().candidates(for: "teh", previousWord: nil)
-        // "teh" → "the" is autocorrect, not an inline longer completion.
-        let completion = CorrectionFeedbackPolicy.inlineCompletion(
-            from: candidates,
-            literal: "teh"
-        )
-        XCTAssertTrue(
-            completion == nil || completion!.text.count > "teh".count
-        )
+    func testAutomaticCorrectionHandlesAdjacentTransposition() {
+        let candidates = LocalLanguageDecoder().candidates(for: "hte", previousWord: nil)
         XCTAssertEqual(
-            CorrectionFeedbackPolicy.automaticCorrection(from: candidates, literal: "teh")?.text,
+            CorrectionFeedbackPolicy.automaticCorrection(from: candidates, literal: "hte")?.text,
             "the"
         )
-    }
-
-    func testLivePredictionStateRoundTrip() throws {
-        let suite = "AdaptiveKeyboardCoreTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let preferences = SharedKeyboardPreferences(defaults: defaults)
-
-        var state = KeyboardLivePredictionState.empty
-        state.contextBeforeCaret = "hel"
-        state.currentWord = "hel"
-        state.inlineSuffix = "lo"
-        state.inlineFullWord = "hello"
-        state.correctionOriginal = "teh"
-        state.correctionReplacement = "the"
-        state.correctionExpires = Date().addingTimeInterval(4)
-        state.updatedAt = Date()
-        preferences.livePrediction = state
-
-        let loaded = preferences.livePrediction
-        XCTAssertEqual(loaded.inlineSuffix, "lo")
-        XCTAssertEqual(loaded.inlineFullWord, "hello")
-        XCTAssertTrue(loaded.hasInlinePrediction)
-        XCTAssertTrue(loaded.hasActiveCorrection)
     }
 }

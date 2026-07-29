@@ -28,7 +28,6 @@
 		AA000000000000000000016 /* GaussianKeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000016 /* GaussianKeyboardView.swift */; };
 		AK000000000000000000001 /* AdaptiveKeyboardCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AK000000000000000000101 /* AdaptiveKeyboardCore.swift */; };
 		AK000000000000000000002 /* AdaptiveKeyboardHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AK000000000000000000102 /* AdaptiveKeyboardHomeView.swift */; };
-		AK000000000000000000008 /* PredictionAwareTextEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AK000000000000000000109 /* PredictionAwareTextEditor.swift */; };
 		AK000000000000000000003 /* AdaptiveKeyboardCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AK000000000000000000101 /* AdaptiveKeyboardCore.swift */; };
 		AK000000000000000000004 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AK000000000000000000103 /* KeyboardViewController.swift */; };
 		AK000000000000000000005 /* AdaptiveKeyboard.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = AK000000000000000000199 /* AdaptiveKeyboard.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -86,7 +85,6 @@
 		87AA80512F6DB50D00764884 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		AK000000000000000000101 /* AdaptiveKeyboardCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveKeyboardCore.swift; sourceTree = "<group>"; };
 		AK000000000000000000102 /* AdaptiveKeyboardHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveKeyboardHomeView.swift; sourceTree = "<group>"; };
-		AK000000000000000000109 /* PredictionAwareTextEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PredictionAwareTextEditor.swift; sourceTree = "<group>"; };
 		AK000000000000000000103 /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewController.swift; sourceTree = "<group>"; };
 		AK000000000000000000104 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AK000000000000000000105 /* TypingResearch.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TypingResearch.entitlements; sourceTree = "<group>"; };
@@ -233,7 +231,6 @@
 			isa = PBXGroup;
 			children = (
 				AK000000000000000000102 /* AdaptiveKeyboardHomeView.swift */,
-				AK000000000000000000109 /* PredictionAwareTextEditor.swift */,
 				87AA804D2F6C99AA00764884 /* TapDotPlotView.swift */,
 				BB000000000000000000004 /* ParticipantSetupView.swift */,
 				BB000000000000000000005 /* SessionView.swift */,
@@ -425,7 +422,6 @@
 			files = (
 				AK000000000000000000001 /* AdaptiveKeyboardCore.swift in Sources */,
 				AK000000000000000000002 /* AdaptiveKeyboardHomeView.swift in Sources */,
-				AK000000000000000000008 /* PredictionAwareTextEditor.swift in Sources */,
 				AA000000000000000000001 /* TypingResearchApp.swift in Sources */,
 				AA000000000000000000002 /* Models.swift in Sources */,
 				87AA804B2F6C999900764884 /* BackendClient.swift in Sources */,

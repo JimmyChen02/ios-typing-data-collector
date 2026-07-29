@@ -32,6 +32,7 @@ private final class KeyboardAccessibilityElement: UIAccessibilityElement {
 private protocol ResearchKeyboardViewDelegate: AnyObject {
     func keyboardView(_ view: ResearchKeyboardView, didTrigger action: KeyboardAction, touch: UITouch?)
     func keyboardView(_ view: ResearchKeyboardView, didMoveCursorBy offset: Int)
+    func keyboardView(_ view: ResearchKeyboardView, didMoveCursorVerticallyBy lines: Int)
 }
 
 /// Stage-3 iOS-replica keyboard: QWERTY + emoji page, alternates, one-handed, trackpad, logging.
@@ -47,22 +48,42 @@ final class KeyboardViewController: UIInputViewController {
     private var previousWord: String?
     private var lastAutocorrect: (original: String, replacement: String, timestamp: Date)?
     private var lastLoggedCandidateTexts: [String] = []
-    private var activeInlineCompletion: DecoderCandidate?
-    private var lastPublishedPrediction = KeyboardLivePredictionState.empty
-    private var pendingPrediction: KeyboardLivePredictionState?
-    private var publishWorkItem: DispatchWorkItem?
+    private var refreshWorkItem: DispatchWorkItem?
+    private var hasAppliedInitialLayout = false
     private let haptic = UIImpactFeedbackGenerator(style: .light)
 
     private var isLandscape: Bool {
-        let screen = view.window?.windowScene?.screen ?? UIScreen.main
-        return screen.bounds.width > screen.bounds.height
+        // A keyboard view is always wider than it is tall, even in portrait.
+        // Determine orientation from the scene/screen, never from view.bounds.
+        if let orientation = view.window?.windowScene?.interfaceOrientation,
+           orientation != .unknown {
+            return orientation.isLandscape
+        }
+        let screenBounds = view.window?.windowScene?.screen.bounds ?? UIScreen.main.bounds
+        return screenBounds.width > screenBounds.height
     }
 
     private var preferredHeight: CGFloat {
-        // Match stock iOS proportions more closely: shorter key stack, less stretch.
-        let base: CGFloat = isLandscape ? 160 : 204
-        let bar: CGFloat = preferences.predictiveEnabled ? (isLandscape ? 34 : 42) : 0
+        // Device-adaptive sizing (closest possible with public APIs): scales by
+        // short-side class instead of hardcoded model constants.
+        let screenBounds = view.window?.windowScene?.screen.bounds ?? UIScreen.main.bounds
+        let shortSide = min(screenBounds.width, screenBounds.height)
+        let landscape = isLandscape
+        let t = clamp((shortSide - 320) / 108, min: 0, max: 1) // 320...428pt iPhones
+        let base: CGFloat = landscape
+            ? (156 + t * 14)  // ~156...170
+            : (206 + t * 17)  // ~206...223
+        let bar: CGFloat
+        if preferences.predictiveEnabled {
+            bar = landscape ? (32 + t * 3) : (40 + t * 4) // ~32...35 or ~40...44
+        } else {
+            bar = 0
+        }
         return base + bar
+    }
+
+    private func clamp(_ value: CGFloat, min lower: CGFloat, max upper: CGFloat) -> CGFloat {
+        Swift.max(lower, Swift.min(upper, value))
     }
 
     override func viewDidLoad() {
@@ -82,7 +103,8 @@ final class KeyboardViewController: UIInputViewController {
         emojiView.isHidden = true
 
         let height = view.heightAnchor.constraint(equalToConstant: preferredHeight)
-        height.priority = .required - 1
+        // Keep this required so the keyboard does not appear stretched on first show.
+        height.priority = .required
         height.isActive = true
         heightConstraint = height
 
@@ -91,6 +113,7 @@ final class KeyboardViewController: UIInputViewController {
             (self: Self, _: UITraitCollection) in
             self.heightConstraint?.constant = self.preferredHeight
             self.keyboardView.isLandscape = self.isLandscape
+            self.keyboardView.deviceClassScale = self.deviceClassScale
         }
         applyPreferences()
         refreshContextAndCandidates()
@@ -98,6 +121,7 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        hasAppliedInitialLayout = false
         sessionID = UUID()
         keyboardView.needsInputModeSwitchKey = needsInputModeSwitchKey
         emojiView.showsGlobeKey = needsInputModeSwitchKey
@@ -111,6 +135,22 @@ final class KeyboardViewController: UIInputViewController {
         heightConstraint?.constant = preferredHeight
     }
 
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        let target = preferredHeight
+        if abs((heightConstraint?.constant ?? 0) - target) > 0.5 {
+            heightConstraint?.constant = target
+        }
+        // Force one stable post-activation pass so first render isn't stretched.
+        if !hasAppliedInitialLayout, view.bounds.width > 0, view.bounds.height > 0 {
+            hasAppliedInitialLayout = true
+            keyboardView.isLandscape = isLandscape
+            keyboardView.deviceClassScale = deviceClassScale
+            view.layoutIfNeeded()
+            scheduleRefreshContextAndCandidates(immediate: true)
+        }
+    }
+
     override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
         let context = textDocumentProxy.documentContextBeforeInput
@@ -122,7 +162,8 @@ final class KeyboardViewController: UIInputViewController {
             log(kind: .externalMutation, rawContext: context)
             lastAutocorrect = nil
         }
-        refreshContextAndCandidates()
+        // Coalesce rapid callbacks while the user is typing quickly.
+        scheduleRefreshContextAndCandidates()
     }
 
     private func applyPreferences() {
@@ -132,23 +173,21 @@ final class KeyboardViewController: UIInputViewController {
         keyboardView.showsCandidateBar = preferences.predictiveEnabled
         keyboardView.oneHandedMode = preferences.oneHandedMode
         keyboardView.isLandscape = isLandscape
+        keyboardView.deviceClassScale = deviceClassScale
         heightConstraint?.constant = preferredHeight
+    }
+
+    private var deviceClassScale: CGFloat {
+        let screenBounds = view.window?.windowScene?.screen.bounds ?? UIScreen.main.bounds
+        let shortSide = min(screenBounds.width, screenBounds.height)
+        return clamp((shortSide - 320) / 108, min: 0, max: 1)
     }
 
     private func refreshContextAndCandidates() {
         applyPreferences()
         let context = textDocumentProxy.documentContextBeforeInput ?? ""
         lastKnownContext = context
-        currentWord = context
-            .split(whereSeparator: { $0.isWhitespace || $0.isPunctuation })
-            .last
-            .map(String.init) ?? ""
-        // A trailing separator means there is no in-progress word.
-        if context.last.map({ $0.isWhitespace || $0.isPunctuation }) == true {
-            currentWord = ""
-        }
-        let words = context.split(whereSeparator: { $0.isWhitespace || $0.isPunctuation })
-        previousWord = words.dropLast(currentWord.isEmpty ? 0 : 1).last.map(String.init)
+        updateWordContext(from: context)
 
         switch textDocumentProxy.returnKeyType {
         case .done: keyboardView.returnLabel = "done"
@@ -176,9 +215,6 @@ final class KeyboardViewController: UIInputViewController {
 
         if !preferences.predictiveEnabled {
             keyboardView.candidates = []
-            keyboardView.inlinePredictionText = nil
-            keyboardView.inlinePredictionSuffix = ""
-            activeInlineCompletion = nil
             if let autocorrect = lastAutocorrect,
                Date().timeIntervalSince(autocorrect.timestamp) < 4 {
                 keyboardView.pendingCorrectionDisplay = (
@@ -188,28 +224,11 @@ final class KeyboardViewController: UIInputViewController {
             } else {
                 keyboardView.pendingCorrectionDisplay = nil
             }
-            publishLivePrediction(candidates: [])
             return
         }
         let candidates = languageDecoder.candidates(for: currentWord, previousWord: previousWord)
         let texts = candidates.map(\.text)
         keyboardView.candidates = texts
-
-        if preferences.predictiveEnabled,
-           let completion = CorrectionFeedbackPolicy.inlineCompletion(
-            from: candidates,
-            literal: currentWord
-           ),
-           !currentWord.isEmpty {
-            activeInlineCompletion = completion
-            let suffix = CorrectionFeedbackPolicy.inlineSuffix(for: completion, literal: currentWord)
-            keyboardView.inlinePredictionText = completion.text
-            keyboardView.inlinePredictionSuffix = suffix
-        } else {
-            activeInlineCompletion = nil
-            keyboardView.inlinePredictionText = nil
-            keyboardView.inlinePredictionSuffix = ""
-        }
 
         if let autocorrect = lastAutocorrect,
            Date().timeIntervalSince(autocorrect.timestamp) < 4 {
@@ -221,70 +240,35 @@ final class KeyboardViewController: UIInputViewController {
             keyboardView.pendingCorrectionDisplay = nil
         }
 
-        publishLivePrediction(candidates: candidates)
-
         if !texts.isEmpty, texts != lastLoggedCandidateTexts {
             lastLoggedCandidateTexts = texts
             log(kind: .candidateShown, rawContext: context, candidates: candidates)
         }
     }
 
-    private func publishLivePrediction(candidates: [DecoderCandidate]) {
-        let context = textDocumentProxy.documentContextBeforeInput ?? ""
-        var state = KeyboardLivePredictionState.empty
-        // Keep payload small to avoid input lag from frequent cross-process writes.
-        state.contextBeforeCaret = String(context.suffix(80))
-        state.currentWord = currentWord
-        state.updatedAt = Date()
-
-        if preferences.predictiveEnabled,
-           let completion = CorrectionFeedbackPolicy.inlineCompletion(
-            from: candidates,
-            literal: currentWord
-           ),
-           !currentWord.isEmpty {
-            let suffix = CorrectionFeedbackPolicy.inlineSuffix(for: completion, literal: currentWord)
-            state.inlineSuffix = suffix
-            state.inlineFullWord = preserveCasing(completion.text, matching: currentWord)
+    private func updateWordContext(from context: String) {
+        currentWord = context
+            .split(whereSeparator: { $0.isWhitespace || $0.isPunctuation })
+            .last
+            .map(String.init) ?? ""
+        if context.last.map({ $0.isWhitespace || $0.isPunctuation }) == true {
+            currentWord = ""
         }
-
-        if let autocorrect = lastAutocorrect,
-           Date().timeIntervalSince(autocorrect.timestamp) < 4 {
-            state.correctionOriginal = autocorrect.original
-            state.correctionReplacement = autocorrect.replacement
-            state.correctionExpires = autocorrect.timestamp.addingTimeInterval(4)
-        }
-
-        scheduleLivePredictionPublish(state)
+        let words = context.split(whereSeparator: { $0.isWhitespace || $0.isPunctuation })
+        previousWord = words.dropLast(currentWord.isEmpty ? 0 : 1).last.map(String.init)
     }
 
-    private func scheduleLivePredictionPublish(_ state: KeyboardLivePredictionState) {
-        guard state != lastPublishedPrediction else { return }
-        pendingPrediction = state
-        publishWorkItem?.cancel()
-        let immediate =
-            state.hasActiveCorrection != lastPublishedPrediction.hasActiveCorrection
-            || state.inlineSuffix.isEmpty != lastPublishedPrediction.inlineSuffix.isEmpty
-        let delay: TimeInterval = immediate ? 0 : 0.08
+    private func scheduleRefreshContextAndCandidates(immediate: Bool = false) {
+        refreshWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, let pending = self.pendingPrediction else { return }
-            self.preferences.livePrediction = pending
-            self.lastPublishedPrediction = pending
-            self.pendingPrediction = nil
+            self?.refreshContextAndCandidates()
         }
-        publishWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
-    }
-
-    private func preserveCasing(_ word: String, matching literal: String) -> String {
-        guard !literal.isEmpty else { return word }
-        if literal == literal.uppercased(), literal.first?.isLetter == true {
-            return word.uppercased()
+        refreshWorkItem = work
+        if immediate {
+            DispatchQueue.main.async(execute: work)
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02, execute: work)
         }
-        if literal.first?.isUppercase == true {
-            return word.prefix(1).uppercased() + word.dropFirst()
-        }
-        return word
     }
 
     private func shouldAutoCapitalize(after context: String) -> Bool {
@@ -310,6 +294,15 @@ final class KeyboardViewController: UIInputViewController {
                     contextBefore: textDocumentProxy.documentContextBeforeInput
                 )
             }
+        }
+
+        // Like iOS, sentence punctuation commits a pending typo correction too.
+        if output.count == 1,
+           let scalar = output.unicodeScalars.first,
+           CharacterSet(charactersIn: ".,!?;:").contains(scalar),
+           textDocumentProxy.documentContextBeforeInput?.last?.isLetter == true {
+            updateWordContext(from: textDocumentProxy.documentContextBeforeInput ?? "")
+            _ = applyAutocorrectIfNeeded(trailing: "", trigger: "punctuation")
         }
 
         // Punctuation directly after a space: drop the space first, like iOS.
@@ -343,7 +336,7 @@ final class KeyboardViewController: UIInputViewController {
             latencyMilliseconds: milliseconds,
             metadata: output == text ? [:] : ["substituted": "true"]
         )
-        refreshContextAndCandidates()
+        scheduleRefreshContextAndCandidates()
     }
 
     private func handleDelete() {
@@ -366,14 +359,14 @@ final class KeyboardViewController: UIInputViewController {
             )
             lastAutocorrect = nil
             keyboardView.pendingCorrectionDisplay = nil
-            refreshContextAndCandidates()
+            scheduleRefreshContextAndCandidates()
             return
         }
         textDocumentProxy.deleteBackward()
         lastAutocorrect = nil
         keyboardView.pendingCorrectionDisplay = nil
         log(kind: .delete, rawContext: contextBefore)
-        refreshContextAndCandidates()
+        scheduleRefreshContextAndCandidates()
     }
 
     /// Sustained backspace switches to word deletion, matching iOS.
@@ -394,10 +387,11 @@ final class KeyboardViewController: UIInputViewController {
         }
         lastAutocorrect = nil
         log(kind: .delete, rawContext: contextBefore, metadata: ["deletedCharacters": String(deleted)])
-        refreshContextAndCandidates()
+        scheduleRefreshContextAndCandidates()
     }
 
     private func handleSpace() {
+        updateWordContext(from: textDocumentProxy.documentContextBeforeInput ?? "")
         if let context = textDocumentProxy.documentContextBeforeInput,
            context.hasSuffix(" "),
            context.dropLast().last.map({ $0.isLetter || $0.isNumber }) == true {
@@ -410,35 +404,50 @@ final class KeyboardViewController: UIInputViewController {
                 metadata: ["smartDoubleSpace": "true"]
             )
             lastAutocorrect = nil
-            refreshContextAndCandidates()
+            returnToLettersAfterSpaceIfNeeded()
+            scheduleRefreshContextAndCandidates()
             return
         }
 
         if applyAutocorrectIfNeeded(trailing: " ", trigger: "space") {
-            refreshContextAndCandidates()
+            returnToLettersAfterSpaceIfNeeded()
+            scheduleRefreshContextAndCandidates()
             return
         }
 
-        if applyInlineCompletionIfNeeded(trailing: " ", trigger: "space") {
-            refreshContextAndCandidates()
-            return
-        }
-
+        // Stock iOS does not accept a longer completion merely because space was
+        // pressed. Suggestions are accepted only by tapping them; space commits
+        // the literal unless autocorrect replaces a misspelling above.
         textDocumentProxy.insertText(" ")
         lastAutocorrect = nil
         log(kind: .insert, emittedText: " ", rawContext: textDocumentProxy.documentContextBeforeInput)
-        refreshContextAndCandidates()
+        returnToLettersAfterSpaceIfNeeded()
+        scheduleRefreshContextAndCandidates()
+    }
+
+    private func returnToLettersAfterSpaceIfNeeded() {
+        guard keyboardView.layoutMode == .numbers || keyboardView.layoutMode == .symbols else {
+            return
+        }
+        let previousLayout = keyboardView.layoutMode
+        keyboardView.layoutMode = .letters
+        log(
+            kind: .layoutChanged,
+            rawContext: textDocumentProxy.documentContextBeforeInput,
+            metadata: [
+                "layout": KeyboardLayoutMode.letters.rawValue,
+                "previousLayout": previousLayout.rawValue,
+                "reason": "space"
+            ]
+        )
     }
 
     private func handleReturn() {
-        if applyAutocorrectIfNeeded(trailing: "", trigger: "return") {
-            // Still insert newline after correction.
-        } else {
-            _ = applyInlineCompletionIfNeeded(trailing: "", trigger: "return")
-        }
+        updateWordContext(from: textDocumentProxy.documentContextBeforeInput ?? "")
+        _ = applyAutocorrectIfNeeded(trailing: "", trigger: "return")
         textDocumentProxy.insertText("\n")
         log(kind: .insert, emittedText: "\n", rawContext: textDocumentProxy.documentContextBeforeInput)
-        refreshContextAndCandidates()
+        scheduleRefreshContextAndCandidates()
     }
 
     private func applyAutocorrectIfNeeded(trailing: String, trigger: String) -> Bool {
@@ -456,7 +465,6 @@ final class KeyboardViewController: UIInputViewController {
         textDocumentProxy.insertText(correction.text + trailing)
         lastAutocorrect = (original, correction.text, Date())
         keyboardView.pendingCorrectionDisplay = (original: original, replacement: correction.text)
-        activeInlineCompletion = nil
         log(
             kind: .autocorrectAccepted,
             emittedText: correction.text,
@@ -464,33 +472,6 @@ final class KeyboardViewController: UIInputViewController {
             candidates: candidates,
             selectedCandidate: correction.text,
             metadata: ["literal": original, "trigger": trigger]
-        )
-        return true
-    }
-
-    private func applyInlineCompletionIfNeeded(trailing: String, trigger: String) -> Bool {
-        guard preferences.predictiveEnabled, !currentWord.isEmpty else { return false }
-        let candidates = languageDecoder.candidates(for: currentWord, previousWord: previousWord)
-        guard let completion = CorrectionFeedbackPolicy.inlineCompletion(
-            from: candidates,
-            literal: currentWord
-        ) else { return false }
-
-        let literal = currentWord
-        let output = preserveCasing(completion.text, matching: literal)
-        for _ in literal {
-            textDocumentProxy.deleteBackward()
-        }
-        textDocumentProxy.insertText(output + trailing)
-        lastAutocorrect = nil
-        activeInlineCompletion = nil
-        log(
-            kind: .inlinePredictionAccepted,
-            emittedText: output,
-            rawContext: textDocumentProxy.documentContextBeforeInput,
-            candidates: candidates,
-            selectedCandidate: output,
-            metadata: ["literal": literal, "trigger": trigger]
         )
         return true
     }
@@ -506,7 +487,6 @@ final class KeyboardViewController: UIInputViewController {
             // Keep the correction; clear the temporary chip.
             lastAutocorrect = nil
             keyboardView.pendingCorrectionDisplay = nil
-            publishLivePrediction(candidates: [])
             return
         }
 
@@ -526,7 +506,7 @@ final class KeyboardViewController: UIInputViewController {
             selectedCandidate: candidate,
             metadata: ["literal": literal]
         )
-        refreshContextAndCandidates()
+        scheduleRefreshContextAndCandidates()
     }
 
     private func revertAutocorrect() {
@@ -546,7 +526,7 @@ final class KeyboardViewController: UIInputViewController {
         )
         lastAutocorrect = nil
         keyboardView.pendingCorrectionDisplay = nil
-        refreshContextAndCandidates()
+        scheduleRefreshContextAndCandidates()
     }
 
     private func showEmojiPage(_ show: Bool) {
@@ -635,6 +615,11 @@ extension KeyboardViewController: ResearchKeyboardViewDelegate {
                 showEmojiPage(true)
             } else {
                 view.layoutMode = mode
+                log(
+                    kind: .layoutChanged,
+                    rawContext: textDocumentProxy.documentContextBeforeInput,
+                    metadata: ["layout": mode.rawValue]
+                )
             }
         case .nextKeyboard:
             advanceToNextInputMode()
@@ -661,6 +646,56 @@ extension KeyboardViewController: ResearchKeyboardViewDelegate {
             metadata: ["offset": String(offset)]
         )
     }
+
+    fileprivate func keyboardView(
+        _ view: ResearchKeyboardView,
+        didMoveCursorVerticallyBy lines: Int
+    ) {
+        guard lines != 0 else { return }
+        let direction = lines > 0 ? 1 : -1
+        for _ in 0..<abs(lines) {
+            let offset = verticalCursorOffset(direction: direction, keyboardWidth: view.bounds.width)
+            guard offset != 0 else { break }
+            textDocumentProxy.adjustTextPosition(byCharacterOffset: offset)
+            log(
+                kind: .cursorMoved,
+                rawContext: textDocumentProxy.documentContextBeforeInput,
+                metadata: [
+                    "offset": String(offset),
+                    "axis": "vertical",
+                    "direction": String(direction)
+                ]
+            )
+        }
+    }
+
+    /// Extensions have no cursor geometry API. Prefer explicit line breaks when
+    /// available; otherwise approximate a visual line from screen width.
+    private func verticalCursorOffset(direction: Int, keyboardWidth: CGFloat) -> Int {
+        let before = Array(textDocumentProxy.documentContextBeforeInput ?? "")
+        let after = Array(textDocumentProxy.documentContextAfterInput ?? "")
+        let currentColumn = before.reversed().prefix { $0 != "\n" }.count
+
+        if direction < 0,
+           let currentLineBreak = before.lastIndex(of: "\n") {
+            let previousEnd = currentLineBreak
+            let previousStart = before[..<previousEnd].lastIndex(of: "\n").map { $0 + 1 } ?? 0
+            let previousLength = previousEnd - previousStart
+            let target = previousStart + min(currentColumn, previousLength)
+            return target - before.count
+        }
+
+        if direction > 0,
+           let currentLineEnd = after.firstIndex(of: "\n") {
+            let nextStart = currentLineEnd + 1
+            let nextEnd = after[nextStart...].firstIndex(of: "\n") ?? after.endIndex
+            let nextLength = nextEnd - nextStart
+            return nextStart + min(currentColumn, nextLength)
+        }
+
+        let estimatedCharactersPerLine = max(18, Int((keyboardWidth - 32) / 8.2))
+        return direction * estimatedCharactersPerLine
+    }
 }
 
 extension KeyboardViewController: EmojiKeyboardViewDelegate {
@@ -680,7 +715,7 @@ extension KeyboardViewController: EmojiKeyboardViewDelegate {
             frame: keyFrame,
             metadata: ["source": "emoji", "touchX": String(Double(location.x)), "touchY": String(Double(location.y))]
         )
-        refreshContextAndCandidates()
+        scheduleRefreshContextAndCandidates()
     }
 
     func emojiKeyboardDidTapLetters(_ view: EmojiKeyboardView) {
@@ -708,9 +743,6 @@ private final class ResearchKeyboardView: UIView {
 
     weak var delegate: ResearchKeyboardViewDelegate?
     var candidates: [String] = [] { didSet { relayoutIfChanged(oldValue != candidates) } }
-    /// Full predicted word shown as the primary inline completion.
-    var inlinePredictionText: String? { didSet { if oldValue != inlinePredictionText { setNeedsDisplay() } } }
-    var inlinePredictionSuffix: String = "" { didSet { if oldValue != inlinePredictionSuffix { setNeedsDisplay() } } }
     /// Temporary autocorrect underline chip (original ↔ replacement).
     var pendingCorrectionDisplay: (original: String, replacement: String)? {
         didSet {
@@ -732,6 +764,9 @@ private final class ResearchKeyboardView: UIView {
     var capsLockEnabled = true
     var showsCandidateBar = true { didSet { relayoutIfChanged(oldValue != showsCandidateBar) } }
     var isLandscape = false { didSet { relayoutIfChanged(oldValue != isLandscape) } }
+    var deviceClassScale: CGFloat = 0.5 {
+        didSet { relayoutIfChanged(abs(oldValue - deviceClassScale) > 0.001) }
+    }
     var oneHandedMode: OneHandedMode = .off { didSet { relayoutIfChanged(oldValue != oneHandedMode) } }
     var isUppercase: Bool { shiftState != .off }
 
@@ -739,6 +774,7 @@ private final class ResearchKeyboardView: UIView {
     private var candidateFrames: [(String, CGRect)] = []
     private var expandFrame: CGRect?
     private var activeTouch: UITouch?
+    private var secondaryTouchActions: [ObjectIdentifier: KeyboardAction] = [:]
     private var activeAction: KeyboardAction?
     private var previewKey: RenderedKey?
     private var alternatesKey: RenderedKey?
@@ -748,17 +784,21 @@ private final class ResearchKeyboardView: UIView {
     private var oneHandedMenuFrames: [(OneHandedMode, CGRect)] = []
     private var showsOneHandedMenu = false
     private var trackpadOrigin: CGPoint?
+    private var trackpadHorizontalRemainder: CGFloat = 0
+    private var trackpadVerticalRemainder: CGFloat = 0
     private var isTrackpadActive = false
-    private var spaceStart: CGPoint?
-    private var didScrubSpace = false
     private var longPressTimer: Timer?
     private var deleteTimer: Timer?
     private var deleteRepeatCount = 0
     private var didRepeatDelete = false
+    private var momentaryLayoutOrigin: KeyboardLayoutMode?
+    private var didSlideFromLayoutKey = false
 
     private var candidateBarHeight: CGFloat {
         guard showsCandidateBar else { return 0 }
-        return isLandscape ? 34 : 42
+        return isLandscape
+            ? (32 + deviceClassScale * 3)
+            : (40 + deviceClassScale * 4)
     }
 
     private let haptic = UIImpactFeedbackGenerator(style: .light)
@@ -779,7 +819,7 @@ private final class ResearchKeyboardView: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        isMultipleTouchEnabled = false
+        isMultipleTouchEnabled = true
         clipsToBounds = false
         backgroundColor = UIColor { traits in
             traits.userInterfaceStyle == .dark
@@ -825,9 +865,18 @@ private final class ResearchKeyboardView: UIView {
     // MARK: Touch handling
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if let activeTouch {
+            for touch in touches where touch !== activeTouch {
+                updateSecondaryTouch(touch)
+            }
+            return
+        }
+
         guard let touch = touches.first else { return }
         activeTouch = touch
-        didScrubSpace = false
+        for secondary in touches where secondary !== touch {
+            updateSecondaryTouch(secondary)
+        }
         let point = touch.location(in: self)
 
         if showsOneHandedMenu {
@@ -864,10 +913,22 @@ private final class ResearchKeyboardView: UIView {
 
         activeAction = key.action
         updatePreview(for: key)
+
+        // iOS momentary layout gesture: hold 123 / #+=, slide to a symbol,
+        // release to insert it, then return to the originating layout.
+        if case .changeLayout(let target) = key.action, target != .emoji {
+            momentaryLayoutOrigin = layoutMode
+            didSlideFromLayoutKey = false
+            layoutMode = target
+            rebuildLayout()
+            haptic.impactOccurred(intensity: 0.45)
+            setNeedsDisplay()
+            return
+        }
+
         scheduleLongPress(for: key)
 
         if key.action == .space {
-            spaceStart = point
             trackpadOrigin = point
         } else if key.action == .delete {
             didRepeatDelete = false
@@ -883,7 +944,11 @@ private final class ResearchKeyboardView: UIView {
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let touch = touches.first else { return }
+        for touch in touches where touch !== activeTouch {
+            updateSecondaryTouch(touch)
+        }
+        guard let activeTouch, touches.contains(activeTouch) else { return }
+        let touch = activeTouch
         let point = touch.location(in: self)
 
         if alternatesKey != nil {
@@ -898,21 +963,43 @@ private final class ResearchKeyboardView: UIView {
 
         if isTrackpadActive {
             guard let origin = trackpadOrigin else { return }
-            let dx = point.x - origin.x
-            if abs(dx) >= 8 {
-                delegate?.keyboardView(self, didMoveCursorBy: Int(dx / 8))
-                trackpadOrigin = point
+            trackpadHorizontalRemainder += point.x - origin.x
+            trackpadVerticalRemainder += point.y - origin.y
+            trackpadOrigin = point
+
+            let horizontalStep: CGFloat = 4.5
+            let horizontalCharacters = Int(trackpadHorizontalRemainder / horizontalStep)
+            if horizontalCharacters != 0 {
+                delegate?.keyboardView(self, didMoveCursorBy: horizontalCharacters)
+                trackpadHorizontalRemainder -= CGFloat(horizontalCharacters) * horizontalStep
+            }
+
+            let verticalStep: CGFloat = 18
+            let verticalLines = Int(trackpadVerticalRemainder / verticalStep)
+            if verticalLines != 0 {
+                delegate?.keyboardView(self, didMoveCursorVerticallyBy: verticalLines)
+                trackpadVerticalRemainder -= CGFloat(verticalLines) * verticalStep
+            }
+            return
+        }
+
+        if momentaryLayoutOrigin != nil {
+            if let key = keyAt(point), isTextAction(key.action) {
+                if activeAction != key.action {
+                    activeAction = key.action
+                    didSlideFromLayoutKey = true
+                    updatePreview(for: key)
+                    haptic.impactOccurred(intensity: 0.35)
+                    setNeedsDisplay()
+                }
             }
             return
         }
 
         if case .space = activeAction {
-            if let start = spaceStart, abs(point.x - start.x) > 14 {
-                didScrubSpace = true
-                cancelLongPress()
-                delegate?.keyboardView(self, didMoveCursorBy: Int((point.x - start.x) / 14))
-                spaceStart = point
-            }
+            // Moving before the hold completes must not cancel trackpad entry.
+            // Keep following the finger so activation begins without a jump.
+            trackpadOrigin = point
             return
         }
 
@@ -929,13 +1016,21 @@ private final class ResearchKeyboardView: UIView {
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        for touch in touches where touch !== activeTouch {
+            let identifier = ObjectIdentifier(touch)
+            if let action = secondaryTouchActions.removeValue(forKey: identifier) {
+                UIDevice.current.playInputClick()
+                delegate?.keyboardView(self, didTrigger: action, touch: touch)
+            }
+        }
+        guard let activeTouch, touches.contains(activeTouch) else { return }
         cancelLongPress()
         deleteTimer?.invalidate()
         deleteTimer = nil
 
         if alternatesKey != nil, selectedAlternate < alternateOptions.count {
             let option = alternateOptions[selectedAlternate]
-            let touch = touches.first ?? activeTouch
+            let touch = activeTouch
             clearAlternates()
             clearTouch()
             UIDevice.current.playInputClick()
@@ -954,16 +1049,38 @@ private final class ResearchKeyboardView: UIView {
             return
         }
         guard let action = activeAction else { return }
-        if case .space = action, didScrubSpace { return }
+
+        if let origin = momentaryLayoutOrigin {
+            if didSlideFromLayoutKey, isTextAction(action) {
+                UIDevice.current.playInputClick()
+                delegate?.keyboardView(self, didTrigger: action, touch: activeTouch)
+                layoutMode = origin
+                rebuildLayout()
+            } else {
+                UIDevice.current.playInputClick()
+                delegate?.keyboardView(self, didTrigger: action, touch: activeTouch)
+            }
+            // A simple tap leaves the newly selected layout active.
+            return
+        }
+
         if action == .delete, didRepeatDelete { return }
 
         UIDevice.current.playInputClick()
-        delegate?.keyboardView(self, didTrigger: action, touch: touches.first ?? activeTouch)
+        delegate?.keyboardView(self, didTrigger: action, touch: activeTouch)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        for touch in touches {
+            secondaryTouchActions.removeValue(forKey: ObjectIdentifier(touch))
+        }
+        guard let activeTouch, touches.contains(activeTouch) else { return }
         cancelLongPress()
         deleteTimer?.invalidate()
+        if let origin = momentaryLayoutOrigin {
+            layoutMode = origin
+            rebuildLayout()
+        }
         clearAlternates()
         clearTouch()
         setNeedsDisplay()
@@ -973,12 +1090,14 @@ private final class ResearchKeyboardView: UIView {
         activeTouch = nil
         activeAction = nil
         previewKey = nil
-        spaceStart = nil
         trackpadOrigin = nil
+        trackpadHorizontalRemainder = 0
+        trackpadVerticalRemainder = 0
         isTrackpadActive = false
         didRepeatDelete = false
-        didScrubSpace = false
         deleteRepeatCount = 0
+        momentaryLayoutOrigin = nil
+        didSlideFromLayoutKey = false
     }
 
     private func clearAlternates() {
@@ -1008,6 +1127,11 @@ private final class ResearchKeyboardView: UIView {
         switch key.action {
         case .space:
             isTrackpadActive = true
+            if let activeTouch {
+                trackpadOrigin = activeTouch.location(in: self)
+            }
+            trackpadHorizontalRemainder = 0
+            trackpadVerticalRemainder = 0
             haptic.impactOccurred(intensity: 0.8)
         case .nextKeyboard:
             showsOneHandedMenu = true
@@ -1029,12 +1153,51 @@ private final class ResearchKeyboardView: UIView {
 
     private func beginDeleteRepeat() {
         didRepeatDelete = true
-        deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.09, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            self.deleteRepeatCount += 1
-            // Sustained hold escalates from characters to whole words, like iOS.
-            let action: KeyboardAction = self.deleteRepeatCount > 14 ? .deleteWord : .delete
-            self.delegate?.keyboardView(self, didTrigger: action, touch: self.activeTouch)
+        deleteRepeatCount = 0
+        performDeleteRepeatTick()
+    }
+
+    private func performDeleteRepeatTick() {
+        guard activeAction == .delete, activeTouch != nil else { return }
+        deleteRepeatCount += 1
+
+        let action: KeyboardAction
+        let nextInterval: TimeInterval
+        switch deleteRepeatCount {
+        case 1...6:
+            action = .delete
+            nextInterval = 0.10
+        case 7...16:
+            action = .delete
+            nextInterval = 0.065
+        default:
+            action = .deleteWord
+            nextInterval = 0.18
+        }
+        delegate?.keyboardView(self, didTrigger: action, touch: activeTouch)
+        deleteTimer = Timer.scheduledTimer(withTimeInterval: nextInterval, repeats: false) {
+            [weak self] _ in
+            self?.performDeleteRepeatTick()
+        }
+    }
+
+    /// Track overlapping thumb taps independently and emit on release, preserving
+    /// normal typing order instead of inserting secondary taps on touch-down.
+    private func updateSecondaryTouch(_ touch: UITouch) {
+        let point = touch.location(in: self)
+        if let candidate = candidateFrames.first(where: { $0.1.contains(point) }) {
+            secondaryTouchActions[ObjectIdentifier(touch)] = .candidate(candidate.0)
+            return
+        }
+        guard let key = keyAt(point) else {
+            secondaryTouchActions.removeValue(forKey: ObjectIdentifier(touch))
+            return
+        }
+        switch key.action {
+        case .text, .space, .delete, .returnKey:
+            secondaryTouchActions[ObjectIdentifier(touch)] = key.action
+        default:
+            secondaryTouchActions.removeValue(forKey: ObjectIdentifier(touch))
         }
     }
 
@@ -1082,13 +1245,18 @@ private final class ResearchKeyboardView: UIView {
         expandFrame = nil
 
         let content = contentRect
-        let side: CGFloat = 3
-        let gap: CGFloat = isLandscape ? 5 : 6
-        let rowGap: CGFloat = isLandscape ? 7 : 12
-        let bottomPad: CGFloat = isLandscape ? 3 : 4
+        let t = deviceClassScale
+        // Scale key spacing with device class so proportions stay iOS-like.
+        let side: CGFloat = isLandscape ? (2.5 + t * 0.8) : (3 + t * 1.2)
+        let gap: CGFloat = isLandscape ? (4.2 + t * 1.1) : (5.2 + t * 1.6)
+        let rowGap: CGFloat = isLandscape ? (6.0 + t * 1.6) : (9.0 + t * 2.8)
+        let bottomPad: CGFloat = isLandscape ? 2.5 : 4
         let availableHeight = content.height - candidateBarHeight - bottomPad
-        let rowHeight = max(32, (availableHeight - rowGap * 3) / 4)
-        let top = candidateBarHeight + (isLandscape ? 5 : 8)
+        let minRow: CGFloat = isLandscape ? 31.5 : 39
+        let maxRow: CGFloat = isLandscape ? 42 : 52
+        let proposedRow = (availableHeight - rowGap * 3) / 4
+        let rowHeight = Swift.min(maxRow, Swift.max(minRow, proposedRow))
+        let top = candidateBarHeight + (isLandscape ? 4.5 : 7)
 
         let rows: [[(String, KeyboardAction, CGFloat, Bool)]]
         switch layoutMode {
@@ -1148,8 +1316,13 @@ private final class ResearchKeyboardView: UIView {
 
         if showsCandidateBar {
             if let correction = pendingCorrectionDisplay {
-                // Temporary autocorrect chip: quoted original | underlined replacement
-                let items = ["“\(correction.original)”", correction.replacement]
+                // Preserve the three QuickType slots during correction feedback.
+                var items = ["“\(correction.original)”", correction.replacement]
+                if let third = candidates.first(where: {
+                    $0 != correction.original && $0 != correction.replacement
+                }) {
+                    items.append(third)
+                }
                 let candidateWidth = content.width / CGFloat(items.count)
                 candidateFrames = items.enumerated().map {
                     ($0.element, CGRect(
@@ -1260,7 +1433,6 @@ private final class ResearchKeyboardView: UIView {
             }
 
             let isCorrectionReplacement = pendingCorrectionDisplay?.replacement == candidate.0
-            let isInlinePrimary = inlinePredictionText == candidate.0 && pendingCorrectionDisplay == nil
 
             if isCorrectionReplacement {
                 // Temporary gray/blue outline under the autocorrected word.
@@ -1281,8 +1453,6 @@ private final class ResearchKeyboardView: UIView {
                 )
                 UIColor.secondaryLabel.setFill()
                 UIBezierPath(roundedRect: underline, cornerRadius: 1.2).fill()
-            } else if isInlinePrimary, !inlinePredictionSuffix.isEmpty {
-                drawInlinePredictionCandidate(candidate.0, suffix: inlinePredictionSuffix, in: candidate.1)
             } else {
                 drawText(
                     candidate.0,
@@ -1297,27 +1467,6 @@ private final class ResearchKeyboardView: UIView {
             UIColor.systemRed.setFill()
             context.fillEllipse(in: CGRect(x: bounds.width - 11, y: 6, width: 5, height: 5))
         }
-    }
-
-    /// Renders the typed stem normally and the predicted suffix in gray.
-    private func drawInlinePredictionCandidate(_ full: String, suffix: String, in rect: CGRect) {
-        let stem = String(full.dropLast(suffix.count))
-        let stemFont = UIFont.systemFont(ofSize: 17)
-        let suffixFont = UIFont.systemFont(ofSize: 17)
-        let stemSize = (stem as NSString).size(withAttributes: [.font: stemFont])
-        let suffixSize = (suffix as NSString).size(withAttributes: [.font: suffixFont])
-        let total = stemSize.width + suffixSize.width
-        var x = rect.midX - total / 2
-        let y = rect.midY - stemSize.height / 2
-        (stem as NSString).draw(
-            at: CGPoint(x: x, y: y),
-            withAttributes: [.font: stemFont, .foregroundColor: keyLabelColor]
-        )
-        x += stemSize.width
-        (suffix as NSString).draw(
-            at: CGPoint(x: x, y: y),
-            withAttributes: [.font: suffixFont, .foregroundColor: UIColor.secondaryLabel]
-        )
     }
 
     private func draw(key: RenderedKey, context: CGContext) {

@@ -32,6 +32,7 @@ public enum KeyboardEventKind: String, Codable, Sendable {
     case delete
     case candidateShown
     case suggestionAccepted
+    // Legacy schema-v5 value retained only to decode previously recorded events.
     case inlinePredictionAccepted
     case autocorrectAccepted
     case autocorrectReverted
@@ -159,44 +160,6 @@ public struct CodableRect: Codable, Hashable, Sendable {
     }
 }
 
-/// Cross-process UI state so the TypingResearch text field can render gray
-/// inline predictions and a temporary autocorrect underline.
-public struct KeyboardLivePredictionState: Codable, Equatable, Sendable {
-    public var contextBeforeCaret: String
-    public var currentWord: String
-    public var inlineSuffix: String
-    public var inlineFullWord: String?
-    public var correctionOriginal: String?
-    public var correctionReplacement: String?
-    public var correctionExpires: Date?
-    public var updatedAt: Date
-
-    public static let empty = KeyboardLivePredictionState(
-        contextBeforeCaret: "",
-        currentWord: "",
-        inlineSuffix: "",
-        inlineFullWord: nil,
-        correctionOriginal: nil,
-        correctionReplacement: nil,
-        correctionExpires: nil,
-        updatedAt: Date(timeIntervalSince1970: 0)
-    )
-
-    public var hasActiveCorrection: Bool {
-        guard let expires = correctionExpires,
-              let original = correctionOriginal,
-              let replacement = correctionReplacement,
-              !original.isEmpty,
-              !replacement.isEmpty
-        else { return false }
-        return expires > Date()
-    }
-
-    public var hasInlinePrediction: Bool {
-        !inlineSuffix.isEmpty
-    }
-}
-
 public final class SharedKeyboardPreferences {
     public static let shared = SharedKeyboardPreferences()
 
@@ -212,7 +175,6 @@ public final class SharedKeyboardPreferences {
         static let smartPunctuation = "keyboard.smartPunctuation"
         static let oneHandedMode = "keyboard.oneHandedMode"
         static let recentEmoji = "keyboard.recentEmoji"
-        static let livePrediction = "keyboard.livePredictionState"
     }
 
     /// Toggles that default to on, mirroring Settings → General → Keyboard.
@@ -228,9 +190,17 @@ public final class SharedKeyboardPreferences {
     private let defaults: UserDefaults
 
     public init(defaults: UserDefaults? = nil) {
-        self.defaults = defaults
-            ?? UserDefaults(suiteName: AdaptiveKeyboardConstants.appGroup)
-            ?? .standard
+        let sharedDefaults: UserDefaults? = {
+            // Avoid CFPreferences warnings when the App Group container is not yet
+            // available in this process (common during extension startup/simulator).
+            guard FileManager.default.containerURL(
+                forSecurityApplicationGroupIdentifier: AdaptiveKeyboardConstants.appGroup
+            ) != nil else {
+                return nil
+            }
+            return UserDefaults(suiteName: AdaptiveKeyboardConstants.appGroup)
+        }()
+        self.defaults = defaults ?? sharedDefaults ?? .standard
         if self.defaults.object(forKey: Key.retentionDays) == nil {
             self.defaults.set(30, forKey: Key.retentionDays)
         }
@@ -286,27 +256,6 @@ public final class SharedKeyboardPreferences {
         var recents = recentEmoji.filter { $0 != emoji }
         recents.insert(emoji, at: 0)
         recentEmoji = recents
-    }
-
-    /// Live inline-prediction / autocorrect-underline state for the containing app UI.
-    public var livePrediction: KeyboardLivePredictionState {
-        get {
-            guard let data = defaults.data(forKey: Key.livePrediction),
-                  let decoded = try? JSONDecoder().decode(KeyboardLivePredictionState.self, from: data)
-            else {
-                return .empty
-            }
-            return decoded
-        }
-        set {
-            if let data = try? JSONEncoder().encode(newValue) {
-                defaults.set(data, forKey: Key.livePrediction)
-            }
-        }
-    }
-
-    public func clearLivePrediction() {
-        livePrediction = .empty
     }
 
     /// Stage-1 logging is always on unless the user pauses it.
@@ -602,11 +551,13 @@ public struct LocalLanguageDecoder: Sendable {
         }
 
         for word in Self.vocabulary {
-            let distance = editDistance(literal, word)
+            let rawDistance = editDistance(literal, word)
+            let distance = isSingleAdjacentTransposition(literal, word) ? 1 : rawDistance
             guard distance > 0, distance <= 2 else { continue }
-            // Prefer same-length edits (autocorrect-style) over insert/delete noise.
-            let lengthPenalty = word.count == literal.count ? 0.0 : 0.6
-            let score = 2.8 - Double(distance) - lengthPenalty
+            // Permit confident one-character insertion/deletion corrections while
+            // still preferring same-length substitutions/transpositions.
+            let lengthPenalty = word.count == literal.count ? 0.0 : 0.25
+            let score = 3.4 - Double(distance) - lengthPenalty
             results.append(
                 DecoderCandidate(
                     text: word,
@@ -687,6 +638,18 @@ public struct LocalLanguageDecoder: Sendable {
         }
         return previous[right.count]
     }
+
+    private func isSingleAdjacentTransposition(_ lhs: String, _ rhs: String) -> Bool {
+        let left = Array(lhs)
+        let right = Array(rhs)
+        guard left.count == right.count else { return false }
+        let differences = left.indices.filter { left[$0] != right[$0] }
+        guard differences.count == 2,
+              differences[1] == differences[0] + 1 else { return false }
+        let first = differences[0]
+        let second = differences[1]
+        return left[first] == right[second] && left[second] == right[first]
+    }
 }
 
 /// Long-press alternates (diacritics and punctuation variants) shown above a held key.
@@ -760,47 +723,28 @@ public enum SmartPunctuation {
 }
 
 public enum CorrectionFeedbackPolicy {
-    /// Prefer same-length corrections that clearly beat the literal (e.g. teh → the).
+    /// Correct confident substitutions, transpositions, and one-character
+    /// insertion/deletion typos without treating prefix completions as corrections.
     public static func automaticCorrection(
         from candidates: [DecoderCandidate],
         literal: String
     ) -> DecoderCandidate? {
         let lowered = literal.lowercased()
+        guard lowered.count >= 3 else { return nil }
         let literalScore = candidates.first(where: \.isLiteral)?.score ?? 0
         return candidates.first {
-            !$0.isLiteral
-                && $0.text.count == lowered.count
-                && $0.score >= literalScore + 0.5
+            guard !$0.isLiteral,
+                  abs($0.text.count - lowered.count) <= 1,
+                  $0.score >= literalScore + 0.35 else {
+                return false
+            }
+            // "hel" → "hello" is completion; "helo" → "hello" is correction.
+            if $0.text.count > lowered.count,
+               $0.text.lowercased().hasPrefix(lowered) {
+                return false
+            }
+            return true
         }
     }
 
-    /// Longer prefix completion used for gray inline prediction / space-to-accept.
-    public static func inlineCompletion(
-        from candidates: [DecoderCandidate],
-        literal: String
-    ) -> DecoderCandidate? {
-        let lowered = literal.lowercased()
-        guard !lowered.isEmpty else { return nil }
-        return candidates.first {
-            !$0.isLiteral
-                && $0.text.lowercased().hasPrefix(lowered)
-                && $0.text.count > lowered.count
-                && $0.score >= 3.0
-        }
-    }
-
-    public static func inlineSuffix(for completion: DecoderCandidate, literal: String) -> String {
-        let lowered = literal.lowercased()
-        let full = completion.text
-        guard full.lowercased().hasPrefix(lowered), full.count > lowered.count else { return "" }
-        let suffix = String(full.dropFirst(lowered.count))
-        // Preserve the capitalization style of what the user already typed.
-        if literal == literal.uppercased(), literal.first?.isLetter == true {
-            return suffix.uppercased()
-        }
-        if literal.first?.isUppercase == true {
-            return suffix
-        }
-        return suffix
-    }
 }
