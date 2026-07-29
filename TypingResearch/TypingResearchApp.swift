@@ -21,21 +21,33 @@ struct TypingResearchApp: App {
 
 struct RootView: View {
     var sessionManager: SessionManager
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        if sessionManager.isSessionActive || sessionManager.isSessionComplete {
-            SessionView(sessionManager: sessionManager)
-        } else {
-            TabView {
-                AdaptiveKeyboardHomeView()
-                    .tabItem {
-                        Label("Keyboard", systemImage: "keyboard")
-                    }
+        Group {
+            if sessionManager.isSessionActive || sessionManager.isSessionComplete {
+                SessionView(sessionManager: sessionManager)
+            } else {
+                TabView {
+                    AdaptiveKeyboardHomeView()
+                        .tabItem {
+                            Label("Keyboard", systemImage: "keyboard")
+                        }
 
-                ParticipantSetupView(sessionManager: sessionManager)
-                    .tabItem {
-                        Label("Study", systemImage: "chart.xyaxis.line")
-                    }
+                    ParticipantSetupView(sessionManager: sessionManager)
+                        .tabItem {
+                            Label("Study", systemImage: "chart.xyaxis.line")
+                        }
+                }
+            }
+        }
+        .task {
+            _ = try? await KeyboardEventUploader.shared.uploadIfDue()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task {
+                _ = try? await KeyboardEventUploader.shared.uploadIfDue()
             }
         }
     }

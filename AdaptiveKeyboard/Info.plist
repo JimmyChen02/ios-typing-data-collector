@@ -22,6 +22,10 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>SharedKeychainAccessGroup</key>
 	<string>$(AppIdentifierPrefix)edu.cornell.ab3235.typingresearch.shared</string>
+	<key>SupabaseProjectURL</key>
+	<string>$(SUPABASE_PROJECT_URL)</string>
+	<key>SupabasePublishableKey</key>
+	<string>$(SUPABASE_PUBLISHABLE_KEY)</string>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionAttributes</key>

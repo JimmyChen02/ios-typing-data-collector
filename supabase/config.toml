@@ -1,0 +1,4 @@
+project_id = "typing-research-keyboard"
+
+[functions.ingest-keyboard-events]
+verify_jwt = true

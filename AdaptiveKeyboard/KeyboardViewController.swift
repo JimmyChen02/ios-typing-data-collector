@@ -30,9 +30,23 @@ private final class KeyboardAccessibilityElement: UIAccessibilityElement {
 }
 
 private protocol ResearchKeyboardViewDelegate: AnyObject {
-    func keyboardView(_ view: ResearchKeyboardView, didTrigger action: KeyboardAction, touch: UITouch?)
-    func keyboardView(_ view: ResearchKeyboardView, didMoveCursorBy offset: Int)
-    func keyboardView(_ view: ResearchKeyboardView, didMoveCursorVerticallyBy lines: Int)
+    func keyboardView(
+        _ view: ResearchKeyboardView,
+        didTrigger action: KeyboardAction,
+        touch: UITouch?,
+        gesture: TouchGesture?
+    )
+    func keyboardView(
+        _ view: ResearchKeyboardView,
+        didMoveCursorBy offset: Int,
+        gesture: TouchGesture?
+    )
+    func keyboardView(
+        _ view: ResearchKeyboardView,
+        didMoveCursorVerticallyBy lines: Int,
+        gesture: TouchGesture?
+    )
+    func keyboardView(_ view: ResearchKeyboardView, didComplete gesture: TouchGesture)
 }
 
 /// Stage-3 iOS-replica keyboard: QWERTY + emoji page, alternates, one-handed, trackpad, logging.
@@ -46,10 +60,24 @@ final class KeyboardViewController: UIInputViewController {
     private var lastKnownContext: String?
     private var currentWord = ""
     private var previousWord: String?
-    private var lastAutocorrect: (original: String, replacement: String, timestamp: Date)?
+    private var lastAutocorrect: (
+        original: String,
+        replacement: String,
+        timestamp: Date,
+        correctionID: UUID,
+        offerID: UUID?
+    )?
     private var lastLoggedCandidateTexts: [String] = []
+    private var currentPredictionOffer: PredictionOffer?
+    private var currentPredictionOfferUptime: Double?
+    private var resolvedPredictionOfferIDs: Set<UUID> = []
+    private var sequenceNumber: UInt64 = 0
+    private var lastEventUptime: Double?
+    private var lastLayoutSignature: String?
+    private var currentLayoutSnapshotID: UUID?
     private var refreshWorkItem: DispatchWorkItem?
     private var hasAppliedInitialLayout = false
+    private var lastUploadDueCheck = Date.distantPast
     private let haptic = UIImpactFeedbackGenerator(style: .light)
 
     private var isLandscape: Bool {
@@ -123,6 +151,13 @@ final class KeyboardViewController: UIInputViewController {
         super.viewWillAppear(animated)
         hasAppliedInitialLayout = false
         sessionID = UUID()
+        sequenceNumber = 0
+        lastEventUptime = nil
+        lastLayoutSignature = nil
+        currentLayoutSnapshotID = nil
+        currentPredictionOffer = nil
+        currentPredictionOfferUptime = nil
+        resolvedPredictionOfferIDs.removeAll()
         keyboardView.needsInputModeSwitchKey = needsInputModeSwitchKey
         emojiView.showsGlobeKey = needsInputModeSwitchKey
         emojiView.reloadCategories()
@@ -156,10 +191,18 @@ final class KeyboardViewController: UIInputViewController {
         let context = textDocumentProxy.documentContextBeforeInput
         if let lastKnownContext,
            let context,
-           context != lastKnownContext,
-           !context.hasPrefix(lastKnownContext),
-           !lastKnownContext.hasPrefix(context) {
-            log(kind: .externalMutation, rawContext: context)
+           context != lastKnownContext {
+            log(
+                kind: .externalMutation,
+                rawContext: context,
+                editOperation: EditOperation(
+                    type: .unknown,
+                    source: .external,
+                    trigger: .textDidChange,
+                    contextBefore: lastKnownContext,
+                    contextAfter: context
+                )
+            )
             lastAutocorrect = nil
         }
         // Coalesce rapid callbacks while the user is typing quickly.
@@ -214,7 +257,23 @@ final class KeyboardViewController: UIInputViewController {
         }
 
         if !preferences.predictiveEnabled {
+            if let previousOffer = currentPredictionOffer,
+               !resolvedPredictionOfferIDs.contains(previousOffer.id) {
+                log(
+                    kind: .candidateShown,
+                    rawContext: context,
+                    metadata: ["offerSupersededBy": "predictiveDisabled"],
+                    predictionOutcome: PredictionOutcome(
+                        offerID: previousOffer.id,
+                        kind: .ignored,
+                        occurredAt: Date()
+                    )
+                )
+            }
+            currentPredictionOffer = nil
+            currentPredictionOfferUptime = nil
             keyboardView.candidates = []
+            keyboardView.autocorrectionPreview = nil
             if let autocorrect = lastAutocorrect,
                Date().timeIntervalSince(autocorrect.timestamp) < 4 {
                 keyboardView.pendingCorrectionDisplay = (
@@ -226,24 +285,92 @@ final class KeyboardViewController: UIInputViewController {
             }
             return
         }
-        let candidates = languageDecoder.candidates(for: currentWord, previousWord: previousWord)
+        let decodeStartedAt = ProcessInfo.processInfo.systemUptime
+        let decodedCandidates = languageDecoder.candidates(
+            for: currentWord,
+            previousWord: previousWord
+        )
+        let decodeLatencyMilliseconds =
+            (ProcessInfo.processInfo.systemUptime - decodeStartedAt) * 1_000
+        let candidates = decodedCandidates.enumerated().map { index, candidate in
+            DecoderCandidate(
+                text: candidate.text,
+                score: candidate.score,
+                languageScore: candidate.languageScore,
+                isLiteral: candidate.isLiteral,
+                stableID: candidate.stableID
+                    ?? "symspell:\(ContextPrivacy.hash(candidate.text.lowercased()) ?? candidate.text)",
+                rank: index + 1
+            )
+        }
         let texts = candidates.map(\.text)
         keyboardView.candidates = texts
 
+        if let previousOffer = currentPredictionOffer,
+           !resolvedPredictionOfferIDs.contains(previousOffer.id) {
+            log(
+                kind: .candidateShown,
+                rawContext: context,
+                metadata: ["offerSuperseded": "true"],
+                predictionOutcome: PredictionOutcome(
+                    offerID: previousOffer.id,
+                    kind: .replaced,
+                    occurredAt: Date()
+                )
+            )
+        }
+        let offer = PredictionOffer(
+            candidates: candidates,
+            literalCandidateID: candidates.first(where: \.isLiteral)?.stableID,
+            model: modelProvenance,
+            offeredAt: Date()
+        )
+        currentPredictionOffer = offer
+        currentPredictionOfferUptime = ProcessInfo.processInfo.systemUptime
+
+        if preferences.autocorrectionEnabled,
+           !currentWord.isEmpty,
+           let correction = CorrectionFeedbackPolicy.automaticCorrection(
+            from: candidates,
+            literal: currentWord
+           ) {
+            keyboardView.autocorrectionPreview = (
+                literal: currentWord,
+                replacement: correction.text
+            )
+        } else {
+            keyboardView.autocorrectionPreview = nil
+        }
+
         if let autocorrect = lastAutocorrect,
-           Date().timeIntervalSince(autocorrect.timestamp) < 4 {
+           Date().timeIntervalSince(autocorrect.timestamp) < 4,
+           context.hasSuffix(autocorrect.replacement)
+            || context.hasSuffix("\(autocorrect.replacement) ") {
             keyboardView.pendingCorrectionDisplay = (
                 original: autocorrect.original,
                 replacement: autocorrect.replacement
             )
         } else {
+            lastAutocorrect = nil
             keyboardView.pendingCorrectionDisplay = nil
         }
 
-        if !texts.isEmpty, texts != lastLoggedCandidateTexts {
-            lastLoggedCandidateTexts = texts
-            log(kind: .candidateShown, rawContext: context, candidates: candidates)
-        }
+        lastLoggedCandidateTexts = texts
+        log(
+            kind: .candidateShown,
+            rawContext: context,
+            candidates: candidates,
+            latencyMilliseconds: decodeLatencyMilliseconds,
+            predictionOffer: offer,
+            predictionOutcome: candidates.isEmpty
+                ? nil
+                : PredictionOutcome(
+                    offerID: offer.id,
+                    kind: .previewShown,
+                    occurredAt: Date()
+                ),
+            decoderMilliseconds: decodeLatencyMilliseconds
+        )
     }
 
     private func updateWordContext(from context: String) {
@@ -280,9 +407,19 @@ final class KeyboardViewController: UIInputViewController {
         return trimmed.last.map { ".!?".contains($0) } ?? false
     }
 
-    private func handleText(_ text: String, touch: UITouch?) {
-        let start = ContinuousClock.now
+    private func handleText(_ text: String, touch: UITouch?, gesture: TouchGesture?) {
+        let actionStartedAt = gesture?.samples.first?.monotonicTimestamp
+            ?? ProcessInfo.processInfo.systemUptime
+        let contextBefore = textDocumentProxy.documentContextBeforeInput
+        let mutationStartedAt = ProcessInfo.processInfo.systemUptime
         var output = text
+
+        // Undo feedback is only "immediate." Starting another token dismisses
+        // the old correction so it cannot hide the next pending preview.
+        if lastAutocorrect != nil {
+            lastAutocorrect = nil
+            keyboardView.pendingCorrectionDisplay = nil
+        }
 
         if preferences.smartPunctuationEnabled {
             if SmartPunctuation.completesEmDash(text, contextBefore: textDocumentProxy.documentContextBeforeInput) {
@@ -302,7 +439,11 @@ final class KeyboardViewController: UIInputViewController {
            CharacterSet(charactersIn: ".,!?;:").contains(scalar),
            textDocumentProxy.documentContextBeforeInput?.last?.isLetter == true {
             updateWordContext(from: textDocumentProxy.documentContextBeforeInput ?? "")
-            _ = applyAutocorrectIfNeeded(trailing: "", trigger: "punctuation")
+            _ = applyAutocorrectIfNeeded(
+                trailing: "",
+                trigger: "punctuation",
+                gesture: gesture
+            )
         }
 
         // Punctuation directly after a space: drop the space first, like iOS.
@@ -317,29 +458,51 @@ final class KeyboardViewController: UIInputViewController {
             output = output.uppercased()
         }
         textDocumentProxy.insertText(output)
+        let mutationMilliseconds =
+            (ProcessInfo.processInfo.systemUptime - mutationStartedAt) * 1_000
+        let contextAfter = textDocumentProxy.documentContextBeforeInput
         if keyboardView.shiftState == .once, text.first?.isLetter == true {
             keyboardView.shiftState = .off
         }
 
-        let point = touch?.location(in: keyboardView)
-        let frame = point.flatMap { keyboardView.keyFrame(at: $0) }
-        let elapsed = start.duration(to: .now)
-        let milliseconds = Double(elapsed.components.attoseconds) / 1e15
-            + Double(elapsed.components.seconds) * 1000
+        let frame: CGRect?
+        if let gestureFrame = gesture?.selectedFrame?.cgRect {
+            frame = gestureFrame
+        } else if let touch {
+            frame = keyboardView.keyFrame(at: touch.location(in: keyboardView))
+        } else {
+            frame = nil
+        }
+        let edit = EditOperation(
+            type: output == text ? .insert : .replace,
+            source: output == text ? .key : .smartPunctuation,
+            trigger: .touch,
+            contextBefore: contextBefore,
+            contextAfter: contextAfter,
+            originalText: output == text ? nil : text,
+            replacementText: output,
+            gestureID: gesture?.id
+        )
         log(
             kind: .touch,
             key: text.lowercased(),
             emittedText: output,
-            rawContext: textDocumentProxy.documentContextBeforeInput,
+            rawContext: contextAfter,
             touch: touch,
             frame: frame,
-            latencyMilliseconds: milliseconds,
-            metadata: output == text ? [:] : ["substituted": "true"]
+            latencyMilliseconds: mutationMilliseconds,
+            metadata: output == text ? [:] : ["substituted": "true"],
+            gesture: gesture,
+            editOperation: edit,
+            proxyMutationMilliseconds: mutationMilliseconds,
+            actionStartedAt: actionStartedAt
         )
         scheduleRefreshContextAndCandidates()
     }
 
-    private func handleDelete() {
+    private func handleDelete(gesture: TouchGesture?, repeatDelete: Bool = false) {
+        let actionStartedAt = gesture?.samples.first?.monotonicTimestamp
+            ?? ProcessInfo.processInfo.systemUptime
         let contextBefore = textDocumentProxy.documentContextBeforeInput
         if let autocorrect = lastAutocorrect,
            Date().timeIntervalSince(autocorrect.timestamp) < 4,
@@ -347,32 +510,82 @@ final class KeyboardViewController: UIInputViewController {
             || contextBefore?.hasSuffix(autocorrect.replacement) == true {
             let suffixHasSpace = contextBefore?.hasSuffix("\(autocorrect.replacement) ") == true
             let deleteCount = autocorrect.replacement.count + (suffixHasSpace ? 1 : 0)
+            let mutationStartedAt = ProcessInfo.processInfo.systemUptime
             for _ in 0..<deleteCount {
                 textDocumentProxy.deleteBackward()
             }
             textDocumentProxy.insertText(autocorrect.original)
+            let mutationMilliseconds =
+                (ProcessInfo.processInfo.systemUptime - mutationStartedAt) * 1_000
+            let contextAfter = textDocumentProxy.documentContextBeforeInput
             log(
                 kind: .autocorrectReverted,
                 emittedText: autocorrect.original,
-                rawContext: textDocumentProxy.documentContextBeforeInput,
-                metadata: ["reverted": autocorrect.replacement]
+                rawContext: contextAfter,
+                metadata: ["reverted": autocorrect.replacement],
+                gesture: gesture,
+                editOperation: EditOperation(
+                    type: .replace,
+                    source: .correctionReversion,
+                    trigger: repeatDelete ? .repeatDelete : .touch,
+                    contextBefore: contextBefore,
+                    contextAfter: contextAfter,
+                    originalText: autocorrect.replacement,
+                    replacementText: autocorrect.original,
+                    deletedText: autocorrect.replacement + (suffixHasSpace ? " " : ""),
+                    gestureID: gesture?.id,
+                    predictionOfferID: autocorrect.offerID,
+                    correctionID: autocorrect.correctionID
+                ),
+                predictionOutcome: autocorrect.offerID.map {
+                    PredictionOutcome(
+                        offerID: $0,
+                        kind: .reverted,
+                        correctionID: autocorrect.correctionID,
+                        occurredAt: Date()
+                    )
+                },
+                correctionID: autocorrect.correctionID,
+                proxyMutationMilliseconds: mutationMilliseconds,
+                actionStartedAt: actionStartedAt
             )
             lastAutocorrect = nil
             keyboardView.pendingCorrectionDisplay = nil
             scheduleRefreshContextAndCandidates()
             return
         }
+        let deletedText = contextBefore.map { String($0.suffix(1)) }
+        let mutationStartedAt = ProcessInfo.processInfo.systemUptime
         textDocumentProxy.deleteBackward()
+        let mutationMilliseconds =
+            (ProcessInfo.processInfo.systemUptime - mutationStartedAt) * 1_000
+        let contextAfter = textDocumentProxy.documentContextBeforeInput
         lastAutocorrect = nil
         keyboardView.pendingCorrectionDisplay = nil
-        log(kind: .delete, rawContext: contextBefore)
+        log(
+            kind: .delete,
+            rawContext: contextBefore,
+            gesture: gesture,
+            editOperation: EditOperation(
+                type: .delete,
+                source: .key,
+                trigger: repeatDelete ? .repeatDelete : .touch,
+                contextBefore: contextBefore,
+                contextAfter: contextAfter,
+                deletedText: deletedText,
+                gestureID: gesture?.id
+            ),
+            proxyMutationMilliseconds: mutationMilliseconds,
+            actionStartedAt: actionStartedAt
+        )
         scheduleRefreshContextAndCandidates()
     }
 
     /// Sustained backspace switches to word deletion, matching iOS.
-    private func handleDeleteWord() {
+    private func handleDeleteWord(gesture: TouchGesture?) {
         let contextBefore = textDocumentProxy.documentContextBeforeInput ?? ""
         guard !contextBefore.isEmpty else { return }
+        let mutationStartedAt = ProcessInfo.processInfo.systemUptime
         var deleted = 0
         var remaining = Substring(contextBefore)
         while let last = remaining.last, last == " " {
@@ -385,23 +598,60 @@ final class KeyboardViewController: UIInputViewController {
             remaining = remaining.dropLast()
             deleted += 1
         }
+        let mutationMilliseconds =
+            (ProcessInfo.processInfo.systemUptime - mutationStartedAt) * 1_000
+        let contextAfter = textDocumentProxy.documentContextBeforeInput
         lastAutocorrect = nil
-        log(kind: .delete, rawContext: contextBefore, metadata: ["deletedCharacters": String(deleted)])
+        log(
+            kind: .delete,
+            rawContext: contextBefore,
+            metadata: ["deletedCharacters": String(deleted)],
+            gesture: gesture,
+            editOperation: EditOperation(
+                type: .delete,
+                source: .key,
+                trigger: .repeatDelete,
+                contextBefore: contextBefore,
+                contextAfter: contextAfter,
+                deletedText: String(contextBefore.suffix(deleted)),
+                gestureID: gesture?.id
+            ),
+            proxyMutationMilliseconds: mutationMilliseconds,
+            actionStartedAt: gesture?.samples.first?.monotonicTimestamp
+        )
         scheduleRefreshContextAndCandidates()
     }
 
-    private func handleSpace() {
+    private func handleSpace(gesture: TouchGesture?) {
         updateWordContext(from: textDocumentProxy.documentContextBeforeInput ?? "")
         if let context = textDocumentProxy.documentContextBeforeInput,
            context.hasSuffix(" "),
            context.dropLast().last.map({ $0.isLetter || $0.isNumber }) == true {
+            let mutationStartedAt = ProcessInfo.processInfo.systemUptime
             textDocumentProxy.deleteBackward()
             textDocumentProxy.insertText(". ")
+            let mutationMilliseconds =
+                (ProcessInfo.processInfo.systemUptime - mutationStartedAt) * 1_000
+            let contextAfter = textDocumentProxy.documentContextBeforeInput
             log(
                 kind: .insert,
                 emittedText: ". ",
-                rawContext: textDocumentProxy.documentContextBeforeInput,
-                metadata: ["smartDoubleSpace": "true"]
+                rawContext: contextAfter,
+                metadata: ["smartDoubleSpace": "true"],
+                gesture: gesture,
+                editOperation: EditOperation(
+                    type: .replace,
+                    source: .smartPunctuation,
+                    trigger: .wordBoundary,
+                    contextBefore: context,
+                    contextAfter: contextAfter,
+                    originalText: "  ",
+                    replacementText: ". ",
+                    deletedText: " ",
+                    gestureID: gesture?.id
+                ),
+                proxyMutationMilliseconds: mutationMilliseconds,
+                actionStartedAt: gesture?.samples.first?.monotonicTimestamp
             )
             lastAutocorrect = nil
             returnToLettersAfterSpaceIfNeeded()
@@ -409,7 +659,11 @@ final class KeyboardViewController: UIInputViewController {
             return
         }
 
-        if applyAutocorrectIfNeeded(trailing: " ", trigger: "space") {
+        if applyAutocorrectIfNeeded(
+            trailing: " ",
+            trigger: "space",
+            gesture: gesture
+        ) {
             returnToLettersAfterSpaceIfNeeded()
             scheduleRefreshContextAndCandidates()
             return
@@ -418,9 +672,30 @@ final class KeyboardViewController: UIInputViewController {
         // Stock iOS does not accept a longer completion merely because space was
         // pressed. Suggestions are accepted only by tapping them; space commits
         // the literal unless autocorrect replaces a misspelling above.
+        let contextBefore = textDocumentProxy.documentContextBeforeInput
+        let mutationStartedAt = ProcessInfo.processInfo.systemUptime
         textDocumentProxy.insertText(" ")
+        let mutationMilliseconds =
+            (ProcessInfo.processInfo.systemUptime - mutationStartedAt) * 1_000
+        let contextAfter = textDocumentProxy.documentContextBeforeInput
         lastAutocorrect = nil
-        log(kind: .insert, emittedText: " ", rawContext: textDocumentProxy.documentContextBeforeInput)
+        log(
+            kind: .insert,
+            emittedText: " ",
+            rawContext: contextAfter,
+            gesture: gesture,
+            editOperation: EditOperation(
+                type: .insert,
+                source: .key,
+                trigger: .wordBoundary,
+                contextBefore: contextBefore,
+                contextAfter: contextAfter,
+                replacementText: " ",
+                gestureID: gesture?.id
+            ),
+            proxyMutationMilliseconds: mutationMilliseconds,
+            actionStartedAt: gesture?.samples.first?.monotonicTimestamp
+        )
         returnToLettersAfterSpaceIfNeeded()
         scheduleRefreshContextAndCandidates()
     }
@@ -442,87 +717,264 @@ final class KeyboardViewController: UIInputViewController {
         )
     }
 
-    private func handleReturn() {
+    private func handleReturn(gesture: TouchGesture?) {
         updateWordContext(from: textDocumentProxy.documentContextBeforeInput ?? "")
-        _ = applyAutocorrectIfNeeded(trailing: "", trigger: "return")
+        _ = applyAutocorrectIfNeeded(
+            trailing: "",
+            trigger: "return",
+            gesture: gesture
+        )
+        let contextBefore = textDocumentProxy.documentContextBeforeInput
+        let mutationStartedAt = ProcessInfo.processInfo.systemUptime
         textDocumentProxy.insertText("\n")
-        log(kind: .insert, emittedText: "\n", rawContext: textDocumentProxy.documentContextBeforeInput)
+        let mutationMilliseconds =
+            (ProcessInfo.processInfo.systemUptime - mutationStartedAt) * 1_000
+        let contextAfter = textDocumentProxy.documentContextBeforeInput
+        log(
+            kind: .insert,
+            emittedText: "\n",
+            rawContext: contextAfter,
+            gesture: gesture,
+            editOperation: EditOperation(
+                type: .insert,
+                source: .key,
+                trigger: .wordBoundary,
+                contextBefore: contextBefore,
+                contextAfter: contextAfter,
+                replacementText: "\n",
+                gestureID: gesture?.id
+            ),
+            proxyMutationMilliseconds: mutationMilliseconds,
+            actionStartedAt: gesture?.samples.first?.monotonicTimestamp
+        )
         scheduleRefreshContextAndCandidates()
     }
 
-    private func applyAutocorrectIfNeeded(trailing: String, trigger: String) -> Bool {
+    private func applyAutocorrectIfNeeded(
+        trailing: String,
+        trigger: String,
+        gesture: TouchGesture? = nil
+    ) -> Bool {
         guard preferences.autocorrectionEnabled, !currentWord.isEmpty else { return false }
+        let decodeStartedAt = ProcessInfo.processInfo.systemUptime
         let candidates = languageDecoder.candidates(for: currentWord, previousWord: previousWord)
+        let decoderMilliseconds =
+            (ProcessInfo.processInfo.systemUptime - decodeStartedAt) * 1_000
         guard let correction = CorrectionFeedbackPolicy.automaticCorrection(
             from: candidates,
             literal: currentWord
         ) else { return false }
 
         let original = currentWord
+        let contextBefore = textDocumentProxy.documentContextBeforeInput
+        let mutationStartedAt = ProcessInfo.processInfo.systemUptime
         for _ in original {
             textDocumentProxy.deleteBackward()
         }
         textDocumentProxy.insertText(correction.text + trailing)
-        lastAutocorrect = (original, correction.text, Date())
+        let mutationMilliseconds =
+            (ProcessInfo.processInfo.systemUptime - mutationStartedAt) * 1_000
+        let contextAfter = textDocumentProxy.documentContextBeforeInput
+        let correctionID = UUID()
+        let offerID = currentPredictionOffer?.id
+        lastAutocorrect = (
+            original,
+            correction.text,
+            Date(),
+            correctionID,
+            offerID
+        )
+        keyboardView.autocorrectionPreview = nil
         keyboardView.pendingCorrectionDisplay = (original: original, replacement: correction.text)
         log(
             kind: .autocorrectAccepted,
             emittedText: correction.text,
-            rawContext: textDocumentProxy.documentContextBeforeInput,
+            rawContext: contextAfter,
             candidates: candidates,
             selectedCandidate: correction.text,
-            metadata: ["literal": original, "trigger": trigger]
+            metadata: ["literal": original, "trigger": trigger],
+            gesture: gesture,
+            editOperation: EditOperation(
+                type: .replace,
+                source: .autocorrection,
+                trigger: .wordBoundary,
+                contextBefore: contextBefore,
+                contextAfter: contextAfter,
+                originalText: original,
+                replacementText: correction.text + trailing,
+                deletedText: original,
+                gestureID: gesture?.id,
+                predictionOfferID: offerID,
+                correctionID: correctionID
+            ),
+            predictionOutcome: offerID.map {
+                PredictionOutcome(
+                    offerID: $0,
+                    kind: .accepted,
+                    selectedCandidateID: currentPredictionOffer?.candidates.first {
+                        $0.text == correction.text
+                    }?.stableID,
+                    correctionID: correctionID,
+                    occurredAt: Date()
+                )
+            },
+            correctionID: correctionID,
+            proxyMutationMilliseconds: mutationMilliseconds,
+            decoderMilliseconds: decoderMilliseconds,
+            actionStartedAt: gesture?.samples.first?.monotonicTimestamp
         )
         return true
     }
 
-    private func acceptCandidate(_ candidate: String, touch: UITouch?) {
+    private func acceptCandidate(
+        _ candidate: String,
+        touch: UITouch?,
+        gesture: TouchGesture?
+    ) {
+        let candidateFrame = keyboardView.candidateFrame(for: candidate)
+        var acceptedCandidate = candidate
+        var rejectedPendingAutocorrect = false
+        if let preview = keyboardView.autocorrectionPreview {
+            if candidate == "“\(preview.literal)”" {
+                acceptedCandidate = preview.literal
+                rejectedPendingAutocorrect = true
+            } else if candidate == preview.replacement {
+                acceptedCandidate = preview.replacement
+            }
+        }
+
         // Tap the quoted original on the temporary autocorrect chip to revert.
         if let correction = lastAutocorrect,
            candidate == "“\(correction.original)”" || candidate == correction.original {
-            revertAutocorrect()
+            revertAutocorrect(gesture: gesture)
             return
         }
         if let correction = lastAutocorrect, candidate == correction.replacement {
             // Keep the correction; clear the temporary chip.
+            if let offerID = correction.offerID {
+                log(
+                    kind: .suggestionAccepted,
+                    emittedText: correction.replacement,
+                    rawContext: textDocumentProxy.documentContextBeforeInput,
+                    touch: touch,
+                    frame: candidateFrame,
+                    selectedCandidate: correction.replacement,
+                    gesture: gesture,
+                    predictionOutcome: PredictionOutcome(
+                        offerID: offerID,
+                        kind: .accepted,
+                        selectedCandidateID: currentPredictionOffer?.candidates.first {
+                            $0.text == correction.replacement
+                        }?.stableID,
+                        correctionID: correction.correctionID,
+                        occurredAt: Date()
+                    ),
+                    correctionID: correction.correctionID,
+                    actionStartedAt: gesture?.samples.first?.monotonicTimestamp
+                )
+            }
             lastAutocorrect = nil
             keyboardView.pendingCorrectionDisplay = nil
             return
         }
 
         let literal = currentWord
+        let contextBefore = textDocumentProxy.documentContextBeforeInput
+        let mutationStartedAt = ProcessInfo.processInfo.systemUptime
         for _ in literal {
             textDocumentProxy.deleteBackward()
         }
-        textDocumentProxy.insertText(candidate + " ")
+        textDocumentProxy.insertText(acceptedCandidate + " ")
+        let mutationMilliseconds =
+            (ProcessInfo.processInfo.systemUptime - mutationStartedAt) * 1_000
+        let contextAfter = textDocumentProxy.documentContextBeforeInput
+        let offerID = currentPredictionOffer?.id
         lastAutocorrect = nil
+        keyboardView.autocorrectionPreview = nil
         keyboardView.pendingCorrectionDisplay = nil
         log(
             kind: .suggestionAccepted,
-            emittedText: candidate,
-            rawContext: textDocumentProxy.documentContextBeforeInput,
+            emittedText: acceptedCandidate,
+            rawContext: contextAfter,
             touch: touch,
-            frame: keyboardView.candidateFrame(for: candidate),
-            selectedCandidate: candidate,
-            metadata: ["literal": literal]
+            frame: candidateFrame,
+            selectedCandidate: acceptedCandidate,
+            metadata: [
+                "literal": literal,
+                "rejectedPendingAutocorrect": String(rejectedPendingAutocorrect)
+            ],
+            gesture: gesture,
+            editOperation: EditOperation(
+                type: .replace,
+                source: .candidate,
+                trigger: .candidateSelection,
+                contextBefore: contextBefore,
+                contextAfter: contextAfter,
+                originalText: literal,
+                replacementText: acceptedCandidate + " ",
+                deletedText: literal,
+                gestureID: gesture?.id,
+                predictionOfferID: offerID
+            ),
+            predictionOutcome: offerID.map {
+                PredictionOutcome(
+                    offerID: $0,
+                    kind: .accepted,
+                    selectedCandidateID: currentPredictionOffer?.candidates.first {
+                        $0.text == acceptedCandidate
+                    }?.stableID,
+                    occurredAt: Date()
+                )
+            },
+            proxyMutationMilliseconds: mutationMilliseconds,
+            actionStartedAt: gesture?.samples.first?.monotonicTimestamp
         )
         scheduleRefreshContextAndCandidates()
     }
 
-    private func revertAutocorrect() {
+    private func revertAutocorrect(gesture: TouchGesture?) {
         guard let autocorrect = lastAutocorrect else { return }
         let contextBefore = textDocumentProxy.documentContextBeforeInput
         let suffixHasSpace = contextBefore?.hasSuffix("\(autocorrect.replacement) ") == true
         let deleteCount = autocorrect.replacement.count + (suffixHasSpace ? 1 : 0)
+        let mutationStartedAt = ProcessInfo.processInfo.systemUptime
         for _ in 0..<deleteCount {
             textDocumentProxy.deleteBackward()
         }
         textDocumentProxy.insertText(autocorrect.original)
+        let mutationMilliseconds =
+            (ProcessInfo.processInfo.systemUptime - mutationStartedAt) * 1_000
+        let contextAfter = textDocumentProxy.documentContextBeforeInput
         log(
             kind: .autocorrectReverted,
             emittedText: autocorrect.original,
-            rawContext: textDocumentProxy.documentContextBeforeInput,
-            metadata: ["reverted": autocorrect.replacement, "source": "chip"]
+            rawContext: contextAfter,
+            metadata: ["reverted": autocorrect.replacement, "source": "chip"],
+            gesture: gesture,
+            editOperation: EditOperation(
+                type: .replace,
+                source: .correctionReversion,
+                trigger: .candidateSelection,
+                contextBefore: contextBefore,
+                contextAfter: contextAfter,
+                originalText: autocorrect.replacement,
+                replacementText: autocorrect.original,
+                deletedText: autocorrect.replacement + (suffixHasSpace ? " " : ""),
+                gestureID: gesture?.id,
+                predictionOfferID: autocorrect.offerID,
+                correctionID: autocorrect.correctionID
+            ),
+            predictionOutcome: autocorrect.offerID.map {
+                PredictionOutcome(
+                    offerID: $0,
+                    kind: .reverted,
+                    correctionID: autocorrect.correctionID,
+                    occurredAt: Date()
+                )
+            },
+            correctionID: autocorrect.correctionID,
+            proxyMutationMilliseconds: mutationMilliseconds,
+            actionStartedAt: gesture?.samples.first?.monotonicTimestamp
         )
         lastAutocorrect = nil
         keyboardView.pendingCorrectionDisplay = nil
@@ -542,6 +994,120 @@ final class KeyboardViewController: UIInputViewController {
         )
     }
 
+    private var modelProvenance: ModelProvenance {
+        ModelProvenance(
+            identifier: EnglishLanguageModelData.modelIdentifier,
+            version: "c239062",
+            artifact: EnglishLanguageModelData.generatedModelSHA256,
+            sourceCommit: EnglishLanguageModelData.sourceCommit
+        )
+    }
+
+    private var shiftSnapshot: KeyboardShiftState {
+        switch keyboardView.shiftState {
+        case .off: return .lowercase
+        case .once: return .uppercase
+        case .locked: return .capsLock
+        }
+    }
+
+    private var orientationSnapshot: KeyboardOrientation {
+        guard let orientation = view.window?.windowScene?.interfaceOrientation else {
+            return .unknown
+        }
+        switch orientation {
+        case .portrait: return .portrait
+        case .portraitUpsideDown: return .portraitUpsideDown
+        case .landscapeLeft: return .landscapeLeft
+        case .landscapeRight: return .landscapeRight
+        default: return .unknown
+        }
+    }
+
+    private var hardwareModelIdentifier: String {
+        var systemInfo = utsname()
+        uname(&systemInfo)
+        return withUnsafePointer(to: &systemInfo.machine) {
+            $0.withMemoryRebound(to: CChar.self, capacity: 1) {
+                String(cString: $0)
+            }
+        }
+    }
+
+    private func environmentSnapshot() -> KeyboardEnvironmentSnapshot {
+        let screen = view.window?.windowScene?.screen ?? UIScreen.main
+        return KeyboardEnvironmentSnapshot(
+            orientation: orientationSnapshot,
+            oneHandedMode: keyboardView.oneHandedMode,
+            shiftState: shiftSnapshot,
+            candidateBarVisible: keyboardView.showsCandidateBar,
+            settings: KeyboardSettingsSnapshot(
+                autoCapitalizationEnabled: preferences.autoCapitalizationEnabled,
+                autocorrectionEnabled: preferences.autocorrectionEnabled,
+                predictiveEnabled: preferences.predictiveEnabled,
+                characterPreviewEnabled: preferences.characterPreviewEnabled,
+                capsLockEnabled: preferences.capsLockEnabled,
+                smartPunctuationEnabled: preferences.smartPunctuationEnabled
+            ),
+            deviceModel: hardwareModelIdentifier,
+            screenScale: Double(screen.scale),
+            operatingSystemVersion: UIDevice.current.systemVersion,
+            appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+                as? String,
+            fieldTraits: TextFieldTraitsSnapshot(
+                keyboardType: textDocumentProxy.keyboardType?.rawValue,
+                returnKeyType: textDocumentProxy.returnKeyType?.rawValue,
+                autocapitalizationType: textDocumentProxy.autocapitalizationType?.rawValue,
+                autocorrectionType: textDocumentProxy.autocorrectionType?.rawValue,
+                spellCheckingType: textDocumentProxy.spellCheckingType?.rawValue,
+                enablesReturnKeyAutomatically: textDocumentProxy.enablesReturnKeyAutomatically,
+                isSecureTextEntry: textDocumentProxy.isSecureTextEntry
+            ),
+            hasContextBefore: textDocumentProxy.documentContextBeforeInput != nil,
+            hasContextAfter: textDocumentProxy.documentContextAfterInput != nil,
+            isRecording: preferences.isRecording
+        )
+    }
+
+    private func layoutSnapshotIfNeeded() -> (
+        id: UUID?,
+        snapshot: KeyboardLayoutSnapshot?
+    ) {
+        let layout = emojiView.isHidden ? keyboardView.layoutMode : .emoji
+        let geometry = emojiView.isHidden
+            ? keyboardView.renderedGeometry
+            : emojiView.renderedGeometry
+        let geometrySignature = geometry.map {
+            "\($0.identifier):\($0.frame.x),\($0.frame.y),\($0.frame.width),\($0.frame.height)"
+        }.joined(separator: "|")
+        let signature = [
+            layout.rawValue,
+            String(describing: keyboardView.oneHandedMode),
+            String(describing: shiftSnapshot),
+            "\(keyboardView.bounds.width)x\(keyboardView.bounds.height)",
+            geometrySignature
+        ].joined(separator: ";")
+        guard signature != lastLayoutSignature else {
+            return (currentLayoutSnapshotID, nil)
+        }
+        lastLayoutSignature = signature
+        let snapshot = KeyboardLayoutSnapshot(
+            layout: layout,
+            keyboardBounds: CodableRect(
+                emojiView.isHidden ? keyboardView.bounds : emojiView.bounds
+            ),
+            screenBounds: CodableRect(
+                view.window?.windowScene?.screen.bounds ?? UIScreen.main.bounds
+            ),
+            keyGeometries: geometry,
+            candidateBarFrame: keyboardView.renderedCandidateBarFrame.map(CodableRect.init),
+            createdAt: Date()
+        )
+        currentLayoutSnapshotID = snapshot.id
+        return (snapshot.id, snapshot)
+    }
+
+    @discardableResult
     private func log(
         kind: KeyboardEventKind,
         key: String? = nil,
@@ -552,12 +1118,56 @@ final class KeyboardViewController: UIInputViewController {
         candidates: [DecoderCandidate]? = nil,
         selectedCandidate: String? = nil,
         latencyMilliseconds: Double? = nil,
-        metadata: [String: String] = [:]
-    ) {
-        let point = touch?.location(in: keyboardView)
-        let precisePoint = touch?.preciseLocation(in: keyboardView)
+        metadata: [String: String] = [:],
+        gesture: TouchGesture? = nil,
+        editOperation: EditOperation? = nil,
+        predictionOffer: PredictionOffer? = nil,
+        predictionOutcome: PredictionOutcome? = nil,
+        correctionID: UUID? = nil,
+        proxyMutationMilliseconds: Double? = nil,
+        decoderMilliseconds: Double? = nil,
+        actionStartedAt: Double? = nil
+    ) -> UUID {
+        let nowUptime = ProcessInfo.processInfo.systemUptime
+        let finalSample = gesture?.samples.last
+        let point = finalSample?.absolutePosition?.cgPoint
+            ?? touch?.location(in: keyboardView)
+        let precisePoint = finalSample?.preciseAbsolutePosition?.cgPoint
+            ?? touch?.preciseLocation(in: keyboardView)
+        var eventMetadata = metadata
+        switch kind {
+        case .candidateShown, .suggestionAccepted, .autocorrectAccepted, .autocorrectReverted:
+            eventMetadata.merge(EnglishLanguageModelData.eventMetadata) { existing, _ in existing }
+        default:
+            break
+        }
+        let eventID = UUID()
+        if let predictionOutcome, predictionOutcome.kind != .previewShown {
+            resolvedPredictionOfferIDs.insert(predictionOutcome.offerID)
+        }
+        var linkedEdit = editOperation
+        linkedEdit?.parentEventID = eventID
+        if linkedEdit?.source != .external, let contextAfter = linkedEdit?.contextAfter {
+            lastKnownContext = contextAfter
+        }
+        let layoutState = layoutSnapshotIfNeeded()
+        sequenceNumber += 1
+        let interEvent = lastEventUptime.map { max(0, (nowUptime - $0) * 1_000) }
+        lastEventUptime = nowUptime
+        let actionTotal = actionStartedAt.map { max(0, (nowUptime - $0) * 1_000) }
+        let latency = KeyboardLatency(
+            touchDurationMilliseconds: gesture?.durationMilliseconds,
+            interEventMilliseconds: interEvent,
+            proxyMutationMilliseconds: proxyMutationMilliseconds,
+            decoderMilliseconds: decoderMilliseconds,
+            actionTotalMilliseconds: actionTotal,
+            offerToSelectionMilliseconds: predictionOutcome?.kind == .accepted
+                ? currentPredictionOfferUptime.map { max(0, (nowUptime - $0) * 1_000) }
+                : nil
+        )
         EncryptedEventLedger.shared.append(
             KeyboardResearchEvent(
+                id: eventID,
                 sessionID: sessionID,
                 kind: kind,
                 layout: emojiView.isHidden ? keyboardView.layoutMode : .emoji,
@@ -569,19 +1179,58 @@ final class KeyboardViewController: UIInputViewController {
                 touchY: point.map { Double($0.y) },
                 preciseTouchX: precisePoint.map { Double($0.x) },
                 preciseTouchY: precisePoint.map { Double($0.y) },
-                touchRadius: touch.map { Double($0.majorRadius) },
-                touchRadiusTolerance: touch.map { Double($0.majorRadiusTolerance) },
-                touchForce: touch.map { Double($0.force) },
-                touchMaximumForce: touch.map { Double($0.maximumPossibleForce) },
-                touchTimestamp: touch?.timestamp,
-                touchType: touch.map { $0.type.rawValue },
-                keyFrame: frame.map(CodableRect.init),
+                touchRadius: finalSample?.radius ?? touch.map { Double($0.majorRadius) },
+                touchRadiusTolerance: finalSample?.radiusTolerance
+                    ?? touch.map { Double($0.majorRadiusTolerance) },
+                touchForce: finalSample?.force ?? touch.map { Double($0.force) },
+                touchMaximumForce: finalSample?.maximumForce
+                    ?? touch.map { Double($0.maximumPossibleForce) },
+                touchTimestamp: finalSample?.monotonicTimestamp ?? touch?.timestamp,
+                touchType: finalSample?.touchType ?? touch.map { $0.type.rawValue },
+                keyFrame: gesture?.selectedFrame ?? frame.map(CodableRect.init),
                 candidates: candidates,
                 selectedCandidate: selectedCandidate,
                 latencyMilliseconds: latencyMilliseconds,
-                metadata: metadata
+                metadata: eventMetadata,
+                sequenceNumber: sequenceNumber,
+                gestureID: gesture?.id,
+                editID: linkedEdit?.id,
+                predictionOfferID: predictionOffer?.id
+                    ?? predictionOutcome?.offerID
+                    ?? linkedEdit?.predictionOfferID,
+                correctionID: correctionID ?? linkedEdit?.correctionID
+                    ?? predictionOutcome?.correctionID,
+                touchGesture: gesture,
+                editOperation: linkedEdit,
+                predictionOffer: predictionOffer,
+                predictionOutcome: predictionOutcome,
+                latency: latency,
+                environment: environmentSnapshot(),
+                layoutSnapshotID: layoutState.id,
+                layoutSnapshot: layoutState.snapshot,
+                modelProvenance: {
+                    switch kind {
+                    case .candidateShown, .suggestionAccepted, .autocorrectAccepted,
+                         .autocorrectReverted:
+                        return modelProvenance
+                    default:
+                        return nil
+                    }
+                }()
             )
         )
+        scheduleUploadIfNeeded()
+        return eventID
+    }
+
+    private func scheduleUploadIfNeeded() {
+        guard hasFullAccess, preferences.hasTelemetryConsent else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastUploadDueCheck) >= 60 else { return }
+        lastUploadDueCheck = now
+        Task(priority: .utility) {
+            _ = try? await KeyboardEventUploader.shared.uploadIfDue()
+        }
     }
 }
 
@@ -589,12 +1238,13 @@ extension KeyboardViewController: ResearchKeyboardViewDelegate {
     fileprivate func keyboardView(
         _ view: ResearchKeyboardView,
         didTrigger action: KeyboardAction,
-        touch: UITouch?
+        touch: UITouch?,
+        gesture: TouchGesture?
     ) {
         switch action {
         case .text(let text):
             haptic.impactOccurred()
-            handleText(text, touch: touch)
+            handleText(text, touch: touch, gesture: gesture)
         case .shift:
             haptic.impactOccurred()
             switch view.shiftState {
@@ -602,14 +1252,22 @@ extension KeyboardViewController: ResearchKeyboardViewDelegate {
             case .once: view.shiftState = preferences.capsLockEnabled ? .locked : .off
             case .locked: view.shiftState = .off
             }
+            log(
+                kind: .touch,
+                key: "shift",
+                rawContext: textDocumentProxy.documentContextBeforeInput,
+                touch: touch,
+                gesture: gesture,
+                actionStartedAt: gesture?.samples.first?.monotonicTimestamp
+            )
         case .delete:
-            handleDelete()
+            handleDelete(gesture: gesture, repeatDelete: gesture?.endedAt == nil)
         case .deleteWord:
-            handleDeleteWord()
+            handleDeleteWord(gesture: gesture)
         case .space:
-            handleSpace()
+            handleSpace(gesture: gesture)
         case .returnKey:
-            handleReturn()
+            handleReturn(gesture: gesture)
         case .changeLayout(let mode):
             if mode == .emoji {
                 showEmojiPage(true)
@@ -618,55 +1276,126 @@ extension KeyboardViewController: ResearchKeyboardViewDelegate {
                 log(
                     kind: .layoutChanged,
                     rawContext: textDocumentProxy.documentContextBeforeInput,
-                    metadata: ["layout": mode.rawValue]
+                    touch: touch,
+                    metadata: ["layout": mode.rawValue],
+                    gesture: gesture,
+                    actionStartedAt: gesture?.samples.first?.monotonicTimestamp
                 )
             }
         case .nextKeyboard:
+            log(
+                kind: .touch,
+                key: "globe",
+                rawContext: textDocumentProxy.documentContextBeforeInput,
+                touch: touch,
+                gesture: gesture,
+                actionStartedAt: gesture?.samples.first?.monotonicTimestamp
+            )
             advanceToNextInputMode()
         case .candidate(let candidate):
             haptic.impactOccurred()
-            acceptCandidate(candidate, touch: touch)
+            acceptCandidate(candidate, touch: touch, gesture: gesture)
         case .setOneHanded(let mode):
             preferences.oneHandedMode = mode
             view.oneHandedMode = mode
             log(
                 kind: .layoutChanged,
                 rawContext: textDocumentProxy.documentContextBeforeInput,
-                metadata: ["oneHanded": mode.rawValue]
+                touch: touch,
+                metadata: ["oneHanded": mode.rawValue],
+                gesture: gesture,
+                actionStartedAt: gesture?.samples.first?.monotonicTimestamp
             )
         }
     }
 
-    fileprivate func keyboardView(_ view: ResearchKeyboardView, didMoveCursorBy offset: Int) {
+    fileprivate func keyboardView(
+        _ view: ResearchKeyboardView,
+        didMoveCursorBy offset: Int,
+        gesture: TouchGesture?
+    ) {
         guard offset != 0 else { return }
+        let contextBefore = textDocumentProxy.documentContextBeforeInput
+        let mutationStartedAt = ProcessInfo.processInfo.systemUptime
         textDocumentProxy.adjustTextPosition(byCharacterOffset: offset)
+        let mutationMilliseconds =
+            (ProcessInfo.processInfo.systemUptime - mutationStartedAt) * 1_000
+        let contextAfter = textDocumentProxy.documentContextBeforeInput
         log(
             kind: .cursorMoved,
-            rawContext: textDocumentProxy.documentContextBeforeInput,
-            metadata: ["offset": String(offset)]
+            rawContext: contextAfter,
+            metadata: ["offset": String(offset)],
+            gesture: gesture,
+            editOperation: EditOperation(
+                type: .cursorMove,
+                source: .gesture,
+                trigger: .touch,
+                contextBefore: contextBefore,
+                contextAfter: contextAfter,
+                gestureID: gesture?.id
+            ),
+            proxyMutationMilliseconds: mutationMilliseconds,
+            actionStartedAt: gesture?.samples.first?.monotonicTimestamp
         )
     }
 
     fileprivate func keyboardView(
         _ view: ResearchKeyboardView,
-        didMoveCursorVerticallyBy lines: Int
+        didMoveCursorVerticallyBy lines: Int,
+        gesture: TouchGesture?
     ) {
         guard lines != 0 else { return }
         let direction = lines > 0 ? 1 : -1
         for _ in 0..<abs(lines) {
             let offset = verticalCursorOffset(direction: direction, keyboardWidth: view.bounds.width)
             guard offset != 0 else { break }
+            let contextBefore = textDocumentProxy.documentContextBeforeInput
+            let mutationStartedAt = ProcessInfo.processInfo.systemUptime
             textDocumentProxy.adjustTextPosition(byCharacterOffset: offset)
+            let mutationMilliseconds =
+                (ProcessInfo.processInfo.systemUptime - mutationStartedAt) * 1_000
+            let contextAfter = textDocumentProxy.documentContextBeforeInput
             log(
                 kind: .cursorMoved,
-                rawContext: textDocumentProxy.documentContextBeforeInput,
+                rawContext: contextAfter,
                 metadata: [
                     "offset": String(offset),
                     "axis": "vertical",
                     "direction": String(direction)
-                ]
+                ],
+                gesture: gesture,
+                editOperation: EditOperation(
+                    type: .cursorMove,
+                    source: .gesture,
+                    trigger: .touch,
+                    contextBefore: contextBefore,
+                    contextAfter: contextAfter,
+                    gestureID: gesture?.id
+                ),
+                proxyMutationMilliseconds: mutationMilliseconds,
+                actionStartedAt: gesture?.samples.first?.monotonicTimestamp
             )
         }
+    }
+
+    fileprivate func keyboardView(
+        _ view: ResearchKeyboardView,
+        didComplete gesture: TouchGesture
+    ) {
+        log(
+            kind: .touch,
+            key: gesture.finalTarget?.key ?? gesture.initialTarget?.key,
+            rawContext: textDocumentProxy.documentContextBeforeInput,
+            frame: gesture.selectedFrame?.cgRect,
+            metadata: [
+                "gestureCompleted": "true",
+                "gestureCancelled": String(gesture.wasCancelled),
+                "gestureSlid": String(gesture.didSlide),
+                "sampleCount": String(gesture.samples.count)
+            ],
+            gesture: gesture,
+            actionStartedAt: gesture.samples.first?.monotonicTimestamp
+        )
     }
 
     /// Extensions have no cursor geometry API. Prefer explicit line breaks when
@@ -702,33 +1431,93 @@ extension KeyboardViewController: EmojiKeyboardViewDelegate {
     func emojiKeyboard(
         _ view: EmojiKeyboardView,
         didSelect emoji: String,
-        at location: CGPoint,
-        keyFrame: CGRect
+        gesture: TouchGesture
     ) {
         haptic.impactOccurred()
+        let contextBefore = textDocumentProxy.documentContextBeforeInput
+        let mutationStartedAt = ProcessInfo.processInfo.systemUptime
         textDocumentProxy.insertText(emoji)
+        let mutationMilliseconds =
+            (ProcessInfo.processInfo.systemUptime - mutationStartedAt) * 1_000
+        let contextAfter = textDocumentProxy.documentContextBeforeInput
         log(
             kind: .touch,
             key: emoji,
             emittedText: emoji,
-            rawContext: textDocumentProxy.documentContextBeforeInput,
-            frame: keyFrame,
-            metadata: ["source": "emoji", "touchX": String(Double(location.x)), "touchY": String(Double(location.y))]
+            rawContext: contextAfter,
+            frame: gesture.selectedFrame?.cgRect,
+            metadata: ["source": "emoji"],
+            gesture: gesture,
+            editOperation: EditOperation(
+                type: .insert,
+                source: .emoji,
+                trigger: .touch,
+                contextBefore: contextBefore,
+                contextAfter: contextAfter,
+                replacementText: emoji,
+                gestureID: gesture.id
+            ),
+            proxyMutationMilliseconds: mutationMilliseconds,
+            actionStartedAt: gesture.samples.first?.monotonicTimestamp
         )
         scheduleRefreshContextAndCandidates()
     }
 
-    func emojiKeyboardDidTapLetters(_ view: EmojiKeyboardView) {
+    func emojiKeyboardDidTapLetters(
+        _ view: EmojiKeyboardView,
+        gesture: TouchGesture
+    ) {
         keyboardView.layoutMode = .letters
-        showEmojiPage(false)
+        keyboardView.isHidden = false
+        emojiView.isHidden = true
+        log(
+            kind: .layoutChanged,
+            key: "ABC",
+            rawContext: textDocumentProxy.documentContextBeforeInput,
+            frame: gesture.selectedFrame?.cgRect,
+            metadata: ["layout": KeyboardLayoutMode.letters.rawValue],
+            gesture: gesture,
+            actionStartedAt: gesture.samples.first?.monotonicTimestamp
+        )
     }
 
-    func emojiKeyboardDidTapDelete(_ view: EmojiKeyboardView) {
-        handleDelete()
+    func emojiKeyboardDidTapDelete(
+        _ view: EmojiKeyboardView,
+        gesture: TouchGesture,
+        isRepeat: Bool
+    ) {
+        handleDelete(gesture: gesture, repeatDelete: isRepeat)
     }
 
-    func emojiKeyboardDidTapGlobe(_ view: EmojiKeyboardView) {
+    func emojiKeyboardDidTapGlobe(
+        _ view: EmojiKeyboardView,
+        gesture: TouchGesture
+    ) {
+        log(
+            kind: .touch,
+            key: "globe",
+            rawContext: textDocumentProxy.documentContextBeforeInput,
+            frame: gesture.selectedFrame?.cgRect,
+            metadata: ["source": "emoji"],
+            gesture: gesture,
+            actionStartedAt: gesture.samples.first?.monotonicTimestamp
+        )
         advanceToNextInputMode()
+    }
+
+    func emojiKeyboard(
+        _ view: EmojiKeyboardView,
+        didCancelActionGesture gesture: TouchGesture
+    ) {
+        log(
+            kind: .touch,
+            key: gesture.initialTarget?.key,
+            rawContext: textDocumentProxy.documentContextBeforeInput,
+            frame: gesture.selectedFrame?.cgRect,
+            metadata: ["source": "emoji", "gestureCancelled": "true"],
+            gesture: gesture,
+            actionStartedAt: gesture.samples.first?.monotonicTimestamp
+        )
     }
 }
 
@@ -743,6 +1532,13 @@ private final class ResearchKeyboardView: UIView {
 
     weak var delegate: ResearchKeyboardViewDelegate?
     var candidates: [String] = [] { didSet { relayoutIfChanged(oldValue != candidates) } }
+    /// Pre-commit QuickType correction preview: quoted literal + emphasized replacement.
+    var autocorrectionPreview: (literal: String, replacement: String)? {
+        didSet {
+            setNeedsLayout()
+            setNeedsDisplay()
+        }
+    }
     /// Temporary autocorrect underline chip (original ↔ replacement).
     var pendingCorrectionDisplay: (original: String, replacement: String)? {
         didSet {
@@ -775,6 +1571,7 @@ private final class ResearchKeyboardView: UIView {
     private var expandFrame: CGRect?
     private var activeTouch: UITouch?
     private var secondaryTouchActions: [ObjectIdentifier: KeyboardAction] = [:]
+    private var touchGestures: [ObjectIdentifier: TouchGesture] = [:]
     private var activeAction: KeyboardAction?
     private var previewKey: RenderedKey?
     private var alternatesKey: RenderedKey?
@@ -817,13 +1614,46 @@ private final class ResearchKeyboardView: UIView {
         candidateFrames.first(where: { $0.0 == text })?.1
     }
 
+    var renderedGeometry: [KeyboardKeyGeometry] {
+        var geometry = renderedKeys.map {
+            KeyboardKeyGeometry(
+                identifier: targetIdentifier(for: $0.action),
+                label: displayLabel(for: $0),
+                frame: CodableRect($0.frame)
+            )
+        }
+        geometry += candidateFrames.enumerated().map {
+            KeyboardKeyGeometry(
+                identifier: "candidate:\($0.element.0)",
+                label: $0.element.0,
+                frame: CodableRect($0.element.1)
+            )
+        }
+        if let expandFrame {
+            geometry.append(
+                KeyboardKeyGeometry(
+                    identifier: "oneHanded:expand",
+                    label: "expand",
+                    frame: CodableRect(expandFrame)
+                )
+            )
+        }
+        return geometry
+    }
+
+    var renderedCandidateBarFrame: CGRect? {
+        showsCandidateBar
+            ? CGRect(x: 0, y: 0, width: bounds.width, height: candidateBarHeight)
+            : nil
+    }
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         isMultipleTouchEnabled = true
         clipsToBounds = false
         backgroundColor = UIColor { traits in
             traits.userInterfaceStyle == .dark
-                ? UIColor(red: 0.17, green: 0.17, blue: 0.18, alpha: 1)
+                ? UIColor(red: 0.086, green: 0.086, blue: 0.086, alpha: 1)
                 : UIColor(red: 0.82, green: 0.835, blue: 0.86, alpha: 1)
         }
         haptic.prepare()
@@ -864,9 +1694,165 @@ private final class ResearchKeyboardView: UIView {
 
     // MARK: Touch handling
 
+    private func targetIdentifier(for action: KeyboardAction) -> String {
+        switch action {
+        case .text(let text): return "key:\(text)"
+        case .shift: return "key:shift"
+        case .delete: return "key:delete"
+        case .deleteWord: return "key:deleteWord"
+        case .space: return "key:space"
+        case .returnKey: return "key:return"
+        case .changeLayout(let mode): return "layout:\(mode.rawValue)"
+        case .nextKeyboard: return "key:globe"
+        case .candidate(let text): return "candidate:\(text)"
+        case .setOneHanded(let mode): return "oneHanded:\(mode.rawValue)"
+        }
+    }
+
+    private func touchTarget(at point: CGPoint) -> TouchTarget? {
+        if alternatesKey != nil,
+           let index = alternateFrames.firstIndex(where: {
+               $0.insetBy(dx: -4, dy: -20).contains(point)
+           }),
+           index < alternateOptions.count {
+            return TouchTarget(
+                identifier: "alternate:\(alternateOptions[index])",
+                key: alternateOptions[index],
+                frame: CodableRect(alternateFrames[index])
+            )
+        }
+        if showsOneHandedMenu,
+           let item = oneHandedMenuFrames.first(where: { $0.1.contains(point) }) {
+            return TouchTarget(
+                identifier: "oneHanded:\(item.0.rawValue)",
+                key: item.0.rawValue,
+                frame: CodableRect(item.1)
+            )
+        }
+        if let expandFrame, expandFrame.contains(point) {
+            return TouchTarget(
+                identifier: "oneHanded:expand",
+                key: "expand",
+                frame: CodableRect(expandFrame)
+            )
+        }
+        if let candidate = candidateFrames.first(where: { $0.1.contains(point) }) {
+            return TouchTarget(
+                identifier: "candidate:\(candidate.0)",
+                key: candidate.0,
+                frame: CodableRect(candidate.1)
+            )
+        }
+        guard let key = keyAt(point) else { return nil }
+        return TouchTarget(
+            identifier: targetIdentifier(for: key.action),
+            key: key.label,
+            frame: CodableRect(key.frame)
+        )
+    }
+
+    private func sample(for touch: UITouch, phase: TouchPhase) -> TouchSample {
+        let point = touch.location(in: self)
+        let precise = touch.preciseLocation(in: self)
+        let target = touchTarget(at: point)
+        let frame = target?.frame?.cgRect
+        let local = frame.map { CGPoint(x: point.x - $0.minX, y: point.y - $0.minY) }
+        let normalized = frame.flatMap { rect -> CGPoint? in
+            guard rect.width != 0, rect.height != 0 else { return nil }
+            return CGPoint(
+                x: (point.x - rect.minX) / rect.width,
+                y: (point.y - rect.minY) / rect.height
+            )
+        }
+        return TouchSample(
+            phase: phase,
+            wallTimestamp: Date(
+                timeIntervalSinceNow: touch.timestamp - ProcessInfo.processInfo.systemUptime
+            ),
+            monotonicTimestamp: touch.timestamp,
+            absolutePosition: CodablePoint(point),
+            preciseAbsolutePosition: CodablePoint(precise),
+            localPosition: local.map(CodablePoint.init),
+            normalizedPosition: normalized.map(CodablePoint.init),
+            radius: Double(touch.majorRadius),
+            radiusTolerance: Double(touch.majorRadiusTolerance),
+            force: Double(touch.force),
+            maximumForce: Double(touch.maximumPossibleForce),
+            touchType: touch.type.rawValue,
+            target: target
+        )
+    }
+
+    private func beginGesture(for touch: UITouch) {
+        let first = sample(for: touch, phase: .began)
+        touchGestures[ObjectIdentifier(touch)] = TouchGesture(
+            samples: [first],
+            initialTarget: first.target,
+            startedAt: first.wallTimestamp
+        )
+    }
+
+    private func appendSamples(
+        for touch: UITouch,
+        phase: TouchPhase,
+        event: UIEvent? = nil
+    ) {
+        let identifier = ObjectIdentifier(touch)
+        guard var gesture = touchGestures[identifier] else { return }
+        let observedTouches: [UITouch]
+        if phase == .moved {
+            observedTouches = event?.coalescedTouches(for: touch) ?? [touch]
+        } else {
+            observedTouches = [touch]
+        }
+        for observed in observedTouches {
+            gesture.samples.append(sample(for: observed, phase: phase))
+        }
+        touchGestures[identifier] = gesture
+    }
+
+    private func finishGesture(for touch: UITouch, cancelled: Bool) -> TouchGesture? {
+        let identifier = ObjectIdentifier(touch)
+        appendSamples(for: touch, phase: cancelled ? .cancelled : .ended)
+        guard var gesture = touchGestures.removeValue(forKey: identifier) else { return nil }
+        let last = gesture.samples.last
+        gesture.finalTarget = last?.target
+        gesture.selectedFrame = {
+            if momentaryLayoutOrigin != nil, !didSlideFromLayoutKey {
+                return gesture.initialTarget?.frame
+            }
+            if alternatesKey != nil, selectedAlternate < alternateFrames.count {
+                return CodableRect(alternateFrames[selectedAlternate])
+            }
+            guard let activeAction else { return nil }
+            if case .candidate(let text) = activeAction {
+                return candidateFrame(for: text).map(CodableRect.init)
+            }
+            return renderedKeys.first(where: { $0.action == activeAction })
+                .map { CodableRect($0.frame) }
+        }() ?? last?.target?.frame
+        gesture.endedAt = last?.wallTimestamp ?? Date()
+        if let firstTimestamp = gesture.samples.first?.monotonicTimestamp,
+           let lastTimestamp = last?.monotonicTimestamp {
+            gesture.durationMilliseconds = max(0, (lastTimestamp - firstTimestamp) * 1_000)
+        }
+        gesture.wasCancelled = cancelled
+        gesture.didSlide = gesture.initialTarget?.identifier != gesture.finalTarget?.identifier
+            || didSlideFromLayoutKey
+            || isTrackpadActive
+            || alternatesKey != nil
+        return gesture
+    }
+
+    private func currentGesture(for touch: UITouch?) -> TouchGesture? {
+        guard let touch else { return nil }
+        return touchGestures[ObjectIdentifier(touch)]
+    }
+
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         if let activeTouch {
             for touch in touches where touch !== activeTouch {
+                beginGesture(for: touch)
                 updateSecondaryTouch(touch)
             }
             return
@@ -874,7 +1860,9 @@ private final class ResearchKeyboardView: UIView {
 
         guard let touch = touches.first else { return }
         activeTouch = touch
+        beginGesture(for: touch)
         for secondary in touches where secondary !== touch {
+            beginGesture(for: secondary)
             updateSecondaryTouch(secondary)
         }
         let point = touch.location(in: self)
@@ -945,10 +1933,12 @@ private final class ResearchKeyboardView: UIView {
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         for touch in touches where touch !== activeTouch {
+            appendSamples(for: touch, phase: .moved, event: event)
             updateSecondaryTouch(touch)
         }
         guard let activeTouch, touches.contains(activeTouch) else { return }
         let touch = activeTouch
+        appendSamples(for: touch, phase: .moved, event: event)
         let point = touch.location(in: self)
 
         if alternatesKey != nil {
@@ -970,14 +1960,22 @@ private final class ResearchKeyboardView: UIView {
             let horizontalStep: CGFloat = 4.5
             let horizontalCharacters = Int(trackpadHorizontalRemainder / horizontalStep)
             if horizontalCharacters != 0 {
-                delegate?.keyboardView(self, didMoveCursorBy: horizontalCharacters)
+                delegate?.keyboardView(
+                    self,
+                    didMoveCursorBy: horizontalCharacters,
+                    gesture: currentGesture(for: touch)
+                )
                 trackpadHorizontalRemainder -= CGFloat(horizontalCharacters) * horizontalStep
             }
 
             let verticalStep: CGFloat = 18
             let verticalLines = Int(trackpadVerticalRemainder / verticalStep)
             if verticalLines != 0 {
-                delegate?.keyboardView(self, didMoveCursorVerticallyBy: verticalLines)
+                delegate?.keyboardView(
+                    self,
+                    didMoveCursorVerticallyBy: verticalLines,
+                    gesture: currentGesture(for: touch)
+                )
                 trackpadVerticalRemainder -= CGFloat(verticalLines) * verticalStep
             }
             return
@@ -1018,9 +2016,15 @@ private final class ResearchKeyboardView: UIView {
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         for touch in touches where touch !== activeTouch {
             let identifier = ObjectIdentifier(touch)
+            let gesture = finishGesture(for: touch, cancelled: false)
             if let action = secondaryTouchActions.removeValue(forKey: identifier) {
                 UIDevice.current.playInputClick()
-                delegate?.keyboardView(self, didTrigger: action, touch: touch)
+                delegate?.keyboardView(
+                    self,
+                    didTrigger: action,
+                    touch: touch,
+                    gesture: gesture
+                )
             }
         }
         guard let activeTouch, touches.contains(activeTouch) else { return }
@@ -1031,13 +2035,21 @@ private final class ResearchKeyboardView: UIView {
         if alternatesKey != nil, selectedAlternate < alternateOptions.count {
             let option = alternateOptions[selectedAlternate]
             let touch = activeTouch
+            let gesture = finishGesture(for: touch, cancelled: false)
             clearAlternates()
             clearTouch()
             UIDevice.current.playInputClick()
-            delegate?.keyboardView(self, didTrigger: .text(option), touch: touch)
+            delegate?.keyboardView(
+                self,
+                didTrigger: .text(option),
+                touch: touch,
+                gesture: gesture
+            )
             setNeedsDisplay()
             return
         }
+
+        let completedGesture = finishGesture(for: activeTouch, cancelled: false)
 
         defer {
             clearTouch()
@@ -1046,6 +2058,9 @@ private final class ResearchKeyboardView: UIView {
 
         if isTrackpadActive {
             isTrackpadActive = false
+            if let completedGesture {
+                delegate?.keyboardView(self, didComplete: completedGesture)
+            }
             return
         }
         guard let action = activeAction else { return }
@@ -1053,26 +2068,49 @@ private final class ResearchKeyboardView: UIView {
         if let origin = momentaryLayoutOrigin {
             if didSlideFromLayoutKey, isTextAction(action) {
                 UIDevice.current.playInputClick()
-                delegate?.keyboardView(self, didTrigger: action, touch: activeTouch)
+                delegate?.keyboardView(
+                    self,
+                    didTrigger: action,
+                    touch: activeTouch,
+                    gesture: completedGesture
+                )
                 layoutMode = origin
                 rebuildLayout()
             } else {
                 UIDevice.current.playInputClick()
-                delegate?.keyboardView(self, didTrigger: action, touch: activeTouch)
+                delegate?.keyboardView(
+                    self,
+                    didTrigger: action,
+                    touch: activeTouch,
+                    gesture: completedGesture
+                )
             }
             // A simple tap leaves the newly selected layout active.
             return
         }
 
-        if action == .delete, didRepeatDelete { return }
+        if action == .delete, didRepeatDelete {
+            if let completedGesture {
+                delegate?.keyboardView(self, didComplete: completedGesture)
+            }
+            return
+        }
 
         UIDevice.current.playInputClick()
-        delegate?.keyboardView(self, didTrigger: action, touch: activeTouch)
+        delegate?.keyboardView(
+            self,
+            didTrigger: action,
+            touch: activeTouch,
+            gesture: completedGesture
+        )
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         for touch in touches {
             secondaryTouchActions.removeValue(forKey: ObjectIdentifier(touch))
+            if let gesture = finishGesture(for: touch, cancelled: true) {
+                delegate?.keyboardView(self, didComplete: gesture)
+            }
         }
         guard let activeTouch, touches.contains(activeTouch) else { return }
         cancelLongPress()
@@ -1174,7 +2212,12 @@ private final class ResearchKeyboardView: UIView {
             action = .deleteWord
             nextInterval = 0.18
         }
-        delegate?.keyboardView(self, didTrigger: action, touch: activeTouch)
+        delegate?.keyboardView(
+            self,
+            didTrigger: action,
+            touch: activeTouch,
+            gesture: currentGesture(for: activeTouch)
+        )
         deleteTimer = Timer.scheduledTimer(withTimeInterval: nextInterval, repeats: false) {
             [weak self] _ in
             self?.performDeleteRepeatTick()
@@ -1247,16 +2290,16 @@ private final class ResearchKeyboardView: UIView {
         let content = contentRect
         let t = deviceClassScale
         // Scale key spacing with device class so proportions stay iOS-like.
-        let side: CGFloat = isLandscape ? (2.5 + t * 0.8) : (3 + t * 1.2)
-        let gap: CGFloat = isLandscape ? (4.2 + t * 1.1) : (5.2 + t * 1.6)
+        let side: CGFloat = isLandscape ? (2.5 + t * 0.8) : (4.5 + t * 1.5)
+        let gap: CGFloat = isLandscape ? (4.2 + t * 1.1) : (5.8 + t * 2.0)
         let rowGap: CGFloat = isLandscape ? (6.0 + t * 1.6) : (9.0 + t * 2.8)
-        let bottomPad: CGFloat = isLandscape ? 2.5 : 4
+        let bottomPad: CGFloat = isLandscape ? 2.5 : 12
         let availableHeight = content.height - candidateBarHeight - bottomPad
         let minRow: CGFloat = isLandscape ? 31.5 : 39
         let maxRow: CGFloat = isLandscape ? 42 : 52
         let proposedRow = (availableHeight - rowGap * 3) / 4
         let rowHeight = Swift.min(maxRow, Swift.max(minRow, proposedRow))
-        let top = candidateBarHeight + (isLandscape ? 4.5 : 7)
+        let top = candidateBarHeight + (isLandscape ? 4.5 : 5)
 
         let rows: [[(String, KeyboardAction, CGFloat, Bool)]]
         switch layoutMode {
@@ -1332,6 +2375,22 @@ private final class ResearchKeyboardView: UIView {
                         height: candidateBarHeight
                     ))
                 }
+            } else if let preview = autocorrectionPreview {
+                var items = ["“\(preview.literal)”", preview.replacement]
+                if let third = candidates.first(where: {
+                    $0 != preview.literal && $0 != preview.replacement
+                }) {
+                    items.append(third)
+                }
+                let candidateWidth = content.width / CGFloat(items.count)
+                candidateFrames = items.enumerated().map {
+                    ($0.element, CGRect(
+                        x: content.minX + CGFloat($0.offset) * candidateWidth,
+                        y: 0,
+                        width: candidateWidth,
+                        height: candidateBarHeight
+                    ))
+                }
             } else if !candidates.isEmpty {
                 let count = CGFloat(candidates.count)
                 let candidateWidth = content.width / count
@@ -1378,7 +2437,7 @@ private final class ResearchKeyboardView: UIView {
     private var letterKeyFill: UIColor {
         UIColor { traits in
             traits.userInterfaceStyle == .dark
-                ? UIColor(red: 0.42, green: 0.42, blue: 0.44, alpha: 1)
+                ? UIColor(red: 0.235, green: 0.235, blue: 0.235, alpha: 1)
                 : .white
         }
     }
@@ -1386,7 +2445,7 @@ private final class ResearchKeyboardView: UIView {
     private var specialKeyFill: UIColor {
         UIColor { traits in
             traits.userInterfaceStyle == .dark
-                ? UIColor(red: 0.28, green: 0.28, blue: 0.30, alpha: 1)
+                ? UIColor(red: 0.235, green: 0.235, blue: 0.235, alpha: 1)
                 : UIColor(red: 0.675, green: 0.70, blue: 0.74, alpha: 1)
         }
     }
@@ -1410,7 +2469,7 @@ private final class ResearchKeyboardView: UIView {
         let bar = CGRect(x: 0, y: 0, width: bounds.width, height: candidateBarHeight)
         UIColor { traits in
             traits.userInterfaceStyle == .dark
-                ? UIColor(red: 0.14, green: 0.14, blue: 0.15, alpha: 1)
+                ? UIColor(red: 0.086, green: 0.086, blue: 0.086, alpha: 1)
                 : UIColor(red: 0.82, green: 0.835, blue: 0.86, alpha: 1)
         }.setFill()
         context.fill(bar)
@@ -1433,6 +2492,7 @@ private final class ResearchKeyboardView: UIView {
             }
 
             let isCorrectionReplacement = pendingCorrectionDisplay?.replacement == candidate.0
+            let isPendingPreviewReplacement = autocorrectionPreview?.replacement == candidate.0
 
             if isCorrectionReplacement {
                 // Temporary gray/blue outline under the autocorrected word.
@@ -1453,6 +2513,22 @@ private final class ResearchKeyboardView: UIView {
                 )
                 UIColor.secondaryLabel.setFill()
                 UIBezierPath(roundedRect: underline, cornerRadius: 1.2).fill()
+            } else if isPendingPreviewReplacement {
+                UIColor { traits in
+                    traits.userInterfaceStyle == .dark
+                        ? UIColor(white: 0.52, alpha: 1)
+                        : UIColor(white: 0.72, alpha: 1)
+                }.setFill()
+                UIBezierPath(
+                    roundedRect: candidate.1.insetBy(dx: 7, dy: 3),
+                    cornerRadius: max(8, (candidate.1.height - 6) / 2)
+                ).fill()
+                drawText(
+                    candidate.0,
+                    in: candidate.1,
+                    font: .systemFont(ofSize: 17, weight: .medium),
+                    color: keyLabelColor
+                )
             } else {
                 drawText(
                     candidate.0,
@@ -1744,7 +2820,12 @@ private final class ResearchKeyboardView: UIView {
             element.accessibilityTraits = .keyboardKey
             element.activation = { [weak self] in
                 guard let self else { return }
-                self.delegate?.keyboardView(self, didTrigger: .candidate(candidate.0), touch: nil)
+                self.delegate?.keyboardView(
+                    self,
+                    didTrigger: .candidate(candidate.0),
+                    touch: nil,
+                    gesture: nil
+                )
             }
             elements.append(element)
         }
@@ -1755,7 +2836,12 @@ private final class ResearchKeyboardView: UIView {
             element.accessibilityTraits = .keyboardKey
             element.activation = { [weak self] in
                 guard let self else { return }
-                self.delegate?.keyboardView(self, didTrigger: key.action, touch: nil)
+                self.delegate?.keyboardView(
+                    self,
+                    didTrigger: key.action,
+                    touch: nil,
+                    gesture: nil
+                )
             }
             elements.append(element)
         }

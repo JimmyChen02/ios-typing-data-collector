@@ -9,24 +9,469 @@ public enum AdaptiveKeyboardConstants {
         Bundle.main.object(forInfoDictionaryKey: "SharedKeychainAccessGroup") as? String
             ?? "LJM55B5N37.edu.cornell.ab3235.typingresearch.shared"
     }
-    public static let schemaVersion = 5
+    public static let schemaVersion = 6
     public static let letterKeys = Array("qwertyuiopasdfghjklzxcvbnm").map(String.init)
 }
 
-public enum KeyboardLayoutMode: String, Codable, Sendable {
+public enum KeyboardLayoutMode: String, Codable, Hashable, Sendable {
     case letters
     case numbers
     case symbols
     case emoji
 }
 
-public enum OneHandedMode: String, Codable, Sendable {
+public enum OneHandedMode: String, Codable, Hashable, Sendable {
     case off
     case left
     case right
 }
 
-public enum KeyboardEventKind: String, Codable, Sendable {
+public enum KeyboardShiftState: String, Codable, Hashable, Sendable {
+    case lowercase
+    case uppercase
+    case capsLock
+}
+
+public enum KeyboardOrientation: String, Codable, Hashable, Sendable {
+    case portrait
+    case portraitUpsideDown
+    case landscapeLeft
+    case landscapeRight
+    case unknown
+}
+
+public enum TouchPhase: String, Codable, Hashable, Sendable {
+    case began
+    case moved
+    case ended
+    case cancelled
+}
+
+public struct CodablePoint: Codable, Hashable, Sendable {
+    public var x: Double
+    public var y: Double
+
+    public init(x: Double, y: Double) {
+        self.x = x
+        self.y = y
+    }
+
+    public init(_ point: CGPoint) {
+        self.init(x: point.x, y: point.y)
+    }
+
+    public var cgPoint: CGPoint {
+        CGPoint(x: x, y: y)
+    }
+}
+
+public struct TouchTarget: Codable, Hashable, Sendable {
+    public var identifier: String
+    public var key: String?
+    public var frame: CodableRect?
+
+    public init(identifier: String, key: String? = nil, frame: CodableRect? = nil) {
+        self.identifier = identifier
+        self.key = key
+        self.frame = frame
+    }
+}
+
+public struct TouchSample: Codable, Hashable, Sendable {
+    public var phase: TouchPhase
+    public var wallTimestamp: Date?
+    public var monotonicTimestamp: Double?
+    public var absolutePosition: CodablePoint?
+    public var preciseAbsolutePosition: CodablePoint?
+    public var localPosition: CodablePoint?
+    public var normalizedPosition: CodablePoint?
+    public var radius: Double?
+    public var radiusTolerance: Double?
+    public var force: Double?
+    public var maximumForce: Double?
+    public var touchType: Int?
+    public var target: TouchTarget?
+
+    public init(
+        phase: TouchPhase,
+        wallTimestamp: Date? = nil,
+        monotonicTimestamp: Double? = nil,
+        absolutePosition: CodablePoint? = nil,
+        preciseAbsolutePosition: CodablePoint? = nil,
+        localPosition: CodablePoint? = nil,
+        normalizedPosition: CodablePoint? = nil,
+        radius: Double? = nil,
+        radiusTolerance: Double? = nil,
+        force: Double? = nil,
+        maximumForce: Double? = nil,
+        touchType: Int? = nil,
+        target: TouchTarget? = nil
+    ) {
+        self.phase = phase
+        self.wallTimestamp = wallTimestamp
+        self.monotonicTimestamp = monotonicTimestamp
+        self.absolutePosition = absolutePosition
+        self.preciseAbsolutePosition = preciseAbsolutePosition
+        self.localPosition = localPosition
+        self.normalizedPosition = normalizedPosition
+        self.radius = radius
+        self.radiusTolerance = radiusTolerance
+        self.force = force
+        self.maximumForce = maximumForce
+        self.touchType = touchType
+        self.target = target
+    }
+}
+
+public struct TouchGesture: Codable, Hashable, Sendable {
+    public var id: UUID
+    public var samples: [TouchSample]
+    public var initialTarget: TouchTarget?
+    public var finalTarget: TouchTarget?
+    public var selectedFrame: CodableRect?
+    public var startedAt: Date?
+    public var endedAt: Date?
+    public var durationMilliseconds: Double?
+    public var wasCancelled: Bool
+    public var didSlide: Bool
+
+    public init(
+        id: UUID = UUID(),
+        samples: [TouchSample] = [],
+        initialTarget: TouchTarget? = nil,
+        finalTarget: TouchTarget? = nil,
+        selectedFrame: CodableRect? = nil,
+        startedAt: Date? = nil,
+        endedAt: Date? = nil,
+        durationMilliseconds: Double? = nil,
+        wasCancelled: Bool = false,
+        didSlide: Bool = false
+    ) {
+        self.id = id
+        self.samples = samples
+        self.initialTarget = initialTarget
+        self.finalTarget = finalTarget
+        self.selectedFrame = selectedFrame
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+        self.durationMilliseconds = durationMilliseconds
+        self.wasCancelled = wasCancelled
+        self.didSlide = didSlide
+    }
+}
+
+public enum EditOperationType: String, Codable, Hashable, Sendable {
+    case insert
+    case delete
+    case replace
+    case cursorMove
+    case unknown
+}
+
+public enum EditSource: String, Codable, Hashable, Sendable {
+    case key
+    case gesture
+    case candidate
+    case autocorrection
+    case correctionReversion
+    case smartPunctuation
+    case emoji
+    case external
+    case unknown
+}
+
+public enum EditTrigger: String, Codable, Hashable, Sendable {
+    case touch
+    case repeatDelete
+    case candidateSelection
+    case wordBoundary
+    case textDidChange
+    case programmatic
+    case unknown
+}
+
+public struct EditOperation: Codable, Hashable, Sendable {
+    public var id: UUID
+    public var type: EditOperationType
+    public var source: EditSource
+    public var trigger: EditTrigger?
+    public var contextBefore: String?
+    public var contextAfter: String?
+    public var originalText: String?
+    public var replacementText: String?
+    public var deletedText: String?
+    public var gestureID: UUID?
+    public var parentEventID: UUID?
+    public var predictionOfferID: UUID?
+    public var correctionID: UUID?
+
+    public init(
+        id: UUID = UUID(),
+        type: EditOperationType,
+        source: EditSource,
+        trigger: EditTrigger? = nil,
+        contextBefore: String? = nil,
+        contextAfter: String? = nil,
+        originalText: String? = nil,
+        replacementText: String? = nil,
+        deletedText: String? = nil,
+        gestureID: UUID? = nil,
+        parentEventID: UUID? = nil,
+        predictionOfferID: UUID? = nil,
+        correctionID: UUID? = nil
+    ) {
+        self.id = id
+        self.type = type
+        self.source = source
+        self.trigger = trigger
+        self.contextBefore = contextBefore
+        self.contextAfter = contextAfter
+        self.originalText = originalText
+        self.replacementText = replacementText
+        self.deletedText = deletedText
+        self.gestureID = gestureID
+        self.parentEventID = parentEventID
+        self.predictionOfferID = predictionOfferID
+        self.correctionID = correctionID
+    }
+}
+
+public enum PredictionOutcomeKind: String, Codable, Hashable, Sendable {
+    case previewShown
+    case accepted
+    case ignored
+    case replaced
+    case reverted
+}
+
+public struct ModelProvenance: Codable, Hashable, Sendable {
+    public var identifier: String
+    public var version: String?
+    public var artifact: String?
+    public var sourceCommit: String?
+
+    public init(
+        identifier: String,
+        version: String? = nil,
+        artifact: String? = nil,
+        sourceCommit: String? = nil
+    ) {
+        self.identifier = identifier
+        self.version = version
+        self.artifact = artifact
+        self.sourceCommit = sourceCommit
+    }
+}
+
+public struct PredictionOffer: Codable, Hashable, Sendable {
+    public var id: UUID
+    public var candidates: [DecoderCandidate]
+    public var literalCandidateID: String?
+    public var model: ModelProvenance?
+    public var offeredAt: Date?
+
+    public init(
+        id: UUID = UUID(),
+        candidates: [DecoderCandidate],
+        literalCandidateID: String? = nil,
+        model: ModelProvenance? = nil,
+        offeredAt: Date? = nil
+    ) {
+        self.id = id
+        self.candidates = candidates
+        self.literalCandidateID = literalCandidateID
+        self.model = model
+        self.offeredAt = offeredAt
+    }
+}
+
+public struct PredictionOutcome: Codable, Hashable, Sendable {
+    public var offerID: UUID
+    public var kind: PredictionOutcomeKind
+    public var selectedCandidateID: String?
+    public var correctionID: UUID?
+    public var occurredAt: Date?
+
+    public init(
+        offerID: UUID,
+        kind: PredictionOutcomeKind,
+        selectedCandidateID: String? = nil,
+        correctionID: UUID? = nil,
+        occurredAt: Date? = nil
+    ) {
+        self.offerID = offerID
+        self.kind = kind
+        self.selectedCandidateID = selectedCandidateID
+        self.correctionID = correctionID
+        self.occurredAt = occurredAt
+    }
+}
+
+public struct KeyboardLatency: Codable, Hashable, Sendable {
+    public var touchDurationMilliseconds: Double?
+    public var interEventMilliseconds: Double?
+    public var proxyMutationMilliseconds: Double?
+    public var decoderMilliseconds: Double?
+    public var actionTotalMilliseconds: Double?
+    public var offerToSelectionMilliseconds: Double?
+
+    public init(
+        touchDurationMilliseconds: Double? = nil,
+        interEventMilliseconds: Double? = nil,
+        proxyMutationMilliseconds: Double? = nil,
+        decoderMilliseconds: Double? = nil,
+        actionTotalMilliseconds: Double? = nil,
+        offerToSelectionMilliseconds: Double? = nil
+    ) {
+        self.touchDurationMilliseconds = touchDurationMilliseconds
+        self.interEventMilliseconds = interEventMilliseconds
+        self.proxyMutationMilliseconds = proxyMutationMilliseconds
+        self.decoderMilliseconds = decoderMilliseconds
+        self.actionTotalMilliseconds = actionTotalMilliseconds
+        self.offerToSelectionMilliseconds = offerToSelectionMilliseconds
+    }
+}
+
+public struct KeyboardKeyGeometry: Codable, Hashable, Sendable {
+    public var identifier: String
+    public var label: String?
+    public var frame: CodableRect
+
+    public init(identifier: String, label: String? = nil, frame: CodableRect) {
+        self.identifier = identifier
+        self.label = label
+        self.frame = frame
+    }
+}
+
+public struct KeyboardLayoutSnapshot: Codable, Hashable, Sendable {
+    public var id: UUID
+    public var layout: KeyboardLayoutMode
+    public var keyboardBounds: CodableRect
+    public var screenBounds: CodableRect?
+    public var keyGeometries: [KeyboardKeyGeometry]
+    public var candidateBarFrame: CodableRect?
+    public var createdAt: Date?
+
+    public init(
+        id: UUID = UUID(),
+        layout: KeyboardLayoutMode,
+        keyboardBounds: CodableRect,
+        screenBounds: CodableRect? = nil,
+        keyGeometries: [KeyboardKeyGeometry] = [],
+        candidateBarFrame: CodableRect? = nil,
+        createdAt: Date? = nil
+    ) {
+        self.id = id
+        self.layout = layout
+        self.keyboardBounds = keyboardBounds
+        self.screenBounds = screenBounds
+        self.keyGeometries = keyGeometries
+        self.candidateBarFrame = candidateBarFrame
+        self.createdAt = createdAt
+    }
+}
+
+public struct KeyboardSettingsSnapshot: Codable, Hashable, Sendable {
+    public var autoCapitalizationEnabled: Bool?
+    public var autocorrectionEnabled: Bool?
+    public var predictiveEnabled: Bool?
+    public var characterPreviewEnabled: Bool?
+    public var capsLockEnabled: Bool?
+    public var smartPunctuationEnabled: Bool?
+
+    public init(
+        autoCapitalizationEnabled: Bool? = nil,
+        autocorrectionEnabled: Bool? = nil,
+        predictiveEnabled: Bool? = nil,
+        characterPreviewEnabled: Bool? = nil,
+        capsLockEnabled: Bool? = nil,
+        smartPunctuationEnabled: Bool? = nil
+    ) {
+        self.autoCapitalizationEnabled = autoCapitalizationEnabled
+        self.autocorrectionEnabled = autocorrectionEnabled
+        self.predictiveEnabled = predictiveEnabled
+        self.characterPreviewEnabled = characterPreviewEnabled
+        self.capsLockEnabled = capsLockEnabled
+        self.smartPunctuationEnabled = smartPunctuationEnabled
+    }
+}
+
+public struct TextFieldTraitsSnapshot: Codable, Hashable, Sendable {
+    public var keyboardType: Int?
+    public var returnKeyType: Int?
+    public var autocapitalizationType: Int?
+    public var autocorrectionType: Int?
+    public var spellCheckingType: Int?
+    public var enablesReturnKeyAutomatically: Bool?
+    public var isSecureTextEntry: Bool?
+
+    public init(
+        keyboardType: Int? = nil,
+        returnKeyType: Int? = nil,
+        autocapitalizationType: Int? = nil,
+        autocorrectionType: Int? = nil,
+        spellCheckingType: Int? = nil,
+        enablesReturnKeyAutomatically: Bool? = nil,
+        isSecureTextEntry: Bool? = nil
+    ) {
+        self.keyboardType = keyboardType
+        self.returnKeyType = returnKeyType
+        self.autocapitalizationType = autocapitalizationType
+        self.autocorrectionType = autocorrectionType
+        self.spellCheckingType = spellCheckingType
+        self.enablesReturnKeyAutomatically = enablesReturnKeyAutomatically
+        self.isSecureTextEntry = isSecureTextEntry
+    }
+}
+
+public struct KeyboardEnvironmentSnapshot: Codable, Hashable, Sendable {
+    public var orientation: KeyboardOrientation?
+    public var oneHandedMode: OneHandedMode?
+    public var shiftState: KeyboardShiftState?
+    public var candidateBarVisible: Bool?
+    public var settings: KeyboardSettingsSnapshot?
+    public var deviceModel: String?
+    public var screenScale: Double?
+    public var operatingSystemVersion: String?
+    public var appVersion: String?
+    public var fieldTraits: TextFieldTraitsSnapshot?
+    public var hasContextBefore: Bool?
+    public var hasContextAfter: Bool?
+    public var isRecording: Bool?
+
+    public init(
+        orientation: KeyboardOrientation? = nil,
+        oneHandedMode: OneHandedMode? = nil,
+        shiftState: KeyboardShiftState? = nil,
+        candidateBarVisible: Bool? = nil,
+        settings: KeyboardSettingsSnapshot? = nil,
+        deviceModel: String? = nil,
+        screenScale: Double? = nil,
+        operatingSystemVersion: String? = nil,
+        appVersion: String? = nil,
+        fieldTraits: TextFieldTraitsSnapshot? = nil,
+        hasContextBefore: Bool? = nil,
+        hasContextAfter: Bool? = nil,
+        isRecording: Bool? = nil
+    ) {
+        self.orientation = orientation
+        self.oneHandedMode = oneHandedMode
+        self.shiftState = shiftState
+        self.candidateBarVisible = candidateBarVisible
+        self.settings = settings
+        self.deviceModel = deviceModel
+        self.screenScale = screenScale
+        self.operatingSystemVersion = operatingSystemVersion
+        self.appVersion = appVersion
+        self.fieldTraits = fieldTraits
+        self.hasContextBefore = hasContextBefore
+        self.hasContextAfter = hasContextAfter
+        self.isRecording = isRecording
+    }
+}
+
+public enum KeyboardEventKind: String, Codable, Hashable, Sendable {
     case touch
     case insert
     case delete
@@ -43,6 +488,8 @@ public enum KeyboardEventKind: String, Codable, Sendable {
 }
 
 public struct DecoderCandidate: Codable, Hashable, Sendable {
+    public var stableID: String?
+    public var rank: Int?
     public var text: String
     public var score: Double
     public var languageScore: Double
@@ -52,8 +499,12 @@ public struct DecoderCandidate: Codable, Hashable, Sendable {
         text: String,
         score: Double,
         languageScore: Double = 0,
-        isLiteral: Bool = false
+        isLiteral: Bool = false,
+        stableID: String? = nil,
+        rank: Int? = nil
     ) {
+        self.stableID = stableID
+        self.rank = rank
         self.text = text
         self.score = score
         self.languageScore = languageScore
@@ -61,7 +512,7 @@ public struct DecoderCandidate: Codable, Hashable, Sendable {
     }
 }
 
-public struct KeyboardResearchEvent: Codable, Identifiable, Sendable {
+public struct KeyboardResearchEvent: Codable, Hashable, Identifiable, Sendable {
     public var id: UUID
     public var schemaVersion: Int
     public var timestamp: Date
@@ -87,6 +538,21 @@ public struct KeyboardResearchEvent: Codable, Identifiable, Sendable {
     public var selectedCandidate: String?
     public var latencyMilliseconds: Double?
     public var metadata: [String: String]
+    public var sequenceNumber: UInt64?
+    public var parentEventID: UUID?
+    public var gestureID: UUID?
+    public var editID: UUID?
+    public var predictionOfferID: UUID?
+    public var correctionID: UUID?
+    public var touchGesture: TouchGesture?
+    public var editOperation: EditOperation?
+    public var predictionOffer: PredictionOffer?
+    public var predictionOutcome: PredictionOutcome?
+    public var latency: KeyboardLatency?
+    public var environment: KeyboardEnvironmentSnapshot?
+    public var layoutSnapshotID: UUID?
+    public var layoutSnapshot: KeyboardLayoutSnapshot?
+    public var modelProvenance: ModelProvenance?
 
     public init(
         id: UUID = UUID(),
@@ -112,7 +578,22 @@ public struct KeyboardResearchEvent: Codable, Identifiable, Sendable {
         candidates: [DecoderCandidate]? = nil,
         selectedCandidate: String? = nil,
         latencyMilliseconds: Double? = nil,
-        metadata: [String: String] = [:]
+        metadata: [String: String] = [:],
+        sequenceNumber: UInt64? = nil,
+        parentEventID: UUID? = nil,
+        gestureID: UUID? = nil,
+        editID: UUID? = nil,
+        predictionOfferID: UUID? = nil,
+        correctionID: UUID? = nil,
+        touchGesture: TouchGesture? = nil,
+        editOperation: EditOperation? = nil,
+        predictionOffer: PredictionOffer? = nil,
+        predictionOutcome: PredictionOutcome? = nil,
+        latency: KeyboardLatency? = nil,
+        environment: KeyboardEnvironmentSnapshot? = nil,
+        layoutSnapshotID: UUID? = nil,
+        layoutSnapshot: KeyboardLayoutSnapshot? = nil,
+        modelProvenance: ModelProvenance? = nil
     ) {
         self.id = id
         self.schemaVersion = AdaptiveKeyboardConstants.schemaVersion
@@ -139,6 +620,21 @@ public struct KeyboardResearchEvent: Codable, Identifiable, Sendable {
         self.selectedCandidate = selectedCandidate
         self.latencyMilliseconds = latencyMilliseconds
         self.metadata = metadata
+        self.sequenceNumber = sequenceNumber
+        self.parentEventID = parentEventID
+        self.gestureID = gestureID
+        self.editID = editID
+        self.predictionOfferID = predictionOfferID
+        self.correctionID = correctionID
+        self.touchGesture = touchGesture
+        self.editOperation = editOperation
+        self.predictionOffer = predictionOffer
+        self.predictionOutcome = predictionOutcome
+        self.latency = latency
+        self.environment = environment
+        self.layoutSnapshotID = layoutSnapshotID
+        self.layoutSnapshot = layoutSnapshot
+        self.modelProvenance = modelProvenance
     }
 }
 
@@ -274,7 +770,13 @@ public final class SharedKeyboardPreferences {
         set { defaults.set(newValue, forKey: Key.lastRetentionPurge) }
     }
 
-    public var isRecording: Bool { !recordingPaused }
+    /// Full-schema telemetry can contain typed and surrounding text. Recording
+    /// stays disabled until the containing app records current consent.
+    public var hasTelemetryConsent: Bool {
+        KeyboardUploadStateStore(defaults: defaults).hasCurrentConsent
+    }
+
+    public var isRecording: Bool { !recordingPaused && hasTelemetryConsent }
 }
 
 public enum SharedKeyboardStorage {
@@ -316,7 +818,7 @@ public enum SharedKeyboardStorage {
     }
 }
 
-public final class EncryptedEventLedger {
+public final class EncryptedEventLedger: @unchecked Sendable {
     public static let shared = EncryptedEventLedger()
 
     private let encoder: JSONEncoder = {
@@ -500,33 +1002,36 @@ public enum ContextPrivacy {
     }
 }
 
-/// Compact English decoder for suggestion bar + autocorrect (not Apple's language model).
+/// Deterministic text-only decoder backed by a frozen SymSpell English lexicon.
+///
+/// Touch geometry and personalization are deliberately excluded so classic and
+/// Gaussian keyboard conditions receive exactly the same language-model scores.
 public struct LocalLanguageDecoder: Sendable {
-    private static let vocabulary = [
-        "a", "about", "after", "all", "also", "am", "an", "and", "any", "are", "as",
-        "at", "back", "be", "because", "been", "but", "by", "can", "come", "could",
-        "day", "did", "do", "even", "first", "for", "from", "get", "give", "go", "good",
-        "had", "has", "have", "he", "hello", "her", "here", "him", "his", "how", "i",
-        "if", "in", "into", "is", "it", "its", "just", "know", "like", "look", "make",
-        "me", "more", "most", "my", "new", "no", "not", "now", "of", "on", "one",
-        "only", "or", "other", "our", "out", "over", "people", "say", "see", "she",
-        "so", "some", "take", "than", "that", "the", "their", "them", "then", "there",
-        "these", "they", "think", "this", "time", "to", "two", "up", "use", "very",
-        "want", "was", "way", "we", "well", "were", "what", "when", "which", "who",
-        "will", "with", "work", "would", "year", "you", "your"
-    ]
+    private let model: EnglishLexiconModel
 
-    /// Common same-length typos → corrections (boosted for autocorrect demos).
-    private static let typoCorrections: [String: String] = [
-        "teh": "the",
-        "adn": "and",
-        "taht": "that",
-        "waht": "what",
-        "recieve": "receive",
-        "seperate": "separate"
-    ]
+    public static var modelIdentifier: String {
+        EnglishLanguageModelData.modelIdentifier
+    }
 
-    public init() {}
+    public static var modelIsLoaded: Bool {
+        EnglishLanguageModelData.isLoaded
+    }
+
+    public static var loadedUnigramCount: Int {
+        EnglishLanguageModelData.loadedUnigramCount
+    }
+
+    public static var expectedUnigramCount: Int {
+        EnglishLanguageModelData.expectedUnigramCount
+    }
+
+    public static var modelSourceCommit: String {
+        EnglishLanguageModelData.sourceCommit
+    }
+
+    public init() {
+        model = EnglishLanguageModelData.shared
+    }
 
     public func candidates(for prefix: String, previousWord: String?) -> [DecoderCandidate] {
         let literal = prefix.lowercased()
@@ -535,67 +1040,83 @@ public struct LocalLanguageDecoder: Sendable {
         }
 
         var results: [DecoderCandidate] = []
+        let sourceWords = literal.first.flatMap { model.prefixBuckets[$0] } ?? []
 
-        // Prefix completions rank above fuzzy edits so the bar feels like QuickType.
-        for word in Self.vocabulary where word.hasPrefix(literal) {
-            let completionPenalty = Double(word.count - literal.count) * 0.08
-            let score = 4.0 - completionPenalty
+        // Corpus frequency ranks deterministic prefix completions.
+        for word in sourceWords where word.normalized.hasPrefix(literal) {
+            let languageScore = score(forFrequency: word.frequency)
+            let completionPenalty = Double(word.normalized.count - literal.count) * 0.06
+            let score = languageScore + 0.8 - completionPenalty
             results.append(
                 DecoderCandidate(
-                    text: word,
+                    text: displayForm(of: word.text, matching: prefix),
                     score: score,
-                    languageScore: score,
-                    isLiteral: word == literal
+                    languageScore: languageScore,
+                    isLiteral: word.normalized == literal
                 )
             )
         }
 
-        for word in Self.vocabulary {
-            let rawDistance = editDistance(literal, word)
-            let distance = isSingleAdjacentTransposition(literal, word) ? 1 : rawDistance
-            guard distance > 0, distance <= 2 else { continue }
-            // Permit confident one-character insertion/deletion corrections while
-            // still preferring same-length substitutions/transpositions.
-            let lengthPenalty = word.count == literal.count ? 0.0 : 0.25
-            let score = 3.4 - Double(distance) - lengthPenalty
+        // A small frozen whitelist resolves ambiguous common one-edit typos.
+        if let replacement = model.directCorrections[literal] {
+            let normalizedReplacement = replacement.lowercased()
+            let frequency = model.wordsByNormalizedForm[normalizedReplacement]?.frequency ?? 100
+            let languageScore = score(forFrequency: frequency)
             results.append(
                 DecoderCandidate(
-                    text: word,
-                    score: score,
-                    languageScore: score,
+                    text: displayForm(of: replacement, matching: prefix),
+                    score: languageScore + 2.0,
+                    languageScore: languageScore,
                     isLiteral: false
                 )
             )
         }
 
-        if let corrected = Self.typoCorrections[literal] {
-            results.append(
-                DecoderCandidate(
-                    text: corrected,
-                    score: 5.0,
-                    languageScore: 5.0,
-                    isLiteral: false
-                )
-            )
+        // Restrict fuzzy search to the bundled frequent vocabulary. This keeps the
+        // keyboard responsive while preserving ordinary typo corrections.
+        if literal.count >= 2 {
+            let candidateLengths = max(1, literal.count - 1)...(literal.count + 1)
+            for length in candidateLengths {
+                for word in model.correctionBuckets[length] ?? [] {
+                    guard !word.normalized.hasPrefix(literal) else { continue }
+                    let distance = editDistance(literal, word.normalized, maximum: 1)
+                    guard distance == 1 else { continue }
+                    let languageScore = score(forFrequency: word.frequency)
+                    let lengthPenalty = word.normalized.count == literal.count ? 0.0 : 0.15
+                    results.append(
+                        DecoderCandidate(
+                            text: displayForm(of: word.text, matching: prefix),
+                            score: languageScore + 0.6 - lengthPenalty,
+                            languageScore: languageScore,
+                            isLiteral: false
+                        )
+                    )
+                }
+            }
         }
 
-        let literalScore = Self.vocabulary.contains(literal) ? 3.5 : 1.8
+        let knownLiteral = model.wordsByNormalizedForm[literal]
+        let literalLanguageScore = knownLiteral.map { score(forFrequency: $0.frequency) } ?? 0
+        let literalScore = knownLiteral == nil ? 1.0 : literalLanguageScore + 0.8
         let literalCandidate = DecoderCandidate(
-            text: literal,
+            text: prefix,
             score: literalScore,
-            languageScore: literalScore,
+            languageScore: literalLanguageScore,
             isLiteral: true
         )
         results.append(literalCandidate)
 
-        var ranked = Dictionary(grouping: results, by: \.text)
+        var ranked = Dictionary(grouping: results, by: { $0.text.lowercased() })
             .compactMap { $0.value.max(by: { $0.score < $1.score }) }
-            .sorted { $0.score > $1.score }
+            .sorted {
+                if $0.score != $1.score { return $0.score > $1.score }
+                return $0.text.localizedStandardCompare($1.text) == .orderedAscending
+            }
 
         // Always keep the typed literal in the bar (iOS quotes it when correcting).
-        if !ranked.contains(where: { $0.text == literal }) {
+        if !ranked.contains(where: \.isLiteral) {
             ranked.insert(literalCandidate, at: min(2, ranked.count))
-        } else if let index = ranked.firstIndex(where: { $0.text == literal }), index > 2 {
+        } else if let index = ranked.firstIndex(where: \.isLiteral), index > 2 {
             ranked.remove(at: index)
             ranked.insert(literalCandidate, at: 2)
         }
@@ -604,36 +1125,56 @@ public struct LocalLanguageDecoder: Sendable {
     }
 
     private func nextWordCandidates(after previousWord: String?) -> [DecoderCandidate] {
-        let common: [String]
-        switch previousWord?.lowercased() {
-        case "i": common = ["am", "have", "think"]
-        case "thank": common = ["you", "the", "them"]
-        case "how": common = ["are", "do", "is"]
-        case "the": common = ["best", "first", "new"]
-        default: common = ["the", "I", "and"]
-        }
-        return common.enumerated().map {
-            DecoderCandidate(
-                text: $0.element,
-                score: 1 - Double($0.offset) * 0.1,
-                languageScore: 1
+        // The SymSpell frequency dictionary contains unigrams but no contextual
+        // n-grams. Return its global ranking instead of fabricating
+        // context rules; the parameter remains for API compatibility.
+        _ = previousWord
+        return model.globallyRankedWords.prefix(3).map {
+            let languageScore = score(forFrequency: $0.frequency)
+            return DecoderCandidate(
+                text: $0.text,
+                score: languageScore,
+                languageScore: languageScore
             )
         }
     }
 
-    private func editDistance(_ lhs: String, _ rhs: String) -> Int {
+    private func score(forFrequency frequency: Int) -> Double {
+        log10(Double(max(1, frequency)))
+    }
+
+    private func displayForm(of candidate: String, matching prefix: String) -> String {
+        guard candidate != "I" else { return candidate }
+        if prefix.count > 1, prefix == prefix.uppercased() {
+            return candidate.uppercased()
+        }
+        if prefix.first?.isUppercase == true {
+            return candidate.prefix(1).uppercased() + String(candidate.dropFirst())
+        }
+        return candidate
+    }
+
+    private func editDistance(_ lhs: String, _ rhs: String, maximum: Int) -> Int {
+        if isSingleAdjacentTransposition(lhs, rhs) {
+            return 1
+        }
+        guard abs(lhs.count - rhs.count) <= maximum else { return maximum + 1 }
         let left = Array(lhs)
         let right = Array(rhs)
         var previous = Array(0...right.count)
         for (i, leftCharacter) in left.enumerated() {
             var current = [i + 1]
+            var rowMinimum = current[0]
             for (j, rightCharacter) in right.enumerated() {
-                current.append(min(
+                let value = min(
                     current[j] + 1,
                     previous[j + 1] + 1,
                     previous[j] + (leftCharacter == rightCharacter ? 0 : 1)
-                ))
+                )
+                current.append(value)
+                rowMinimum = min(rowMinimum, value)
             }
+            if rowMinimum > maximum { return maximum + 1 }
             previous = current
         }
         return previous[right.count]

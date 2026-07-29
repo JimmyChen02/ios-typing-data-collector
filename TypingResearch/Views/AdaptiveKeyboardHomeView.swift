@@ -2,101 +2,59 @@ import SwiftUI
 import UIKit
 
 struct AdaptiveKeyboardHomeView: View {
-    @State private var typedText = ""
     @State private var recordingPaused = SharedKeyboardPreferences.shared.recordingPaused
-    @State private var retentionDays = SharedKeyboardPreferences.shared.retentionDays
     @State private var exportURL: URL?
-    @State private var statusMessage: String?
     @State private var eventCount = 0
+    @State private var pendingEventCount = 0
+    @State private var acknowledgedEventCount = 0
+    @State private var lastSuccessfulUpload: Date?
+    @State private var consentGranted = KeyboardUploadStateStore().hasCurrentConsent
+    @State private var isConfigured = KeyboardUploadConfiguration().isConfigured
+    @State private var isUploading = false
+    @State private var statusMessage: String?
     @State private var showingDeleteConfirmation = false
-    @State private var autoCapitalization = SharedKeyboardPreferences.shared.autoCapitalizationEnabled
-    @State private var autocorrection = SharedKeyboardPreferences.shared.autocorrectionEnabled
-    @State private var predictive = SharedKeyboardPreferences.shared.predictiveEnabled
-    @State private var characterPreview = SharedKeyboardPreferences.shared.characterPreviewEnabled
-    @State private var capsLock = SharedKeyboardPreferences.shared.capsLockEnabled
-    @State private var smartPunctuation = SharedKeyboardPreferences.shared.smartPunctuationEnabled
-    @State private var oneHandedMode = SharedKeyboardPreferences.shared.oneHandedMode
+    @State private var showingConsentConfirmation = false
+    private let uploadState = KeyboardUploadStateStore()
 
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    Text("Research Keyboard")
-                        .font(.title2.weight(.bold))
-                    Text("Stock iOS-style keyboard with a three-candidate suggestion bar, autocorrect feedback, key popups, accents, emoji, one-handed/landscape layouts, and logging.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section("Type here") {
-                    TextEditor(text: $typedText)
-                        .frame(minHeight: 160)
-                        .font(.body)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                    if typedText.isEmpty {
-                        Text("Tap this field, switch to Adaptive Keyboard (globe key), then type. Tap a suggestion to accept it, or type “teh ” to try autocorrect.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        LabeledContent("Characters", value: "\(typedText.count)")
-                        Button("Clear typed text", role: .destructive) {
-                            typedText = ""
-                        }
-                    }
-                }
-
                 Section("Enable the keyboard") {
                     Label("Open Settings → General → Keyboard → Keyboards", systemImage: "1.circle")
                     Label("Add New Keyboard → Adaptive Keyboard", systemImage: "2.circle")
                     Label("Allow Full Access (needed for logging)", systemImage: "3.circle")
-                    Label("In the field above, tap 🌐 and choose Adaptive Keyboard", systemImage: "4.circle")
+                    Label("In any text field, tap 🌐 and choose Adaptive Keyboard", systemImage: "4.circle")
                     Button("Open App Settings") {
                         guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
                         UIApplication.shared.open(url)
                     }
                 }
 
-                Section {
-                    Toggle("Auto-Capitalization", isOn: $autoCapitalization)
-                        .onChange(of: autoCapitalization) { _, value in
-                            SharedKeyboardPreferences.shared.autoCapitalizationEnabled = value
+                Section("Full telemetry consent") {
+                    Toggle("Allow recording and automatic upload", isOn: Binding(
+                        get: { consentGranted },
+                        set: { newValue in
+                            if newValue {
+                                showingConsentConfirmation = true
+                            } else {
+                                uploadState.setConsent(granted: false)
+                                consentGranted = false
+                                statusMessage = "Recording and uploads are disabled."
+                                refreshUploadStatus()
+                            }
                         }
-                    Toggle("Auto-Correction", isOn: $autocorrection)
-                        .onChange(of: autocorrection) { _, value in
-                            SharedKeyboardPreferences.shared.autocorrectionEnabled = value
-                        }
-                    Toggle("Predictive", isOn: $predictive)
-                        .onChange(of: predictive) { _, value in
-                            SharedKeyboardPreferences.shared.predictiveEnabled = value
-                        }
-                    Toggle("Character Preview", isOn: $characterPreview)
-                        .onChange(of: characterPreview) { _, value in
-                            SharedKeyboardPreferences.shared.characterPreviewEnabled = value
-                        }
-                    Toggle("Enable Caps Lock", isOn: $capsLock)
-                        .onChange(of: capsLock) { _, value in
-                            SharedKeyboardPreferences.shared.capsLockEnabled = value
-                        }
-                    Toggle("Smart Punctuation", isOn: $smartPunctuation)
-                        .onChange(of: smartPunctuation) { _, value in
-                            SharedKeyboardPreferences.shared.smartPunctuationEnabled = value
-                        }
-                    Picker("One-Handed Keyboard", selection: $oneHandedMode) {
-                        Text("Off").tag(OneHandedMode.off)
-                        Text("Left").tag(OneHandedMode.left)
-                        Text("Right").tag(OneHandedMode.right)
-                    }
-                    .onChange(of: oneHandedMode) { _, value in
-                        SharedKeyboardPreferences.shared.oneHandedMode = value
-                    }
-                } header: {
-                    Text("Keyboard behavior")
-                } footer: {
-                    Text("Mirrors Settings → General → Keyboard. One-handed mode is also reachable by holding the globe key.")
+                    ))
+                    Text(
+                        "This research keyboard records the full event schema. It may include "
+                        + "typed text, nearby text context, inserted, deleted, and replacement "
+                        + "text, suggestions, emoji, key labels, touch locations, timing, and "
+                        + "device/keyboard settings. Data is sent to the research server."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
 
-                Section("Logging") {
+                Section("Telemetry") {
                     Toggle("Pause recording", isOn: Binding(
                         get: { recordingPaused },
                         set: {
@@ -104,31 +62,45 @@ struct AdaptiveKeyboardHomeView: View {
                             SharedKeyboardPreferences.shared.recordingPaused = $0
                         }
                     ))
-                    Label(
-                        recordingPaused ? "Recording paused" : "Recording taps, suggestions, autocorrect, and raw text",
-                        systemImage: recordingPaused ? "pause.circle" : "record.circle"
+                    .disabled(!consentGranted)
+                    LabeledContent("Encrypted events", value: "\(eventCount)")
+                    LabeledContent("Pending upload", value: "\(pendingEventCount)")
+                    LabeledContent("Server acknowledged", value: "\(acknowledgedEventCount)")
+                    LabeledContent(
+                        "Last successful upload",
+                        value: lastSuccessfulUpload?.formatted(date: .abbreviated, time: .shortened)
+                            ?? "Never"
                     )
-                    .foregroundStyle(recordingPaused ? Color.secondary : Color.red)
-                    LabeledContent("Logged events", value: "\(eventCount)")
-                    Button("Refresh event count") {
-                        refreshEventCount()
+                    if !isConfigured {
+                        Label(
+                            "Supabase is not configured for this build.",
+                            systemImage: "exclamationmark.triangle"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.orange)
                     }
-                }
-
-                Section("Logged data") {
+                    Button {
+                        uploadNow()
+                    } label: {
+                        if isUploading {
+                            ProgressView()
+                        } else {
+                            Label("Send data now", systemImage: "arrow.up.circle")
+                        }
+                    }
+                    .disabled(!consentGranted || !isConfigured || isUploading)
+                    Button("Refresh event count") {
+                        refreshUploadStatus()
+                    }
                     Button("Prepare decrypted JSONL export") {
                         do {
                             exportURL = try EncryptedEventLedger.shared.exportDecrypted()
-                            refreshEventCount()
+                            refreshUploadStatus()
                             statusMessage = "Export prepared."
                         } catch {
                             statusMessage = error.localizedDescription
                         }
                     }
-                    Stepper("Retain events for \(retentionDays) days", value: $retentionDays, in: 1...365)
-                        .onChange(of: retentionDays) { _, value in
-                            SharedKeyboardPreferences.shared.retentionDays = value
-                        }
                     if let exportURL {
                         ShareLink(item: exportURL) {
                             Label("Share prepared export", systemImage: "square.and.arrow.up")
@@ -143,34 +115,91 @@ struct AdaptiveKeyboardHomeView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-
-                Section("Notes") {
-                    Text("The keyboard uses a three-candidate suggestion bar. Longer suggestions are inserted only when tapped; space/return only apply qualifying typo autocorrections. Dictation and QuickPath remain out of scope. Autocorrect still uses the local language model.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
             }
             .navigationTitle("Keyboard")
-            .onAppear(perform: refreshEventCount)
+            .onAppear(perform: refreshUploadStatus)
+            .alert("Allow full keyboard telemetry?", isPresented: $showingConsentConfirmation) {
+                Button("Allow recording and upload") {
+                    uploadState.setConsent(granted: true)
+                    consentGranted = true
+                    recordingPaused = false
+                    SharedKeyboardPreferences.shared.recordingPaused = false
+                    statusMessage = "Consent recorded. Keyboard telemetry is enabled."
+                    refreshUploadStatus()
+                }
+                Button("Cancel", role: .cancel) {
+                    consentGranted = uploadState.hasCurrentConsent
+                }
+            } message: {
+                Text(
+                    "Typed and surrounding text may be recorded and uploaded. "
+                    + "Only continue after reading and agreeing to the study consent information."
+                )
+            }
             .alert("Delete keyboard logs?", isPresented: $showingDeleteConfirmation) {
                 Button("Delete", role: .destructive) {
                     do {
                         try EncryptedEventLedger.shared.deleteAll()
                         exportURL = nil
                         eventCount = 0
-                        statusMessage = "Logs deleted."
+                        pendingEventCount = 0
+                        acknowledgedEventCount = 0
+                        statusMessage = "Local logs deleted. Previously uploaded server data remains."
                     } catch {
                         statusMessage = error.localizedDescription
                     }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("This permanently removes the encrypted touch ledger from this device.")
+                Text(
+                    "This permanently removes the encrypted ledger from this device. "
+                    + "It does not delete data already stored on the research server."
+                )
             }
         }
     }
 
-    private func refreshEventCount() {
-        eventCount = (try? EncryptedEventLedger.shared.readEvents().count) ?? 0
+    private func refreshUploadStatus() {
+        consentGranted = uploadState.hasCurrentConsent
+        isConfigured = KeyboardUploadConfiguration().isConfigured
+        Task {
+            do {
+                let status = try await KeyboardEventUploader.shared.status()
+                await MainActor.run {
+                    eventCount = status.totalEvents
+                    pendingEventCount = status.pendingEvents
+                    acknowledgedEventCount = status.acknowledgedEvents
+                    lastSuccessfulUpload = status.lastSuccessfulUpload
+                }
+            } catch {
+                await MainActor.run {
+                    statusMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func uploadNow() {
+        isUploading = true
+        statusMessage = "Uploading…"
+        Task {
+            do {
+                let result = try await KeyboardEventUploader.shared.uploadNow()
+                await MainActor.run {
+                    isUploading = false
+                    lastSuccessfulUpload = result.lastSuccessfulUpload
+                    statusMessage = result.uploadedEvents == 0
+                        ? "Everything is already uploaded."
+                        : "Uploaded \(result.uploadedEvents) events."
+                    refreshUploadStatus()
+                }
+            } catch {
+                await MainActor.run {
+                    isUploading = false
+                    statusMessage = error.localizedDescription
+                    refreshUploadStatus()
+                }
+            }
+        }
     }
 }

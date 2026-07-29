@@ -33,6 +33,13 @@
 		AK000000000000000000005 /* AdaptiveKeyboard.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = AK000000000000000000199 /* AdaptiveKeyboard.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		AK000000000000000000006 /* AdaptiveKeyboardCoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AK000000000000000000107 /* AdaptiveKeyboardCoreTests.swift */; };
 		AK000000000000000000007 /* EmojiKeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AK000000000000000000108 /* EmojiKeyboardView.swift */; };
+		AK000000000000000000008 /* EnglishLanguageModelData.swift in Sources */ = {isa = PBXBuildFile; fileRef = AK000000000000000000109 /* EnglishLanguageModelData.swift */; };
+		AK000000000000000000009 /* EnglishLanguageModelData.swift in Sources */ = {isa = PBXBuildFile; fileRef = AK000000000000000000109 /* EnglishLanguageModelData.swift */; };
+		AK00000000000000000000A /* symspell_en_30k.tsv in Resources */ = {isa = PBXBuildFile; fileRef = AK00000000000000000010A /* symspell_en_30k.tsv */; };
+		AK00000000000000000000B /* symspell_en_30k.tsv in Resources */ = {isa = PBXBuildFile; fileRef = AK00000000000000000010A /* symspell_en_30k.tsv */; };
+		AK00000000000000000000C /* symspell_en_30k.tsv in Resources */ = {isa = PBXBuildFile; fileRef = AK00000000000000000010A /* symspell_en_30k.tsv */; };
+		AK00000000000000000000D /* KeyboardEventUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = AK00000000000000000010B /* KeyboardEventUploader.swift */; };
+		AK00000000000000000000E /* KeyboardEventUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = AK00000000000000000010B /* KeyboardEventUploader.swift */; };
 		HC000000000000000000001 /* HandSample.swift in Sources */ = {isa = PBXBuildFile; fileRef = HC000000000000000000002 /* HandSample.swift */; };
 		HC000000000000000000003 /* HandImageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = HC000000000000000000004 /* HandImageStore.swift */; };
 		HC000000000000000000005 /* MotionRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = HC000000000000000000006 /* MotionRecorder.swift */; };
@@ -91,6 +98,9 @@
 		AK000000000000000000106 /* AdaptiveKeyboard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AdaptiveKeyboard.entitlements; sourceTree = "<group>"; };
 		AK000000000000000000107 /* AdaptiveKeyboardCoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveKeyboardCoreTests.swift; sourceTree = "<group>"; };
 		AK000000000000000000108 /* EmojiKeyboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmojiKeyboardView.swift; sourceTree = "<group>"; };
+		AK000000000000000000109 /* EnglishLanguageModelData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnglishLanguageModelData.swift; sourceTree = "<group>"; };
+		AK00000000000000000010A /* symspell_en_30k.tsv */ = {isa = PBXFileReference; lastKnownFileType = text; path = symspell_en_30k.tsv; sourceTree = "<group>"; };
+		AK00000000000000000010B /* KeyboardEventUploader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardEventUploader.swift; sourceTree = "<group>"; };
 		AK000000000000000000198 /* TypingResearchTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TypingResearchTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AK000000000000000000199 /* AdaptiveKeyboard.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AdaptiveKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		BB000000000000000000001 /* TypingResearchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypingResearchApp.swift; sourceTree = "<group>"; };
@@ -150,6 +160,9 @@
 			isa = PBXGroup;
 			children = (
 				AK000000000000000000101 /* AdaptiveKeyboardCore.swift */,
+				AK00000000000000000010B /* KeyboardEventUploader.swift */,
+				AK000000000000000000109 /* EnglishLanguageModelData.swift */,
+				AK00000000000000000010A /* symspell_en_30k.tsv */,
 			);
 			path = TypingResearchShared;
 			sourceTree = "<group>";
@@ -377,6 +390,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AK00000000000000000000B /* symspell_en_30k.tsv in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -384,6 +398,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AK00000000000000000000C /* symspell_en_30k.tsv in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -392,6 +407,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				87AA80522F6DB50D00764884 /* Assets.xcassets in Resources */,
+				AK00000000000000000000A /* symspell_en_30k.tsv in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -403,6 +419,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				AK000000000000000000003 /* AdaptiveKeyboardCore.swift in Sources */,
+				AK00000000000000000000E /* KeyboardEventUploader.swift in Sources */,
+				AK000000000000000000009 /* EnglishLanguageModelData.swift in Sources */,
 				AK000000000000000000004 /* KeyboardViewController.swift in Sources */,
 				AK000000000000000000007 /* EmojiKeyboardView.swift in Sources */,
 			);
@@ -421,6 +439,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				AK000000000000000000001 /* AdaptiveKeyboardCore.swift in Sources */,
+				AK00000000000000000000D /* KeyboardEventUploader.swift in Sources */,
+				AK000000000000000000008 /* EnglishLanguageModelData.swift in Sources */,
 				AK000000000000000000002 /* AdaptiveKeyboardHomeView.swift in Sources */,
 				AA000000000000000000001 /* TypingResearchApp.swift in Sources */,
 				AA000000000000000000002 /* Models.swift in Sources */,
@@ -488,6 +508,8 @@
 				PRODUCT_BUNDLE_IDENTIFIER = edu.cornell.ab3235.typingresearch.AdaptiveKeyboard;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
+				SUPABASE_PROJECT_URL = "https://YOUR_PROJECT_REF.supabase.co";
+				SUPABASE_PUBLISHABLE_KEY = YOUR_SUPABASE_PUBLISHABLE_KEY;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -512,6 +534,8 @@
 				PRODUCT_BUNDLE_IDENTIFIER = edu.cornell.ab3235.typingresearch.AdaptiveKeyboard;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
+				SUPABASE_PROJECT_URL = "https://YOUR_PROJECT_REF.supabase.co";
+				SUPABASE_PUBLISHABLE_KEY = YOUR_SUPABASE_PUBLISHABLE_KEY;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -684,6 +708,8 @@
 				INFOPLIST_KEY_NSMotionUsageDescription = "Record device motion to study how holding hand affects typing.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Attach a photo for holding-hand classification research.";
 				INFOPLIST_KEY_SharedKeychainAccessGroup = "$(AppIdentifierPrefix)edu.cornell.ab3235.typingresearch.shared";
+				INFOPLIST_KEY_SupabaseProjectURL = "$(SUPABASE_PROJECT_URL)";
+				INFOPLIST_KEY_SupabasePublishableKey = "$(SUPABASE_PUBLISHABLE_KEY)";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -696,6 +722,8 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = edu.cornell.ab3235.typingresearch;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPABASE_PROJECT_URL = "https://YOUR_PROJECT_REF.supabase.co";
+				SUPABASE_PUBLISHABLE_KEY = YOUR_SUPABASE_PUBLISHABLE_KEY;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -717,6 +745,8 @@
 				INFOPLIST_KEY_NSMotionUsageDescription = "Record device motion to study how holding hand affects typing.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Attach a photo for holding-hand classification research.";
 				INFOPLIST_KEY_SharedKeychainAccessGroup = "$(AppIdentifierPrefix)edu.cornell.ab3235.typingresearch.shared";
+				INFOPLIST_KEY_SupabaseProjectURL = "$(SUPABASE_PROJECT_URL)";
+				INFOPLIST_KEY_SupabasePublishableKey = "$(SUPABASE_PUBLISHABLE_KEY)";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -729,6 +759,8 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = edu.cornell.ab3235.typingresearch;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPABASE_PROJECT_URL = "https://YOUR_PROJECT_REF.supabase.co";
+				SUPABASE_PUBLISHABLE_KEY = YOUR_SUPABASE_PUBLISHABLE_KEY;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;

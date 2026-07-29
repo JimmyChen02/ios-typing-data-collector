@@ -4,12 +4,16 @@ protocol EmojiKeyboardViewDelegate: AnyObject {
     func emojiKeyboard(
         _ view: EmojiKeyboardView,
         didSelect emoji: String,
-        at location: CGPoint,
-        keyFrame: CGRect
+        gesture: TouchGesture
     )
-    func emojiKeyboardDidTapLetters(_ view: EmojiKeyboardView)
-    func emojiKeyboardDidTapDelete(_ view: EmojiKeyboardView)
-    func emojiKeyboardDidTapGlobe(_ view: EmojiKeyboardView)
+    func emojiKeyboardDidTapLetters(_ view: EmojiKeyboardView, gesture: TouchGesture)
+    func emojiKeyboardDidTapDelete(
+        _ view: EmojiKeyboardView,
+        gesture: TouchGesture,
+        isRepeat: Bool
+    )
+    func emojiKeyboardDidTapGlobe(_ view: EmojiKeyboardView, gesture: TouchGesture)
+    func emojiKeyboard(_ view: EmojiKeyboardView, didCancelActionGesture gesture: TouchGesture)
 }
 
 struct EmojiCategory {
@@ -32,8 +36,10 @@ final class EmojiKeyboardView: UIView {
     private let lettersButton = UIButton(type: .system)
     private let globeButton = UIButton(type: .system)
     private let deleteButton = UIButton(type: .system)
-    private var lastTouchLocation: CGPoint = .zero
+    private var selectionGesture: TouchGesture?
+    private var actionGestures: [ObjectIdentifier: TouchGesture] = [:]
     private var deleteTimer: Timer?
+    private var deleteDidRepeat = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -54,6 +60,39 @@ final class EmojiKeyboardView: UIView {
     func reloadCategories() {
         categories = EmojiCatalog.categories(recents: preferences.recentEmoji)
         collectionView.reloadData()
+    }
+
+    var renderedGeometry: [KeyboardKeyGeometry] {
+        var geometry: [KeyboardKeyGeometry] = collectionView.indexPathsForVisibleItems
+            .sorted()
+            .compactMap { indexPath -> KeyboardKeyGeometry? in
+            guard indexPath.section < categories.count,
+                  indexPath.item < categories[indexPath.section].emoji.count,
+                  let attributes = collectionView.layoutAttributesForItem(at: indexPath) else {
+                return nil
+            }
+            let emoji = categories[indexPath.section].emoji[indexPath.item]
+            return KeyboardKeyGeometry(
+                identifier: "emoji:\(indexPath.section):\(indexPath.item)",
+                label: emoji,
+                frame: CodableRect(collectionView.convert(attributes.frame, to: self))
+            )
+        }
+        let controls: [(String, String, UIButton)] = [
+            ("emoji:letters", "ABC", lettersButton),
+            ("emoji:globe", "globe", globeButton),
+            ("emoji:delete", "delete", deleteButton)
+        ]
+        geometry += controls.compactMap { control -> KeyboardKeyGeometry? in
+            let (identifier, label, button) = control
+            guard !button.isHidden else { return nil }
+            return KeyboardKeyGeometry(
+                identifier: identifier,
+                label: label,
+                frame: CodableRect(button.convert(button.bounds, to: self))
+            )
+        }
+        return geometry
     }
 
     private func buildCollectionView() {
@@ -95,18 +134,15 @@ final class EmojiKeyboardView: UIView {
         lettersButton.titleLabel?.font = .systemFont(ofSize: 15)
         lettersButton.tintColor = .label
         lettersButton.setTitleColor(.label, for: .normal)
-        lettersButton.addTarget(self, action: #selector(handleLetters), for: .touchUpInside)
+        installActionRecognizer(on: lettersButton)
 
         globeButton.setImage(UIImage(systemName: "globe"), for: .normal)
         globeButton.tintColor = .label
-        globeButton.addTarget(self, action: #selector(handleGlobe), for: .touchUpInside)
+        installActionRecognizer(on: globeButton)
 
         deleteButton.setImage(UIImage(systemName: "delete.left"), for: .normal)
         deleteButton.tintColor = .label
-        deleteButton.addTarget(self, action: #selector(handleDelete), for: .touchUpInside)
-        let deleteHold = UILongPressGestureRecognizer(target: self, action: #selector(handleDeleteHold(_:)))
-        deleteHold.minimumPressDuration = 0.42
-        deleteButton.addGestureRecognizer(deleteHold)
+        installActionRecognizer(on: deleteButton)
 
         categoryScrollView.translatesAutoresizingMaskIntoConstraints = false
         categoryScrollView.showsHorizontalScrollIndicator = false
@@ -155,37 +191,232 @@ final class EmojiKeyboardView: UIView {
     }
 
     @objc private func recordTouchLocation(_ recognizer: UILongPressGestureRecognizer) {
-        if recognizer.state == .began {
-            lastTouchLocation = recognizer.location(in: self)
+        let phase: TouchPhase
+        switch recognizer.state {
+        case .began: phase = .began
+        case .changed: phase = .moved
+        case .ended: phase = .ended
+        case .cancelled, .failed: phase = .cancelled
+        default: return
+        }
+        let point = recognizer.location(in: self)
+        let target = emojiTarget(at: point)
+        let frame = target?.frame?.cgRect
+        let local = frame.map { CGPoint(x: point.x - $0.minX, y: point.y - $0.minY) }
+        let normalized = frame.flatMap { rect -> CGPoint? in
+            guard rect.width != 0, rect.height != 0 else { return nil }
+            return CGPoint(
+                x: (point.x - rect.minX) / rect.width,
+                y: (point.y - rect.minY) / rect.height
+            )
+        }
+        let now = Date()
+        let uptime = ProcessInfo.processInfo.systemUptime
+        let sample = TouchSample(
+            phase: phase,
+            wallTimestamp: now,
+            monotonicTimestamp: uptime,
+            absolutePosition: CodablePoint(point),
+            preciseAbsolutePosition: nil,
+            localPosition: local.map(CodablePoint.init),
+            normalizedPosition: normalized.map(CodablePoint.init),
+            target: target
+        )
+        if phase == .began {
+            selectionGesture = TouchGesture(
+                samples: [sample],
+                initialTarget: target,
+                startedAt: now
+            )
+        } else {
+            selectionGesture?.samples.append(sample)
+        }
+        if phase == .ended || phase == .cancelled {
+            selectionGesture?.finalTarget = target
+            selectionGesture?.selectedFrame = target?.frame
+            selectionGesture?.endedAt = now
+            if let start = selectionGesture?.samples.first?.monotonicTimestamp {
+                selectionGesture?.durationMilliseconds = max(0, (uptime - start) * 1_000)
+            }
+            selectionGesture?.wasCancelled = phase == .cancelled
+            let initialIdentifier = selectionGesture?.initialTarget?.identifier
+            selectionGesture?.didSlide = initialIdentifier != target?.identifier
         }
     }
 
-    @objc private func handleLetters() {
-        delegate?.emojiKeyboardDidTapLetters(self)
+    private func emojiTarget(at point: CGPoint) -> TouchTarget? {
+        let collectionPoint = convert(point, to: collectionView)
+        guard let indexPath = collectionView.indexPathForItem(at: collectionPoint),
+              indexPath.section < categories.count,
+              indexPath.item < categories[indexPath.section].emoji.count,
+              let attributes = collectionView.layoutAttributesForItem(at: indexPath) else {
+            return nil
+        }
+        let emoji = categories[indexPath.section].emoji[indexPath.item]
+        let frame = collectionView.convert(attributes.frame, to: self)
+        return TouchTarget(
+            identifier: "emoji:\(indexPath.section):\(indexPath.item)",
+            key: emoji,
+            frame: CodableRect(frame)
+        )
     }
 
-    @objc private func handleGlobe() {
-        delegate?.emojiKeyboardDidTapGlobe(self)
+    private func installActionRecognizer(on button: UIButton) {
+        let recognizer = UILongPressGestureRecognizer(
+            target: self,
+            action: #selector(handleActionGesture(_:))
+        )
+        recognizer.minimumPressDuration = 0
+        recognizer.cancelsTouchesInView = false
+        recognizer.delegate = self
+        button.addGestureRecognizer(recognizer)
     }
 
-    @objc private func handleDelete() {
-        UIDevice.current.playInputClick()
-        delegate?.emojiKeyboardDidTapDelete(self)
+    private func actionTarget(for button: UIView) -> TouchTarget {
+        let frame = button.convert(button.bounds, to: self)
+        let identifier: String
+        let key: String
+        if button === lettersButton {
+            identifier = "emojiAction:abc"
+            key = "ABC"
+        } else if button === globeButton {
+            identifier = "emojiAction:globe"
+            key = "globe"
+        } else {
+            identifier = "emojiAction:delete"
+            key = "delete"
+        }
+        return TouchTarget(identifier: identifier, key: key, frame: CodableRect(frame))
     }
 
-    @objc private func handleDeleteHold(_ recognizer: UILongPressGestureRecognizer) {
+    private func actionSample(
+        for recognizer: UILongPressGestureRecognizer,
+        phase: TouchPhase
+    ) -> TouchSample {
+        let point = recognizer.location(in: self)
+        let target = actionTarget(for: recognizer.view ?? self)
+        let frame = target.frame?.cgRect
+        let local = frame.map { CGPoint(x: point.x - $0.minX, y: point.y - $0.minY) }
+        let normalized = frame.flatMap { rect -> CGPoint? in
+            guard rect.width != 0, rect.height != 0 else { return nil }
+            return CGPoint(
+                x: (point.x - rect.minX) / rect.width,
+                y: (point.y - rect.minY) / rect.height
+            )
+        }
+        return TouchSample(
+            phase: phase,
+            wallTimestamp: Date(),
+            monotonicTimestamp: ProcessInfo.processInfo.systemUptime,
+            absolutePosition: CodablePoint(point),
+            localPosition: local.map(CodablePoint.init),
+            normalizedPosition: normalized.map(CodablePoint.init),
+            target: target
+        )
+    }
+
+    private func finalizedActionGesture(
+        _ gesture: TouchGesture,
+        cancelled: Bool
+    ) -> TouchGesture {
+        var completed = gesture
+        let finalSample = completed.samples.last
+        completed.finalTarget = finalSample?.target
+        completed.selectedFrame = finalSample?.target?.frame
+        completed.endedAt = finalSample?.wallTimestamp ?? Date()
+        if let start = completed.samples.first?.monotonicTimestamp,
+           let end = finalSample?.monotonicTimestamp {
+            completed.durationMilliseconds = max(0, (end - start) * 1_000)
+        }
+        completed.wasCancelled = cancelled
+        completed.didSlide =
+            completed.initialTarget?.identifier != completed.finalTarget?.identifier
+        return completed
+    }
+
+    @objc private func handleActionGesture(_ recognizer: UILongPressGestureRecognizer) {
+        let identifier = ObjectIdentifier(recognizer)
         switch recognizer.state {
         case .began:
+            let sample = actionSample(for: recognizer, phase: .began)
+            actionGestures[identifier] = TouchGesture(
+                samples: [sample],
+                initialTarget: sample.target,
+                startedAt: sample.wallTimestamp
+            )
+            guard recognizer.view === deleteButton else { return }
+            deleteDidRepeat = false
             deleteTimer?.invalidate()
-            deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.09, repeats: true) { [weak self] _ in
+            deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.42, repeats: false) {
+                [weak self, weak recognizer] _ in
                 guard let self else { return }
-                self.delegate?.emojiKeyboardDidTapDelete(self)
+                self.deleteDidRepeat = true
+                self.deleteTimer = Timer.scheduledTimer(
+                    withTimeInterval: 0.09,
+                    repeats: true
+                ) { [weak self, weak recognizer] _ in
+                    guard let self,
+                          let recognizer,
+                          let gesture = self.actionGestures[
+                            ObjectIdentifier(recognizer)
+                          ] else { return }
+                    UIDevice.current.playInputClick()
+                    self.delegate?.emojiKeyboardDidTapDelete(
+                        self,
+                        gesture: gesture,
+                        isRepeat: true
+                    )
+                }
             }
-        case .ended, .cancelled, .failed:
+        case .changed:
+            actionGestures[identifier]?.samples.append(
+                actionSample(for: recognizer, phase: .moved)
+            )
+        case .ended:
+            actionGestures[identifier]?.samples.append(
+                actionSample(for: recognizer, phase: .ended)
+            )
             deleteTimer?.invalidate()
             deleteTimer = nil
-        default:
-            break
+            guard let gesture = actionGestures.removeValue(forKey: identifier) else {
+                return
+            }
+            let completed = finalizedActionGesture(gesture, cancelled: false)
+            let endedInside = recognizer.view.map {
+                $0.bounds.contains(recognizer.location(in: $0))
+            } ?? false
+            if recognizer.view === lettersButton {
+                if endedInside {
+                    delegate?.emojiKeyboardDidTapLetters(self, gesture: completed)
+                }
+            } else if recognizer.view === globeButton {
+                if endedInside {
+                    delegate?.emojiKeyboardDidTapGlobe(self, gesture: completed)
+                }
+            } else if !deleteDidRepeat, endedInside {
+                UIDevice.current.playInputClick()
+                delegate?.emojiKeyboardDidTapDelete(
+                    self,
+                    gesture: completed,
+                    isRepeat: false
+                )
+            }
+            deleteDidRepeat = false
+        case .cancelled, .failed:
+            actionGestures[identifier]?.samples.append(
+                actionSample(for: recognizer, phase: .cancelled)
+            )
+            deleteTimer?.invalidate()
+            deleteTimer = nil
+            guard let gesture = actionGestures.removeValue(forKey: identifier) else {
+                return
+            }
+            deleteDidRepeat = false
+            delegate?.emojiKeyboard(
+                self,
+                didCancelActionGesture: finalizedActionGesture(gesture, cancelled: true)
+            )
+        default: break
         }
     }
 
@@ -268,9 +499,56 @@ extension EmojiKeyboardView: UICollectionViewDelegateFlowLayout {
         let emoji = categories[indexPath.section].emoji[indexPath.item]
         let attributes = collectionView.layoutAttributesForItem(at: indexPath)
         let frameInView = attributes.map { collectionView.convert($0.frame, to: self) } ?? .zero
+        let now = Date()
+        let uptime = ProcessInfo.processInfo.systemUptime
+        var gesture = selectionGesture ?? TouchGesture(
+            initialTarget: TouchTarget(
+                identifier: "emoji:\(indexPath.section):\(indexPath.item)",
+                key: emoji,
+                frame: CodableRect(frameInView)
+            ),
+            startedAt: now
+        )
+        if gesture.samples.last?.phase != .ended {
+            let point = gesture.samples.last?.absolutePosition?.cgPoint
+                ?? CGPoint(x: frameInView.midX, y: frameInView.midY)
+            let target = TouchTarget(
+                identifier: "emoji:\(indexPath.section):\(indexPath.item)",
+                key: emoji,
+                frame: CodableRect(frameInView)
+            )
+            gesture.samples.append(
+                TouchSample(
+                    phase: .ended,
+                    wallTimestamp: now,
+                    monotonicTimestamp: uptime,
+                    absolutePosition: CodablePoint(point),
+                    localPosition: CodablePoint(
+                        x: Double(point.x - frameInView.minX),
+                        y: Double(point.y - frameInView.minY)
+                    ),
+                    normalizedPosition: frameInView.width > 0 && frameInView.height > 0
+                        ? CodablePoint(
+                            x: Double((point.x - frameInView.minX) / frameInView.width),
+                            y: Double((point.y - frameInView.minY) / frameInView.height)
+                        )
+                        : nil,
+                    target: target
+                )
+            )
+        }
+        gesture.finalTarget = gesture.samples.last?.target
+        gesture.selectedFrame = CodableRect(frameInView)
+        gesture.endedAt = gesture.samples.last?.wallTimestamp ?? now
+        if let start = gesture.samples.first?.monotonicTimestamp,
+           let end = gesture.samples.last?.monotonicTimestamp {
+            gesture.durationMilliseconds = max(0, (end - start) * 1_000)
+        }
+        gesture.didSlide = gesture.initialTarget?.identifier != gesture.finalTarget?.identifier
+        selectionGesture = nil
         UIDevice.current.playInputClick()
         preferences.noteEmojiUse(emoji)
-        delegate?.emojiKeyboard(self, didSelect: emoji, at: lastTouchLocation, keyFrame: frameInView)
+        delegate?.emojiKeyboard(self, didSelect: emoji, gesture: gesture)
     }
 }
 
