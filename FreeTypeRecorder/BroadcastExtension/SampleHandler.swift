@@ -16,8 +16,12 @@ import UIKit
 /// as `finishedURL` for the app to collect. Coordination
 /// (marker / stop-request / finished) is file-based via the shared
 /// container; see BroadcastShared. Runs in a separate process with a tight
-/// memory budget (~50MB), so it holds no large buffers — each sample is
-/// appended straight to the writer and released.
+/// memory budget (~50MB): frames with no recent-keys overlay are appended
+/// straight to the writer and released, untouched. Only frames that need the
+/// overlay drawn are composited — through one shared, reused `CIContext`
+/// into a pooled `CVPixelBuffer` (via `AVAssetWriterInputPixelBufferAdaptor`)
+/// — and the overlay image itself is cached by text so it's rebuilt only
+/// when the recent-keys text changes.
 class SampleHandler: RPBroadcastSampleHandler {
 
     private var assetWriter: AVAssetWriter?
@@ -108,20 +112,26 @@ class SampleHandler: RPBroadcastSampleHandler {
             }
         }
 
-        guard assetWriter.status == .writing, videoInput.isReadyForMoreMediaData,
-              let adaptor = pixelBufferAdaptor,
-              let sourceBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        guard assetWriter.status == .writing, videoInput.isReadyForMoreMediaData else { return }
 
-        let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        var frameImage = CIImage(cvPixelBuffer: sourceBuffer)
-        if let overlay = overlayImage(for: currentRecentKeys()) {
-            frameImage = composite(overlay, over: frameImage)
+        // Only the overlay case needs compositing; without it, keep the original
+        // zero-copy passthrough to stay well within the extension's memory budget.
+        guard let overlay = overlayImage(for: currentRecentKeys()),
+              let adaptor = pixelBufferAdaptor,
+              let sourceBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
+              let pool = adaptor.pixelBufferPool else {
+            videoInput.append(sampleBuffer)
+            return
         }
 
-        guard let pool = adaptor.pixelBufferPool else { return }
+        let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        let frameImage = composite(overlay, over: CIImage(cvPixelBuffer: sourceBuffer))
         var outBuffer: CVPixelBuffer?
         CVPixelBufferPoolCreatePixelBuffer(nil, pool, &outBuffer)
-        guard let destBuffer = outBuffer else { return }
+        guard let destBuffer = outBuffer else {
+            videoInput.append(sampleBuffer)
+            return
+        }
         ciContext.render(frameImage, to: destBuffer)
         adaptor.append(destBuffer, withPresentationTime: presentationTime)
     }
