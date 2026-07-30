@@ -188,7 +188,7 @@ struct NotepadView: View {
                 pendingDirectory = directory
                 checkPendingBroadcastFinished()
             } else {
-                Self.finalizeAndBackUp(directory)
+                Self.finalizeAndBackUp(directory, hand: hand)
                 dismiss()
             }
         }
@@ -248,7 +248,7 @@ struct NotepadView: View {
     private func finishPending(_ directory: URL) {
         pendingDirectory = nil
         pendingBroadcastEndedAt = nil
-        Self.finalizeAndBackUp(directory)
+        Self.finalizeAndBackUp(directory, hand: hand)
         dismiss()
     }
 
@@ -261,7 +261,7 @@ struct NotepadView: View {
                 guard let directory else { return }
                 // Best-effort: grab a broadcast file if one already landed.
                 BroadcastCoordinator.shared.collectRecording(into: directory)
-                Self.finalizeAndBackUp(directory)
+                Self.finalizeAndBackUp(directory, hand: hand)
             }
         }
     }
@@ -269,11 +269,12 @@ struct NotepadView: View {
     // Collects the session's files (videos, IMU/keystroke CSVs, seg-images)
     // and hands them to SessionBackup. Runs after dismiss-worthy state is
     // set, so a slow/failed upload never blocks closing the notepad.
-    private static func finalizeAndBackUp(_ directory: URL) {
+    private static func finalizeAndBackUp(_ directory: URL, hand: HoldingHand) {
         SessionBackup.attempt(
             sessionDirectory: directory,
             sessionID: directory.lastPathComponent,
-            participantName: ParticipantStore.shared.name ?? "Unknown"
+            participantName: ParticipantStore.shared.name ?? "Unknown",
+            hand: hand
         )
     }
 

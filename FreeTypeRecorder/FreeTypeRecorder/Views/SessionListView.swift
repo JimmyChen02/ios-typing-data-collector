@@ -169,7 +169,8 @@ struct SessionListView: View {
                 SessionBackup.attempt(
                     sessionDirectory: session.sessionDirectory,
                     sessionID: session.id,
-                    participantName: ParticipantStore.shared.name ?? "Unknown"
+                    participantName: ParticipantStore.shared.name ?? "Unknown",
+                    hand: session.hand
                 ) { succeeded in
                     if succeeded {
                         reload()

@@ -41,9 +41,9 @@ final class AppsScriptUploader {
 
     /// Uploads a single file (e.g. `screen.mov`, or `seg_images/0001.jpg`);
     /// the script files it under
-    /// `<participant>/<sessionID>/<relativePath>` in Drive, recreating any
-    /// subfolders `relativePath` implies.
-    func upload(fileURL: URL, relativePath: String, participantName: String, sessionID: String, completion: @escaping (Result<Void, Error>) -> Void) {
+    /// `<participant>/<hand>/<sessionID>/<relativePath>` in Drive, recreating
+    /// any subfolders `relativePath` implies.
+    func upload(fileURL: URL, relativePath: String, participantName: String, hand: String, sessionID: String, completion: @escaping (Result<Void, Error>) -> Void) {
         guard isConfigured, let url = URL(string: Self.webAppURLString) else {
             completion(.failure(AppsScriptUploadError.notConfigured))
             return
@@ -55,6 +55,7 @@ final class AppsScriptUploader {
                 "token": Self.sharedToken,
                 "relativePath": relativePath,
                 "participant": participantName,
+                "hand": hand,
                 "sessionId": sessionID,
                 "data": fileData.base64EncodedString(),
             ])
