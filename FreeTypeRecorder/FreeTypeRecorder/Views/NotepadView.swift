@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct NotepadView: View {
+    let hand: HoldingHand
+
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
     @State private var recorder = SessionRecorder()
@@ -144,7 +146,7 @@ struct NotepadView: View {
         isStartingSession = true
         text = ""
         RecentKeysTracker.shared.reset()
-        recorder.start(onAutoStop: stopRecording) { error in
+        recorder.start(hand: hand, onAutoStop: stopRecording) { error in
             isStartingSession = false
             if let error {
                 errorMessage = error.localizedDescription

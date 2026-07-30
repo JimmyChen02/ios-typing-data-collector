@@ -27,10 +27,11 @@ final class SessionRecorder {
     private var workingDirectory: URL?
     private var onAutoStop: (() -> Void)?
 
-    func start(onAutoStop: @escaping () -> Void, completion: @escaping (Error?) -> Void) {
+    func start(hand: HoldingHand, onAutoStop: @escaping () -> Void, completion: @escaping (Error?) -> Void) {
         guard !isRecording else { return }
 
         let directory = RecordingSession.sessionsDirectory()
+            .appendingPathComponent(hand.rawValue, isDirectory: true)
             .appendingPathComponent(Self.timestampFolderName(), isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -41,6 +42,7 @@ final class SessionRecorder {
         workingDirectory = directory
         self.onAutoStop = onAutoStop
         segImageFrameIndex = 0
+        Self.writeMeta(hand: hand, to: directory)
 
         let sessionID = directory.lastPathComponent
         faceWriter.onSegImage = { [weak self] image, _ in
@@ -141,5 +143,22 @@ final class SessionRecorder {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd_HHmmss"
         return formatter.string(from: Date())
+    }
+
+    private struct SessionMeta: Encodable {
+        let participant: String
+        let hand: String
+        let startedAt: String
+    }
+
+    private static func writeMeta(hand: HoldingHand, to directory: URL) {
+        let meta = SessionMeta(
+            participant: ParticipantStore.shared.name ?? "Unknown",
+            hand: hand.rawValue,
+            startedAt: ISO8601DateFormatter().string(from: Date())
+        )
+        if let data = try? JSONEncoder().encode(meta) {
+            try? data.write(to: directory.appendingPathComponent("session_meta.json"))
+        }
     }
 }

@@ -17,3 +17,7 @@ enum HoldingHand: String, Codable, CaseIterable, Sendable {
         }
     }
 }
+
+extension HoldingHand: Identifiable {
+    var id: String { rawValue }
+}
