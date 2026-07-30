@@ -47,4 +47,10 @@ enum BroadcastShared {
     static func stopRequestURL() -> URL? {
         containerURL()?.appendingPathComponent("broadcast_stop_request")
     }
+
+    /// The app writes the current recent-keys string here on each keystroke;
+    /// the broadcast extension reads it to burn the strip into the video.
+    static func recentKeysURL() -> URL? {
+        containerURL()?.appendingPathComponent("recent_keys.txt")
+    }
 }

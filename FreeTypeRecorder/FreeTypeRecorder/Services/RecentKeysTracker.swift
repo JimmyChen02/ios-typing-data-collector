@@ -29,9 +29,16 @@ final class RecentKeysTracker {
         if recentText.count > Self.maxLength {
             recentText = String(recentText.suffix(Self.maxLength))
         }
+        writeShared()
     }
 
     func reset() {
         recentText = ""
+        writeShared()
+    }
+
+    private func writeShared() {
+        guard let url = BroadcastShared.recentKeysURL() else { return }
+        try? recentText.data(using: .utf8)?.write(to: url, options: .atomic)
     }
 }

@@ -44,11 +44,6 @@ struct NotepadView: View {
 
                 LoggingTextView(text: $text, isEditable: recorder.isRecording)
                     .padding()
-
-                // Sits directly above the keyboard (standard SwiftUI keyboard
-                // avoidance). Shows recently typed characters as a backup for
-                // the parts of the keyboard the recording can't reach.
-                RecentKeysStripView()
             }
             .navigationTitle(pendingDirectory == nil ? timeString(remaining) : "Saving…")
             .navigationBarTitleDisplayMode(.inline)
