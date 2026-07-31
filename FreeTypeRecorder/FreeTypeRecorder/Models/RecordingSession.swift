@@ -6,6 +6,7 @@ import Foundation
 struct RecordingSession: Identifiable, Hashable {
     let id: String
     let date: Date
+    let hand: HoldingHand
     let faceURL: URL
 
     /// The on-disk folder containing every file this session produced.
@@ -46,24 +47,42 @@ struct RecordingSession: Identifiable, Hashable {
     }
 
     static func loadAll() -> [RecordingSession] {
-        let directory = sessionsDirectory()
-        guard let folders = try? FileManager.default.contentsOfDirectory(
-            at: directory,
+        let root = sessionsDirectory()
+        let fm = FileManager.default
+        guard let firstLevel = try? fm.contentsOfDirectory(
+            at: root,
             includingPropertiesForKeys: [.creationDateKey],
             options: [.skipsHiddenFiles]
         ) else {
             return []
         }
 
-        return folders.compactMap { folder -> RecordingSession? in
-            let face = folder.appendingPathComponent("face.mov")
-            // face.mov is the always-present anchor; screen.mov is optional
-            // (only if the participant ran the broadcast).
-            guard FileManager.default.fileExists(atPath: face.path) else { return nil }
-            let creationDate = (try? folder.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? Date()
-            return RecordingSession(id: folder.lastPathComponent, date: creationDate, faceURL: face, sessionDirectory: folder)
+        var sessions: [RecordingSession] = []
+        for entry in firstLevel {
+            // Old flat layout: Sessions/<timestamp>/face.mov.
+            if let flat = session(at: entry, hand: .unknown) {
+                sessions.append(flat)
+                continue
+            }
+            // New layout: Sessions/<hand>/<timestamp>/face.mov.
+            guard let hand = HoldingHand(rawValue: entry.lastPathComponent),
+                  let children = try? fm.contentsOfDirectory(
+                    at: entry,
+                    includingPropertiesForKeys: [.creationDateKey],
+                    options: [.skipsHiddenFiles]
+                  ) else { continue }
+            for child in children {
+                if let s = session(at: child, hand: hand) { sessions.append(s) }
+            }
         }
-        .sorted { $0.date > $1.date }
+        return sessions.sorted { $0.date > $1.date }
+    }
+
+    private static func session(at folder: URL, hand: HoldingHand) -> RecordingSession? {
+        let face = folder.appendingPathComponent("face.mov")
+        guard FileManager.default.fileExists(atPath: face.path) else { return nil }
+        let creationDate = (try? folder.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? Date()
+        return RecordingSession(id: folder.lastPathComponent, date: creationDate, hand: hand, faceURL: face, sessionDirectory: folder)
     }
 
     /// Deletes every locally recorded session. Local-only — this does not

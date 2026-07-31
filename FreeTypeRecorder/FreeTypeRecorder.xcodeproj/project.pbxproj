@@ -31,7 +31,6 @@
 		80E80FD47D6339EC756D239A /* TouchDotOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A9F44F263879ED2C531FD2C /* TouchDotOverlayView.swift */; };
 		85E1F16D4209CE2A11ACA36F /* SessionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4D0438B5B4CE8E22A9988A9 /* SessionListView.swift */; };
 		88896809F6D0D74D66DE4C39 /* BroadcastShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD0B9DDA960CCABF70EC9D0C /* BroadcastShared.swift */; };
-		89B57BBAC212A96304F3ADA6 /* RecentKeysStripView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D19E27B724750E439E17B0E /* RecentKeysStripView.swift */; };
 		8D44911DFFDE8BAB3418AFCE /* RecentKeysTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6203464082EDED59167C4413 /* RecentKeysTracker.swift */; };
 		8D94428B43C652F7B644DEB1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 16D73F0FAC5483B9813EE9D2 /* Assets.xcassets */; };
 		A18F2FBF006E9CB90ADCA075 /* SessionRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A594BB5EF449CDE0A7B3EDBA /* SessionRecorder.swift */; };
@@ -91,7 +90,6 @@
 		77503C2EBBB89111DED29D91 /* PosturePredictor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PosturePredictor.swift; sourceTree = "<group>"; };
 		7C2D8AE2553998DFEF316688 /* SessionBackup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionBackup.swift; sourceTree = "<group>"; };
 		8A9F44F263879ED2C531FD2C /* TouchDotOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchDotOverlayView.swift; sourceTree = "<group>"; };
-		8D19E27B724750E439E17B0E /* RecentKeysStripView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentKeysStripView.swift; sourceTree = "<group>"; };
 		8DBAA31335E974F8B3264097 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		9F550F7F8960C6457FBB93AE /* KeystrokeLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeystrokeLogger.swift; sourceTree = "<group>"; };
 		A594BB5EF449CDE0A7B3EDBA /* SessionRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRecorder.swift; sourceTree = "<group>"; };
@@ -203,7 +201,6 @@
 				61A1EA3EBC5FBA2C35D8ABAE /* LoggingTextView.swift */,
 				0524287072C3CC12CC4BF2B2 /* NotepadView.swift */,
 				3FAF9A1989590E9FD0E561BB /* ParticipantSetupView.swift */,
-				8D19E27B724750E439E17B0E /* RecentKeysStripView.swift */,
 				15F07BF751D74E31266FAA88 /* SessionDetailView.swift */,
 				E4D0438B5B4CE8E22A9988A9 /* SessionListView.swift */,
 				8A9F44F263879ED2C531FD2C /* TouchDotOverlayView.swift */,
@@ -336,7 +333,6 @@
 				D42FE6084EBBE060F24F0D7F /* ParticipantSetupView.swift in Sources */,
 				2031F5D320295D3F7BCEF96C /* ParticipantStore.swift in Sources */,
 				C208A8E0CAE50629817435F2 /* PosturePredictor.swift in Sources */,
-				89B57BBAC212A96304F3ADA6 /* RecentKeysStripView.swift in Sources */,
 				8D44911DFFDE8BAB3418AFCE /* RecentKeysTracker.swift in Sources */,
 				C4AA9E92D621B00F1203683E /* RecordingSession.swift in Sources */,
 				4D69A21A577580F56C864942 /* RippleController.swift in Sources */,

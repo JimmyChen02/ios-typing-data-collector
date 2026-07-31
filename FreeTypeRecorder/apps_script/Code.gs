@@ -3,7 +3,7 @@
 // FreeTypeRecorder install — screen.mov, face.mov, imu.csv,
 // keystrokes.csv, seg_images/NNNN.jpg, seg_images/manifest.csv all arrive
 // as separate requests, no zip — and saves each into:
-//   Mobile Keyboard Data/<participant name>/<session id>/<relativePath>
+//   Mobile Keyboard Data/<participant name>/<hand>/<session id>/<relativePath>
 // `relativePath` may itself contain slashes (e.g. "seg_images/0001.jpg"),
 // in which case the matching subfolder is created under the session
 // folder. Runs as YOU, not the participant — no participant sign-in, no
@@ -45,7 +45,9 @@ function doPost(e) {
     var rootFolder = DriveApp.getFolderById(FOLDER_ID);
     var participantName = (payload.participant || 'Unknown').toString().trim() || 'Unknown';
     var participantFolder = getOrCreateSubfolder(rootFolder, participantName);
-    var sessionFolder = getOrCreateSubfolder(participantFolder, payload.sessionId);
+    var hand = (payload.hand || '').toString().trim();
+    var sessionParent = hand ? getOrCreateSubfolder(participantFolder, hand) : participantFolder;
+    var sessionFolder = getOrCreateSubfolder(sessionParent, payload.sessionId);
 
     var pathParts = relativePath.split('/');
     var filename = pathParts.pop();

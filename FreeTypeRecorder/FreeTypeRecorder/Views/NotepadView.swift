@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct NotepadView: View {
+    let hand: HoldingHand
+
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
     @State private var recorder = SessionRecorder()
@@ -42,11 +44,6 @@ struct NotepadView: View {
 
                 LoggingTextView(text: $text, isEditable: recorder.isRecording)
                     .padding()
-
-                // Sits directly above the keyboard (standard SwiftUI keyboard
-                // avoidance). Shows recently typed characters as a backup for
-                // the parts of the keyboard the recording can't reach.
-                RecentKeysStripView()
             }
             .navigationTitle(pendingDirectory == nil ? timeString(remaining) : "Saving…")
             .navigationBarTitleDisplayMode(.inline)
@@ -113,7 +110,7 @@ struct NotepadView: View {
                     if endingEarly {
                         Text("Stopping…").font(.caption).bold()
                     } else {
-                        Text("Recording — type freely").font(.caption).bold()
+                        Text("Recording, type freely").font(.system(size: 24)).bold()
                         Text("Step 2: when done, tap End Early (top right) — or stop the broadcast from the status bar. Everything saves automatically.")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
@@ -144,7 +141,7 @@ struct NotepadView: View {
         isStartingSession = true
         text = ""
         RecentKeysTracker.shared.reset()
-        recorder.start(onAutoStop: stopRecording) { error in
+        recorder.start(hand: hand, onAutoStop: stopRecording) { error in
             isStartingSession = false
             if let error {
                 errorMessage = error.localizedDescription
@@ -186,7 +183,7 @@ struct NotepadView: View {
                 pendingDirectory = directory
                 checkPendingBroadcastFinished()
             } else {
-                Self.finalizeAndBackUp(directory)
+                Self.finalizeAndBackUp(directory, hand: hand)
                 dismiss()
             }
         }
@@ -246,7 +243,7 @@ struct NotepadView: View {
     private func finishPending(_ directory: URL) {
         pendingDirectory = nil
         pendingBroadcastEndedAt = nil
-        Self.finalizeAndBackUp(directory)
+        Self.finalizeAndBackUp(directory, hand: hand)
         dismiss()
     }
 
@@ -259,7 +256,7 @@ struct NotepadView: View {
                 guard let directory else { return }
                 // Best-effort: grab a broadcast file if one already landed.
                 BroadcastCoordinator.shared.collectRecording(into: directory)
-                Self.finalizeAndBackUp(directory)
+                Self.finalizeAndBackUp(directory, hand: hand)
             }
         }
     }
@@ -267,11 +264,12 @@ struct NotepadView: View {
     // Collects the session's files (videos, IMU/keystroke CSVs, seg-images)
     // and hands them to SessionBackup. Runs after dismiss-worthy state is
     // set, so a slow/failed upload never blocks closing the notepad.
-    private static func finalizeAndBackUp(_ directory: URL) {
+    private static func finalizeAndBackUp(_ directory: URL, hand: HoldingHand) {
         SessionBackup.attempt(
             sessionDirectory: directory,
             sessionID: directory.lastPathComponent,
-            participantName: ParticipantStore.shared.name ?? "Unknown"
+            participantName: ParticipantStore.shared.name ?? "Unknown",
+            hand: hand
         )
     }
 

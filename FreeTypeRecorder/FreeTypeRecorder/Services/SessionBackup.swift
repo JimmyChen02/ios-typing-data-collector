@@ -20,7 +20,7 @@ import Foundation
 /// executions in the first place.
 @MainActor
 enum SessionBackup {
-    static func attempt(sessionDirectory: URL, sessionID: String, participantName: String, completion: ((Bool) -> Void)? = nil) {
+    static func attempt(sessionDirectory: URL, sessionID: String, participantName: String, hand: HoldingHand, completion: ((Bool) -> Void)? = nil) {
         let files = allFiles(under: sessionDirectory)
         guard !files.isEmpty else {
             completion?(true)
@@ -32,6 +32,7 @@ enum SessionBackup {
             sessionDirectory: sessionDirectory,
             sessionID: sessionID,
             participantName: participantName,
+            hand: hand,
             allSucceeded: true,
             completion: completion
         )
@@ -43,6 +44,7 @@ enum SessionBackup {
         sessionDirectory: URL,
         sessionID: String,
         participantName: String,
+        hand: HoldingHand,
         allSucceeded: Bool,
         completion: ((Bool) -> Void)?
     ) {
@@ -56,13 +58,14 @@ enum SessionBackup {
 
         let fileURL = files[index]
         let relativePath = relativePath(of: fileURL, under: sessionDirectory)
-        attemptFile(fileURL, relativePath: relativePath, sessionID: sessionID, participantName: participantName) { succeeded in
+        attemptFile(fileURL, relativePath: relativePath, sessionID: sessionID, participantName: participantName, hand: hand) { succeeded in
             uploadNext(
                 files: files,
                 index: index + 1,
                 sessionDirectory: sessionDirectory,
                 sessionID: sessionID,
                 participantName: participantName,
+                hand: hand,
                 allSucceeded: allSucceeded && succeeded,
                 completion: completion
             )
@@ -74,6 +77,7 @@ enum SessionBackup {
         relativePath: String,
         sessionID: String,
         participantName: String,
+        hand: HoldingHand,
         completion: @escaping (Bool) -> Void
     ) {
         var remaining = FolderBackupService.shared.hasFolder ? 2 : 1
@@ -90,6 +94,7 @@ enum SessionBackup {
             fileURL: fileURL,
             relativePath: relativePath,
             participantName: participantName,
+            hand: hand.rawValue,
             sessionID: sessionID
         ) { result in
             if case .success = result { succeeded = true }
@@ -100,6 +105,7 @@ enum SessionBackup {
                 fileURL,
                 relativePath: relativePath,
                 participantName: participantName,
+                hand: hand.rawValue,
                 sessionID: sessionID
             ) { result in
                 if case .success = result { succeeded = true }

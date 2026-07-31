@@ -40,19 +40,16 @@ final class FolderBackupService {
         }
     }
 
-    func clearFolder() {
-        defaults.removeObject(forKey: Self.bookmarkKey)
-        folderDisplayName = nil
-    }
-
-    /// Copies `fileURL` into `<participantName>/<sessionID>/<relativePath>`
-    /// inside the bookmarked folder (all intermediate folders created as
-    /// needed), overwriting any same-named file already there — mirrors
-    /// the same layout AppsScriptUploader creates in Drive.
+    /// Copies `fileURL` into
+    /// `<participantName>/<hand>/<sessionID>/<relativePath>` inside the
+    /// bookmarked folder (all intermediate folders created as needed),
+    /// overwriting any same-named file already there — mirrors the same
+    /// layout AppsScriptUploader creates in Drive.
     func copy(
         _ fileURL: URL,
         relativePath: String,
         participantName: String,
+        hand: String,
         sessionID: String,
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
@@ -76,6 +73,7 @@ final class FolderBackupService {
 
             let dest = folderURL
                 .appendingPathComponent(participantName, isDirectory: true)
+                .appendingPathComponent(hand, isDirectory: true)
                 .appendingPathComponent(sessionID, isDirectory: true)
                 .appendingPathComponent(relativePath)
             try FileManager.default.createDirectory(

@@ -2,7 +2,8 @@ import SwiftUI
 
 struct SessionListView: View {
     @State private var sessions: [RecordingSession] = []
-    @State private var showingNotepad = false
+    @State private var showingHandPicker = false
+    @State private var sessionHand: HoldingHand?
     @State private var showingFolderPicker = false
     @State private var showingDeleteAllConfirmation = false
     @State private var backupErrorMessage: String?
@@ -41,12 +42,22 @@ struct SessionListView: View {
             }
             ToolbarItem(placement: .primaryAction) {
                 Button("New Session") {
-                    showingNotepad = true
+                    showingHandPicker = true
                 }
             }
         }
-        .fullScreenCover(isPresented: $showingNotepad, onDismiss: reload) {
-            NotepadView()
+        .confirmationDialog(
+            "Which hand are you holding the phone with?",
+            isPresented: $showingHandPicker,
+            titleVisibility: .visible
+        ) {
+            Button("Left hand") { sessionHand = .left }
+            Button("Right hand") { sessionHand = .right }
+            Button("Both hands") { sessionHand = .both }
+            Button("Cancel", role: .cancel) {}
+        }
+        .fullScreenCover(item: $sessionHand, onDismiss: reload) { hand in
+            NotepadView(hand: hand)
         }
         .sheet(isPresented: $showingFolderPicker) {
             FolderPicker { url in
@@ -158,7 +169,8 @@ struct SessionListView: View {
                 SessionBackup.attempt(
                     sessionDirectory: session.sessionDirectory,
                     sessionID: session.id,
-                    participantName: ParticipantStore.shared.name ?? "Unknown"
+                    participantName: ParticipantStore.shared.name ?? "Unknown",
+                    hand: session.hand
                 ) { succeeded in
                     if succeeded {
                         reload()
