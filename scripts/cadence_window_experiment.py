@@ -28,8 +28,6 @@ from __future__ import annotations
 
 import csv
 import json
-import math
-import re
 import sys
 from collections import Counter, defaultdict
 from datetime import datetime
@@ -60,10 +58,6 @@ WINDOW_SECONDS = [
 CADENCES_HZ = [30.0, 15.0, 10.0, 7.5, 6.0, 5.0, 3.0, 2.0, 1.0]
 NEAR_BEST_TOL = 0.002  # 0.2 percentage point
 MAX_DEPLOYMENT_WINDOW_SECONDS = 1.5  # existing live responsiveness budget
-
-
-def slug(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", value)
 
 
 def parse_iso(value: str) -> datetime | None:

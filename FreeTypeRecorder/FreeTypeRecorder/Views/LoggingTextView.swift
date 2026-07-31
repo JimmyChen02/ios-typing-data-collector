@@ -69,7 +69,20 @@ struct LoggingTextView: UIViewRepresentable {
                 rangeLength: range.length,
                 resultingTextLength: resultingLength
             )
-            RecentKeysTracker.shared.record(eventType == .delete ? "⌫" : replacementText)
+            switch eventType {
+            case .delete:
+                RecentKeysTracker.shared.record("⌫")
+            case .replace:
+                // A keyboard substitution (autocorrect, QuickType pick, smart
+                // punctuation): show it as one [old→new] token. `currentText`
+                // still holds the pre-edit text here, so `range` is the old.
+                RecentKeysTracker.shared.recordReplacement(
+                    old: currentText.substring(with: range),
+                    new: replacementText
+                )
+            case .insert, .paste:
+                RecentKeysTracker.shared.record(replacementText)
+            }
 
             // Let UIKit apply the edit itself — this is purely an observer.
             // Returning false and reassigning `text` ourselves would replace

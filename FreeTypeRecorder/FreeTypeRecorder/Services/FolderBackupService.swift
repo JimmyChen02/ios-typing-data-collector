@@ -40,11 +40,6 @@ final class FolderBackupService {
         }
     }
 
-    func clearFolder() {
-        defaults.removeObject(forKey: Self.bookmarkKey)
-        folderDisplayName = nil
-    }
-
     /// Copies `fileURL` into
     /// `<participantName>/<hand>/<sessionID>/<relativePath>` inside the
     /// bookmarked folder (all intermediate folders created as needed),

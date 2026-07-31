@@ -39,3 +39,9 @@ Model-Training-Test/*.log
 Model-Training-Test/imu/
 # Raw per-participant export folders (kept locally for provenance)
 Model-Training-Test/exports/
+
+# Agent/codex scratch artifacts (node_modules, rendered slides, etc.)
+.tmp/
+
+# Local agent design docs (plans/specs) — keep out of history
+docs/superpowers/

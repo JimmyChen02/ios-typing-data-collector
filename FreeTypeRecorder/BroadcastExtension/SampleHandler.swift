@@ -116,10 +116,20 @@ class SampleHandler: RPBroadcastSampleHandler {
 
         // Only the overlay case needs compositing; without it, keep the original
         // zero-copy passthrough to stay well within the extension's memory budget.
-        guard let overlay = overlayImage(for: currentRecentKeys()),
-              let adaptor = pixelBufferAdaptor,
+        guard let adaptor = pixelBufferAdaptor,
               let sourceBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
               let pool = adaptor.pixelBufferPool else {
+            videoInput.append(sampleBuffer)
+            return
+        }
+
+        // Build the overlay sized to this frame's width so a long log wraps
+        // instead of running off the right edge.
+        let frameWidth = CGFloat(CVPixelBufferGetWidth(sourceBuffer))
+        guard let overlay = overlayImage(
+            for: currentRecentKeys(),
+            maxWidth: frameWidth * Self.overlayWidthFraction
+        ) else {
             videoInput.append(sampleBuffer)
             return
         }
@@ -171,24 +181,54 @@ class SampleHandler: RPBroadcastSampleHandler {
         return text
     }
 
-    // Rebuilds the pill image only when the text changes.
-    private func overlayImage(for text: String) -> CIImage? {
-        guard !text.isEmpty else { return nil }
+    // Rebuilds the pill image only when the text changes. Rendered at 1:1
+    // scale (UIGraphicsImageRenderer otherwise uses the device's 2–3× screen
+    // scale, oversizing the composite). The font auto-sizes so the text spans
+    // about `maxWidth` — passed as ~90% of the frame — so the strip stays
+    // large and prominent; it's capped so a very short log doesn't blow up,
+    // and wraps within maxWidth if a full log can't fit at the cap.
+    private func overlayImage(for text: String, maxWidth: CGFloat) -> CIImage? {
+        guard !text.isEmpty, maxWidth > 0 else { return nil }
         if text == cachedOverlayText, let cached = cachedOverlay { return cached }
 
-        let font = UIFont.systemFont(ofSize: 28, weight: .semibold)
-        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIColor.white]
         let padding: CGFloat = 16
-        let textSize = (text as NSString).size(withAttributes: attributes)
-        let pillSize = CGSize(width: textSize.width + padding * 2, height: textSize.height + padding)
+        let targetWidth = max(1, maxWidth - padding * 2)
+
+        // Single-line text width scales ~linearly with point size, so one
+        // measurement at a reference size gives the size that fills targetWidth.
+        let reference: CGFloat = 40
+        let refFont = UIFont.systemFont(ofSize: reference, weight: .semibold)
+        let refWidth = (text as NSString).size(withAttributes: [.font: refFont]).width
+        let fontSize = min(max(refWidth > 0 ? reference * targetWidth / refWidth : reference, 24), 56)
+        let font = UIFont.systemFont(ofSize: fontSize, weight: .semibold)
+
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byCharWrapping
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: UIColor.white,
+            .paragraphStyle: paragraph,
+        ]
+        let bounds = (text as NSString).boundingRect(
+            with: CGSize(width: targetWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: attributes, context: nil)
+        let textWidth = min(ceil(bounds.width), targetWidth)
+        let textHeight = ceil(bounds.height)
+        let pillSize = CGSize(width: textWidth + padding * 2, height: textHeight + padding)
         guard pillSize.width > 0, pillSize.height > 0 else { return nil }
 
-        let renderer = UIGraphicsImageRenderer(size: pillSize)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = false
+        let renderer = UIGraphicsImageRenderer(size: pillSize, format: format)
         let image = renderer.image { _ in
             let path = UIBezierPath(roundedRect: CGRect(origin: .zero, size: pillSize), cornerRadius: 10)
             UIColor.black.withAlphaComponent(0.6).setFill()
             path.fill()
-            (text as NSString).draw(at: CGPoint(x: padding, y: padding / 2), withAttributes: attributes)
+            (text as NSString).draw(
+                with: CGRect(x: padding, y: padding / 2, width: textWidth, height: textHeight),
+                options: [.usesLineFragmentOrigin], attributes: attributes, context: nil)
         }
         let ciImage = image.cgImage.map { CIImage(cgImage: $0) }
         cachedOverlay = ciImage
@@ -199,10 +239,11 @@ class SampleHandler: RPBroadcastSampleHandler {
     // Places the pill as a band just above the keyboard. CoreImage's origin
     // is bottom-left; the keyboard occupies the lower portion of the frame,
     // so this y sits above it. The fraction may need on-device tuning.
+    private static let overlayWidthFraction: CGFloat = 0.9
+
     private func composite(_ overlay: CIImage, over frame: CIImage) -> CIImage {
         let extent = frame.extent
-        let margin: CGFloat = 24
-        let x = margin
+        let x = (extent.width - overlay.extent.width) / 2   // center the ~90%-wide strip
         let y = extent.height * 0.42
         let positioned = overlay.transformed(by: CGAffineTransform(translationX: x, y: y))
         guard let filter = CIFilter(name: "CISourceOverCompositing") else { return frame }

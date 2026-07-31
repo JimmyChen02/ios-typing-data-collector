@@ -110,7 +110,7 @@ struct NotepadView: View {
                     if endingEarly {
                         Text("Stopping…").font(.caption).bold()
                     } else {
-                        Text("Recording — type freely").font(.caption).bold()
+                        Text("Recording, type freely").font(.system(size: 24)).bold()
                         Text("Step 2: when done, tap End Early (top right) — or stop the broadcast from the status bar. Everything saves automatically.")
                             .font(.caption2).foregroundStyle(.secondary)
                     }

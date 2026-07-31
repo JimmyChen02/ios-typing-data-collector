@@ -51,7 +51,7 @@ struct RecordingSession: Identifiable, Hashable {
         let fm = FileManager.default
         guard let firstLevel = try? fm.contentsOfDirectory(
             at: root,
-            includingPropertiesForKeys: [.creationDateKey, .isDirectoryKey],
+            includingPropertiesForKeys: [.creationDateKey],
             options: [.skipsHiddenFiles]
         ) else {
             return []

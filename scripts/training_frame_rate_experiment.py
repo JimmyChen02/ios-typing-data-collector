@@ -152,7 +152,6 @@ def plot_frame_rate(rows: list[dict], path: Path) -> None:
     from the CSV; both are coerced with float().
     """
     import matplotlib.pyplot as plt
-    from collections import defaultdict
 
     by_fps: dict[float, dict[str, list[float]]] = defaultdict(
         lambda: {"fusion": [], "imu": []}
