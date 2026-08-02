@@ -50,6 +50,12 @@ final class ParticipantStore {
         self.dominantHand = dominantHand
     }
 
+    /// Drive base-folder name: "<name> - <phone model>", so each participant's
+    /// data is filed per person and device (e.g. "Alex - iPhone 15 Pro").
+    var driveFolderName: String {
+        "\(name ?? "Unknown") - \(DeviceInfo.modelName)"
+    }
+
     func markPostureGuideSeen() {
         defaults.set(true, forKey: Key.seenPosture)
         hasSeenPostureGuide = true
