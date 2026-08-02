@@ -14,6 +14,7 @@
 		243D18AEB8ABBFD5C7CA2E72 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FDEB98E5F639102A7D9E376 /* ContentView.swift */; };
 		24BAB5A5BE554C55744A8D2E /* SampleHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45D11A20FB039FAC92A7C16 /* SampleHandler.swift */; };
 		25F621CA6CD946EF741041DD /* SegImageManifestWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 203425B0993C5AD33B1CFC3B /* SegImageManifestWriter.swift */; };
+		26666BD7BE791B7082FF238D /* DeviceInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 227B64643BB700FA540688F0 /* DeviceInfo.swift */; };
 		2BD1398C1FFCB0D025AC32C9 /* AppsScriptUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2816806F655CB58D0675B26C /* AppsScriptUploader.swift */; };
 		3377E6CE82B5C59122423F65 /* UploadStatusStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1571B3726B805236DC3DC48 /* UploadStatusStore.swift */; };
 		3B9BBAB15B03B62E3973BCAD /* SessionBackup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C2D8AE2553998DFEF316688 /* SessionBackup.swift */; };
@@ -28,6 +29,7 @@
 		6E38BDF2CF0255E1A5BF1433 /* BroadcastCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FCC2EC32F831057977421EF /* BroadcastCoordinator.swift */; };
 		7B026E8CA8BDC53124DFEB37 /* LoggingTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61A1EA3EBC5FBA2C35D8ABAE /* LoggingTextView.swift */; };
 		7E68062C544D8F756042DE38 /* SegmentedFaceCaptureWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07263DBA38E2833EC60CE1C2 /* SegmentedFaceCaptureWriter.swift */; };
+		80DDE828F54BD3C1DCCDD8E9 /* DeviceInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 227B64643BB700FA540688F0 /* DeviceInfo.swift */; };
 		80E80FD47D6339EC756D239A /* TouchDotOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A9F44F263879ED2C531FD2C /* TouchDotOverlayView.swift */; };
 		85E1F16D4209CE2A11ACA36F /* SessionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4D0438B5B4CE8E22A9988A9 /* SessionListView.swift */; };
 		88896809F6D0D74D66DE4C39 /* BroadcastShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD0B9DDA960CCABF70EC9D0C /* BroadcastShared.swift */; };
@@ -35,11 +37,13 @@
 		8D94428B43C652F7B644DEB1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 16D73F0FAC5483B9813EE9D2 /* Assets.xcassets */; };
 		A18F2FBF006E9CB90ADCA075 /* SessionRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A594BB5EF449CDE0A7B3EDBA /* SessionRecorder.swift */; };
 		B2A8E378BEA9D1E528A53BEC /* IMURecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAF87907DC610AE003B85F1A /* IMURecorder.swift */; };
+		BAA61A0D66B31F54EB319567 /* DeviceInfoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AEC7148A0948F2A2DCA3A6B /* DeviceInfoTests.swift */; };
 		BB8CF5C8D9A2FB615F47D355 /* FolderBackupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02A85B0A44037A18A4F8D796 /* FolderBackupService.swift */; };
 		C208A8E0CAE50629817435F2 /* PosturePredictor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77503C2EBBB89111DED29D91 /* PosturePredictor.swift */; };
 		C4AA9E92D621B00F1203683E /* RecordingSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE28C552AF0598286CB03B1C /* RecordingSession.swift */; };
 		CA0934742F46D2DFDD2930A5 /* HoldingHand.swift in Sources */ = {isa = PBXBuildFile; fileRef = BECA23CE03682B17BFA3F06D /* HoldingHand.swift */; };
 		D42FE6084EBBE060F24F0D7F /* ParticipantSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FAF9A1989590E9FD0E561BB /* ParticipantSetupView.swift */; };
+		DBFC04654F7D68CEA3B2EB99 /* HoldingHand.swift in Sources */ = {isa = PBXBuildFile; fileRef = BECA23CE03682B17BFA3F06D /* HoldingHand.swift */; };
 		EF58EF9146BE05DA970D4BD8 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8B04BCFCB8E13345BDF5BB9 /* SceneDelegate.swift */; };
 		F9D29F3972BE94827C03D53D /* posture_imu.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = AE6C48768843F9CD14756524 /* posture_imu.mlpackage */; };
 /* End PBXBuildFile section */
@@ -80,10 +84,13 @@
 		1EB2D7F0064416A478FA4B44 /* BroadcastPickerButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BroadcastPickerButton.swift; sourceTree = "<group>"; };
 		1FDEB98E5F639102A7D9E376 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		203425B0993C5AD33B1CFC3B /* SegImageManifestWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegImageManifestWriter.swift; sourceTree = "<group>"; };
+		227B64643BB700FA540688F0 /* DeviceInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceInfo.swift; sourceTree = "<group>"; };
 		2816806F655CB58D0675B26C /* AppsScriptUploader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppsScriptUploader.swift; sourceTree = "<group>"; };
 		3F7ABA3418FF3E0334F488E5 /* SegImageStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegImageStore.swift; sourceTree = "<group>"; };
 		3FAF9A1989590E9FD0E561BB /* ParticipantSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParticipantSetupView.swift; sourceTree = "<group>"; };
+		4AEC7148A0948F2A2DCA3A6B /* DeviceInfoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceInfoTests.swift; sourceTree = "<group>"; };
 		4FCC2EC32F831057977421EF /* BroadcastCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BroadcastCoordinator.swift; sourceTree = "<group>"; };
+		5113C8EDCB3081095A2FB154 /* FreeTypeRecorderTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = FreeTypeRecorderTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		61A1EA3EBC5FBA2C35D8ABAE /* LoggingTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoggingTextView.swift; sourceTree = "<group>"; };
 		6203464082EDED59167C4413 /* RecentKeysTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentKeysTracker.swift; sourceTree = "<group>"; };
 		6FC8B799BC7F63A32D395F6C /* RippleController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RippleController.swift; sourceTree = "<group>"; };
@@ -113,6 +120,7 @@
 			children = (
 				06C4A945C15972D2CC1CE6DA /* BroadcastExtension.appex */,
 				C80F9E0DD33A96AFFBC3FC4C /* FreeTypeRecorder.app */,
+				5113C8EDCB3081095A2FB154 /* FreeTypeRecorderTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -148,6 +156,14 @@
 			path = Services;
 			sourceTree = "<group>";
 		};
+		334698497B0F181E7B33F858 /* FreeTypeRecorderTests */ = {
+			isa = PBXGroup;
+			children = (
+				4AEC7148A0948F2A2DCA3A6B /* DeviceInfoTests.swift */,
+			);
+			path = FreeTypeRecorderTests;
+			sourceTree = "<group>";
+		};
 		43688BB9C364E16078F69D19 /* App */ = {
 			isa = PBXGroup;
 			children = (
@@ -162,6 +178,7 @@
 			children = (
 				275526CA9806004013AFB4AB /* BroadcastExtension */,
 				AF45A29DA3336FFBCBAC53F2 /* FreeTypeRecorder */,
+				334698497B0F181E7B33F858 /* FreeTypeRecorderTests */,
 				892B7419C1F4BE3CEA295EEB /* Shared */,
 				223B69CC9B477DF3006C4DC0 /* Products */,
 			);
@@ -173,6 +190,14 @@
 				AE6C48768843F9CD14756524 /* posture_imu.mlpackage */,
 			);
 			path = Resources;
+			sourceTree = "<group>";
+		};
+		5420A162337AEB18EFE39FDE /* Logic */ = {
+			isa = PBXGroup;
+			children = (
+				227B64643BB700FA540688F0 /* DeviceInfo.swift */,
+			);
+			path = Logic;
 			sourceTree = "<group>";
 		};
 		54211D1667648DA48C77B1D2 /* Models */ = {
@@ -214,6 +239,7 @@
 			children = (
 				16D73F0FAC5483B9813EE9D2 /* Assets.xcassets */,
 				43688BB9C364E16078F69D19 /* App */,
+				5420A162337AEB18EFE39FDE /* Logic */,
 				54211D1667648DA48C77B1D2 /* Models */,
 				4B1A9BDA09D5D701CCEC28F0 /* Resources */,
 				29B3B1D5B86FD62E4B372E12 /* Services */,
@@ -225,6 +251,23 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		06E547FD9059D6F594B4EBC4 /* FreeTypeRecorderTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 88FBB9E68A14FBE438238C07 /* Build configuration list for PBXNativeTarget "FreeTypeRecorderTests" */;
+			buildPhases = (
+				97531F61BB67094EF426216D /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = FreeTypeRecorderTests;
+			packageProductDependencies = (
+			);
+			productName = FreeTypeRecorderTests;
+			productReference = 5113C8EDCB3081095A2FB154 /* FreeTypeRecorderTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		ED2AD447374E639BD668D3A4 /* BroadcastExtension */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 5105F7D33C01081F8226B4DB /* Build configuration list for PBXNativeTarget "BroadcastExtension" */;
@@ -271,6 +314,9 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					06E547FD9059D6F594B4EBC4 = {
+						DevelopmentTeam = P2LUTF8N6F;
+					};
 					ED2AD447374E639BD668D3A4 = {
 						DevelopmentTeam = P2LUTF8N6F;
 						ProvisioningStyle = Automatic;
@@ -297,6 +343,7 @@
 			targets = (
 				EF3D052E9309384279BE435C /* FreeTypeRecorder */,
 				ED2AD447374E639BD668D3A4 /* BroadcastExtension */,
+				06E547FD9059D6F594B4EBC4 /* FreeTypeRecorderTests */,
 			);
 		};
 /* End PBXProject section */
@@ -323,6 +370,7 @@
 				5C11530DB156062DE045D91C /* BroadcastPickerButton.swift in Sources */,
 				3E90E624EC1A68AE23069F9C /* BroadcastShared.swift in Sources */,
 				243D18AEB8ABBFD5C7CA2E72 /* ContentView.swift in Sources */,
+				26666BD7BE791B7082FF238D /* DeviceInfo.swift in Sources */,
 				BB8CF5C8D9A2FB615F47D355 /* FolderBackupService.swift in Sources */,
 				1472202B9C9249048460D56E /* FolderPicker.swift in Sources */,
 				CA0934742F46D2DFDD2930A5 /* HoldingHand.swift in Sources */,
@@ -360,6 +408,16 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		97531F61BB67094EF426216D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				80DDE828F54BD3C1DCCDD8E9 /* DeviceInfo.swift in Sources */,
+				BAA61A0D66B31F54EB319567 /* DeviceInfoTests.swift in Sources */,
+				DBFC04654F7D68CEA3B2EB99 /* HoldingHand.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -392,6 +450,40 @@
 				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Debug;
+		};
+		345DA589AFD3CC930BE6F0F8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				DEVELOPMENT_TEAM = P2LUTF8N6F;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		3656EF2D4B402CF61E7C31F8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				DEVELOPMENT_TEAM = P2LUTF8N6F;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
 		};
 		3C20A056523953D0DFFC08F3 /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -602,6 +694,15 @@
 			buildConfigurations = (
 				3C2A2CEFAA0B142DF3AD2B23 /* Debug */,
 				4CD4536656647149833D2F42 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		88FBB9E68A14FBE438238C07 /* Build configuration list for PBXNativeTarget "FreeTypeRecorderTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				345DA589AFD3CC930BE6F0F8 /* Debug */,
+				3656EF2D4B402CF61E7C31F8 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
