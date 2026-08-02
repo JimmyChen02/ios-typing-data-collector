@@ -9,6 +9,7 @@ struct StudyHomeView: View {
 
     @State private var showingHandPicker = false
     @State private var readyHand: HoldingHand?          // drives the Ready sheet
+    @State private var pendingLaunch: HoldingHand?       // captured onStart; moved to launchHand once the sheet is gone
     @State private var launchHand: HoldingHand?         // drives the recording cover
     @State private var launchNumber = 0
     @State private var launchPrompt = ""
@@ -55,7 +56,12 @@ struct StudyHomeView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
-        .sheet(item: $readyHand) { hand in
+        .sheet(item: $readyHand, onDismiss: {
+            if let hand = pendingLaunch {
+                pendingLaunch = nil
+                launchHand = hand
+            }
+        }) { hand in
             ReadySheet(
                 hand: hand,
                 sessionNumber: protocolState.nextSessionNumber,
@@ -63,8 +69,8 @@ struct StudyHomeView: View {
                 onStart: {
                     launchNumber = protocolState.nextSessionNumber
                     launchPrompt = protocolState.promptForNextSession()
+                    pendingLaunch = hand
                     readyHand = nil
-                    launchHand = hand
                 },
                 onCancel: { readyHand = nil }
             )
