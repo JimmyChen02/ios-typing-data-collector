@@ -4,7 +4,7 @@ import Observation
 /// Coordinates the app-process per-session recorders — segmented-face
 /// video, IMU, periodic seg-images (+ manifest), and keystrokes — so a
 /// single start/stop pair drives them together, and auto-stops everything
-/// at the 3-minute session limit.
+/// at the 1-minute (60s) session limit.
 ///
 /// The screen recording is NOT here: it's produced by the separate
 /// BroadcastExtension (the only capture path that includes the system

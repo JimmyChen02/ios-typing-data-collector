@@ -124,7 +124,7 @@ struct NotepadView: View {
                         .font(.caption2).foregroundStyle(.secondary)
                 } else if pendingDirectory != nil {
                     if broadcast.isBroadcasting {
-                        // 3-min limit reached but broadcast still running.
+                        // 1-min limit reached but broadcast still running.
                         Text("Time's up — stop the broadcast to finish")
                             .font(.caption).bold()
                         Text("Tap the red time in the status bar → Stop.")
