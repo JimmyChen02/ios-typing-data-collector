@@ -2,6 +2,8 @@ import SwiftUI
 
 struct NotepadView: View {
     let hand: HoldingHand
+    let sessionNumber: Int
+    let prompt: String
 
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
@@ -28,6 +30,9 @@ struct NotepadView: View {
     @State private var isStartingSession = false
     // True after "End Early" is tapped, while the broadcast is winding down.
     @State private var endingEarly = false
+    // Ensures the study protocol counts this session exactly once, no matter
+    // which finalize path (End Early, broadcast stop, or disappear) fires.
+    @State private var didFinalize = false
 
     // How long to wait for the finished video after the broadcast stops
     // before saving the session without it (safety valve against a hang).
@@ -41,6 +46,7 @@ struct NotepadView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 broadcastStatusBar
+                sessionHeader
 
                 LoggingTextView(text: $text, isEditable: recorder.isRecording)
                     .padding()
@@ -78,6 +84,28 @@ struct NotepadView: View {
     }
 
     // MARK: - Broadcast status / start UI
+
+    @ViewBuilder
+    private var sessionHeader: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Session \(sessionNumber) of \(StudyProtocol.totalSessions)")
+                    .font(.subheadline).bold()
+                Spacer()
+                Label(hand.displayName, systemImage: "hand.raised.fill")
+                    .font(.caption).bold()
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(.tint.opacity(0.15), in: Capsule())
+            }
+            Text(prompt)
+                .font(.headline)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.background)
+    }
 
     @ViewBuilder
     private var broadcastStatusBar: some View {
@@ -141,7 +169,7 @@ struct NotepadView: View {
         isStartingSession = true
         text = ""
         RecentKeysTracker.shared.reset()
-        recorder.start(hand: hand, onAutoStop: stopRecording) { error in
+        recorder.start(hand: hand, sessionNumber: sessionNumber, prompt: prompt, onAutoStop: stopRecording) { error in
             isStartingSession = false
             if let error {
                 errorMessage = error.localizedDescription
@@ -183,7 +211,7 @@ struct NotepadView: View {
                 pendingDirectory = directory
                 checkPendingBroadcastFinished()
             } else {
-                Self.finalizeAndBackUp(directory, hand: hand)
+                finalize(directory)
                 dismiss()
             }
         }
@@ -243,7 +271,7 @@ struct NotepadView: View {
     private func finishPending(_ directory: URL) {
         pendingDirectory = nil
         pendingBroadcastEndedAt = nil
-        Self.finalizeAndBackUp(directory, hand: hand)
+        finalize(directory)
         dismiss()
     }
 
@@ -256,15 +284,18 @@ struct NotepadView: View {
                 guard let directory else { return }
                 // Best-effort: grab a broadcast file if one already landed.
                 BroadcastCoordinator.shared.collectRecording(into: directory)
-                Self.finalizeAndBackUp(directory, hand: hand)
+                finalize(directory)
             }
         }
     }
 
-    // Collects the session's files (videos, IMU/keystroke CSVs, seg-images)
-    // and hands them to SessionBackup. Runs after dismiss-worthy state is
-    // set, so a slow/failed upload never blocks closing the notepad.
-    private static func finalizeAndBackUp(_ directory: URL, hand: HoldingHand) {
+    // The single finalize path: count the session in the study protocol
+    // (once), then hand its files to the backup pipeline. Runs after
+    // dismiss-worthy state is set, so a slow upload never blocks closing.
+    private func finalize(_ directory: URL) {
+        guard !didFinalize else { return }
+        didFinalize = true
+        StudyProtocol.shared.recordCompletion(hand: hand)
         SessionBackup.attempt(
             sessionDirectory: directory,
             sessionID: directory.lastPathComponent,
