@@ -14,7 +14,7 @@ import Observation
 @Observable
 final class SessionRecorder {
 
-    static let sessionDuration: TimeInterval = 180
+    static let sessionDuration: TimeInterval = 60
 
     private(set) var isRecording = false
     private(set) var elapsed: TimeInterval = 0
@@ -27,12 +27,17 @@ final class SessionRecorder {
     private var workingDirectory: URL?
     private var onAutoStop: (() -> Void)?
 
-    func start(hand: HoldingHand, onAutoStop: @escaping () -> Void, completion: @escaping (Error?) -> Void) {
+    func start(hand: HoldingHand, sessionNumber: Int, prompt: String, onAutoStop: @escaping () -> Void, completion: @escaping (Error?) -> Void) {
         guard !isRecording else { return }
 
-        let directory = RecordingSession.sessionsDirectory()
+        let handRoot = RecordingSession.sessionsDirectory()
             .appendingPathComponent(hand.rawValue, isDirectory: true)
-            .appendingPathComponent(Self.timestampFolderName(), isDirectory: true)
+        let folderName = SessionNaming.uniqueFolderName(
+            number: sessionNumber,
+            hand: hand,
+            exists: { FileManager.default.fileExists(atPath: handRoot.appendingPathComponent($0).path) }
+        )
+        let directory = handRoot.appendingPathComponent(folderName, isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         } catch {
@@ -42,7 +47,7 @@ final class SessionRecorder {
         workingDirectory = directory
         self.onAutoStop = onAutoStop
         segImageFrameIndex = 0
-        Self.writeMeta(hand: hand, to: directory)
+        Self.writeMeta(hand: hand, sessionNumber: sessionNumber, prompt: prompt, to: directory)
 
         let sessionID = directory.lastPathComponent
         faceWriter.onSegImage = { [weak self] image, _ in
@@ -139,23 +144,21 @@ final class SessionRecorder {
         faceWriter.updateLiveLabel("\(posture.displayName) \(confidencePercent)%")
     }
 
-    private static func timestampFolderName() -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd_HHmmss"
-        return formatter.string(from: Date())
-    }
-
-    private struct SessionMeta: Encodable {
-        let participant: String
-        let hand: String
-        let startedAt: String
-    }
-
-    private static func writeMeta(hand: HoldingHand, to directory: URL) {
+    private static func writeMeta(hand: HoldingHand, sessionNumber: Int, prompt: String, to directory: URL) {
+        let store = ParticipantStore.shared
         let meta = SessionMeta(
-            participant: ParticipantStore.shared.name ?? "Unknown",
+            participant: store.name ?? "Unknown",
             hand: hand.rawValue,
-            startedAt: ISO8601DateFormatter().string(from: Date())
+            startedAt: ISO8601DateFormatter().string(from: Date()),
+            age: store.age,
+            sex: store.sex.rawValue,
+            dominantHand: store.dominantHand.rawValue,
+            deviceModel: DeviceInfo.modelName,
+            deviceModelIdentifier: DeviceInfo.hardwareIdentifier,
+            systemVersion: DeviceInfo.systemVersion,
+            appVersion: DeviceInfo.appVersion,
+            sessionNumber: sessionNumber,
+            prompt: prompt
         )
         if let data = try? JSONEncoder().encode(meta) {
             try? data.write(to: directory.appendingPathComponent("session_meta.json"))
