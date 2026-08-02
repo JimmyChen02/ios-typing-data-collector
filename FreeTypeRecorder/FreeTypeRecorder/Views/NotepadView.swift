@@ -33,6 +33,9 @@ struct NotepadView: View {
     // Ensures the study protocol counts this session exactly once, no matter
     // which finalize path (End Early, broadcast stop, or disappear) fires.
     @State private var didFinalize = false
+    // Shown once, right when recording begins: reminds the participant of
+    // their posture and which hand to use this session.
+    @State private var showStartReminder = false
 
     // How long to wait for the finished video after the broadcast stops
     // before saving the session without it (safety valve against a hang).
@@ -40,6 +43,18 @@ struct NotepadView: View {
 
     private var remaining: TimeInterval {
         max(SessionRecorder.sessionDuration - recorder.elapsed, 0)
+    }
+
+    // Reminder shown when recording starts: sit up + which hand to use.
+    private var startReminderMessage: String {
+        let handPhrase: String
+        switch hand {
+        case .left: handPhrase = "your LEFT hand"
+        case .right: handPhrase = "your RIGHT hand"
+        case .both: handPhrase = "BOTH hands"
+        case .unknown: handPhrase = "your assigned hand"
+        }
+        return "Sit up straight and keep your arm off the desk. Type with \(handPhrase) for this session."
     }
 
     var body: some View {
@@ -77,6 +92,18 @@ struct NotepadView: View {
                 Button("OK", action: dismiss.callAsFunction)
             } message: {
                 Text(errorMessage)
+            }
+            .alert("Remember", isPresented: $showStartReminder) {
+                Button("OK, got it", role: .cancel) {}
+            } message: {
+                Text(startReminderMessage)
+            }
+        }
+        .onChange(of: text) { _, newValue in
+            // Start the 1-minute countdown on the first keystroke, so the
+            // pre-typing reminder popup doesn't eat into recording time.
+            if recorder.isRecording && !newValue.isEmpty {
+                recorder.beginTimerIfNeeded()
             }
         }
         .onAppear(perform: startPolling)
@@ -120,18 +147,18 @@ struct NotepadView: View {
                 if broadcast.appGroupUnavailable {
                     Text("Screen recording unavailable")
                         .font(.caption).bold().foregroundStyle(.orange)
-                    Text("App Group isn't set up — see docs/SCREEN_BROADCAST_SETUP.md.")
+                    Text("App Group isn't set up. See docs/SCREEN_BROADCAST_SETUP.md.")
                         .font(.caption2).foregroundStyle(.secondary)
                 } else if pendingDirectory != nil {
                     if broadcast.isBroadcasting {
                         // 1-min limit reached but broadcast still running.
-                        Text("Time's up — stop the broadcast to finish")
+                        Text("Time's up. Stop the broadcast to finish.")
                             .font(.caption).bold()
                         Text("Tap the red time in the status bar → Stop.")
                             .font(.caption2).foregroundStyle(.secondary)
                     } else {
                         Text("Saving your recording…").font(.caption).bold()
-                        Text("Please wait — this closes automatically. Don't close the app.")
+                        Text("Please wait. This closes automatically; don't close the app.")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                 } else if broadcast.isBroadcasting {
@@ -139,7 +166,7 @@ struct NotepadView: View {
                         Text("Stopping…").font(.caption).bold()
                     } else {
                         Text("Recording, type freely").font(.system(size: 24)).bold()
-                        Text("Step 2: when done, tap End Early (top right) — or stop the broadcast from the status bar. Everything saves automatically.")
+                        Text("Step 2: when done, tap End Early (top right), or stop the broadcast from the status bar. Everything saves automatically.")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                 } else {
@@ -176,6 +203,7 @@ struct NotepadView: View {
                 showError = true
             } else {
                 RippleController.shared.isRecording = true
+                showStartReminder = true
             }
         }
     }
@@ -299,7 +327,7 @@ struct NotepadView: View {
         SessionBackup.attempt(
             sessionDirectory: directory,
             sessionID: directory.lastPathComponent,
-            participantName: ParticipantStore.shared.name ?? "Unknown",
+            participantName: ParticipantStore.shared.driveFolderName,
             hand: hand
         )
     }

@@ -24,6 +24,7 @@ final class SessionRecorder {
     private var segImageFrameIndex = 0
 
     private var timer: Timer?
+    private var timerStarted = false
     private var workingDirectory: URL?
     private var onAutoStop: (() -> Void)?
 
@@ -32,7 +33,9 @@ final class SessionRecorder {
 
         let handRoot = RecordingSession.sessionsDirectory()
             .appendingPathComponent(hand.rawValue, isDirectory: true)
+        let participantName = ParticipantStore.shared.name ?? "Unknown"
         let folderName = SessionNaming.uniqueFolderName(
+            name: participantName,
             number: sessionNumber,
             hand: hand,
             exists: { FileManager.default.fileExists(atPath: handRoot.appendingPathComponent($0).path) }
@@ -47,6 +50,7 @@ final class SessionRecorder {
         workingDirectory = directory
         self.onAutoStop = onAutoStop
         segImageFrameIndex = 0
+        timerStarted = false
         Self.writeMeta(hand: hand, sessionNumber: sessionNumber, prompt: prompt, to: directory)
 
         let sessionID = directory.lastPathComponent
@@ -80,7 +84,9 @@ final class SessionRecorder {
             }
             self.isRecording = true
             self.elapsed = 0
-            self.startTimer()
+            // The countdown starts on the first keystroke (beginTimerIfNeeded),
+            // so the participant gets a full minute of typing time no matter how
+            // long the pre-typing reminder/setup takes.
             completion(nil)
         }
     }
@@ -113,6 +119,15 @@ final class SessionRecorder {
             }
             completion(directory)
         }
+    }
+
+    /// Starts the 1-minute countdown. Call on the first keystroke; idempotent,
+    /// so later keystrokes are no-ops. Recording (face/IMU/seg-images) already
+    /// began in start(); only the countdown waits for typing to begin.
+    func beginTimerIfNeeded() {
+        guard isRecording, !timerStarted else { return }
+        timerStarted = true
+        startTimer()
     }
 
     private func startTimer() {

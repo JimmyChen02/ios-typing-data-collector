@@ -1,15 +1,14 @@
 import SwiftUI
 
 /// The study home: overall progress, per-condition remaining, a quota-gated
-/// "start next session" flow (hand picker → Ready? sheet → recording), the
+/// "start next session" flow (quick hand pick, then straight to the recording
+/// screen — the hand/posture reminder pops up once recording starts), the
 /// completed-session list with backup status, and a re-viewable posture guide.
 struct StudyHomeView: View {
     @State private var protocolState = StudyProtocol.shared
     @State private var sessions: [RecordingSession] = []
 
     @State private var showingHandPicker = false
-    @State private var readyHand: HoldingHand?          // drives the Ready sheet
-    @State private var pendingLaunch: HoldingHand?       // captured onStart; moved to launchHand once the sheet is gone
     @State private var launchHand: HoldingHand?         // drives the recording cover
     @State private var launchNumber = 0
     @State private var launchPrompt = ""
@@ -52,28 +51,9 @@ struct StudyHomeView: View {
         .confirmationDialog("Which hand for this session?",
                             isPresented: $showingHandPicker, titleVisibility: .visible) {
             ForEach(protocolState.availableConditions) { hand in
-                Button(hand.displayName) { readyHand = hand }
+                Button(hand.displayName) { startSession(with: hand) }
             }
             Button("Cancel", role: .cancel) {}
-        }
-        .sheet(item: $readyHand, onDismiss: {
-            if let hand = pendingLaunch {
-                pendingLaunch = nil
-                launchHand = hand
-            }
-        }) { hand in
-            ReadySheet(
-                hand: hand,
-                sessionNumber: protocolState.nextSessionNumber,
-                prompt: protocolState.promptForNextSession(),
-                onStart: {
-                    launchNumber = protocolState.nextSessionNumber
-                    launchPrompt = protocolState.promptForNextSession()
-                    pendingLaunch = hand
-                    readyHand = nil
-                },
-                onCancel: { readyHand = nil }
-            )
         }
         .fullScreenCover(item: $launchHand, onDismiss: reload) { hand in
             NotepadView(hand: hand, sessionNumber: launchNumber, prompt: launchPrompt)
@@ -108,6 +88,14 @@ struct StudyHomeView: View {
         }
     }
 
+    /// Capture the session's number + prompt, then present the recorder on a
+    /// later runloop turn (so the hand-picker dialog is fully gone first).
+    private func startSession(with hand: HoldingHand) {
+        launchNumber = protocolState.nextSessionNumber
+        launchPrompt = protocolState.promptForNextSession()
+        DispatchQueue.main.async { launchHand = hand }
+    }
+
     // MARK: Progress
 
     @ViewBuilder
@@ -127,7 +115,7 @@ struct StudyHomeView: View {
                 conditionRow(.both)
             }
             if protocolState.isComplete {
-                Text("All \(StudyProtocol.totalSessions) sessions complete — thank you! 🎉")
+                Text("All \(StudyProtocol.totalSessions) sessions complete. Thank you! 🎉")
                     .font(.subheadline).bold().foregroundStyle(.green)
                     .frame(maxWidth: .infinity)
             } else {
@@ -157,7 +145,7 @@ struct StudyHomeView: View {
                         .frame(width: 9, height: 9)
                 }
             }
-            Text(done == quota ? "done" : "\(quota - done) left")
+            Text(done == quota ? "done" : "\(max(quota - done, 0)) left")
                 .font(.caption).foregroundStyle(done == quota ? .green : .secondary)
                 .frame(width: 44, alignment: .trailing)
         }
@@ -172,7 +160,7 @@ struct StudyHomeView: View {
                 Image(systemName: AppsScriptUploader.shared.isConfigured ? "checkmark.icloud" : "exclamationmark.icloud")
                     .foregroundStyle(AppsScriptUploader.shared.isConfigured ? .green : .orange)
                 Text(AppsScriptUploader.shared.isConfigured
-                     ? "Automatic upload configured — every session backs up with no setup needed."
+                     ? "Automatic upload configured. Every session backs up with no setup needed."
                      : "Automatic upload not configured yet. See docs/AUTOMATIC_DRIVE_UPLOAD.md.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -227,11 +215,11 @@ struct StudyHomeView: View {
                 SessionBackup.attempt(
                     sessionDirectory: session.sessionDirectory,
                     sessionID: session.id,
-                    participantName: ParticipantStore.shared.name ?? "Unknown",
+                    participantName: ParticipantStore.shared.driveFolderName,
                     hand: session.hand
                 ) { succeeded in
                     if succeeded { reload() }
-                    else { backupErrorMessage = "Backup failed — check your network connection and that automatic upload is configured (see docs/AUTOMATIC_DRIVE_UPLOAD.md)." }
+                    else { backupErrorMessage = "Backup failed. Check your network connection and that automatic upload is configured (see docs/AUTOMATIC_DRIVE_UPLOAD.md)." }
                 }
             } label: {
                 Image(systemName: "icloud.and.arrow.up")
@@ -242,51 +230,5 @@ struct StudyHomeView: View {
 
     private func reload() {
         sessions = RecordingSession.loadAll()
-    }
-}
-
-/// Pre-session readiness popup: reminds the participant which hand to use +
-/// posture, previews the prompt, and starts the recording.
-struct ReadySheet: View {
-    let hand: HoldingHand
-    let sessionNumber: Int
-    let prompt: String
-    let onStart: () -> Void
-    let onCancel: () -> Void
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 20) {
-                Spacer(minLength: 8)
-                Image(systemName: "hand.raised.fill")
-                    .font(.system(size: 44)).foregroundStyle(.tint)
-                Text("Use your \(hand.displayName.replacingOccurrences(of: " hand", with: ""))")
-                    .font(.title2).bold()
-                Text("Sit upright in your chair. Don’t rest your arm on the desk or lean on anything.")
-                    .font(.subheadline).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Your prompt").font(.caption).foregroundStyle(.secondary)
-                    Text(prompt).font(.headline)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
-                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
-                Spacer()
-                Button(action: onStart) {
-                    Text("Start").frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-            }
-            .padding()
-            .navigationTitle("Session \(sessionNumber) of \(StudyProtocol.totalSessions)")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: onCancel)
-                }
-            }
-        }
     }
 }
