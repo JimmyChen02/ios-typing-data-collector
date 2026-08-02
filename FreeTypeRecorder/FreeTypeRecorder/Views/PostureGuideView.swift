@@ -10,7 +10,7 @@ struct PostureGuideView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 24) {
-                    Text("Sit upright in a chair with your back straight. Hold the phone with the hand shown for each session. Keep your arm up — don’t rest it on a desk or table, and don’t lean on anything.")
+                    Text("Sit upright in a chair with your back straight. Hold the phone with the hand shown for each session. Keep your arm up. Don't rest it on a desk or table, and don't lean on anything.")
                         .font(.body)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal)
@@ -26,7 +26,7 @@ struct PostureGuideView: View {
                     .padding(.horizontal)
 
                     Button(action: onContinue) {
-                        Text(isOnboarding ? "Got it — let’s start" : "Done")
+                        Text(isOnboarding ? "Got it, let's start" : "Done")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)

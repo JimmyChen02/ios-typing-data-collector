@@ -13,7 +13,7 @@ struct SessionDetailView: View {
                         VideoPlayer(player: AVPlayer(url: session.screenURL))
                             .frame(height: 300)
                     } else {
-                        Text("No screen recording for this session — the screen broadcast wasn't started.")
+                        Text("No screen recording for this session. The screen broadcast wasn't started.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, minHeight: 80)
