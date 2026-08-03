@@ -4,7 +4,7 @@ import Observation
 /// Coordinates the app-process per-session recorders — segmented-face
 /// video, IMU, periodic seg-images (+ manifest), and keystrokes — so a
 /// single start/stop pair drives them together, and auto-stops everything
-/// at the 3-minute session limit.
+/// at the 1-minute (60s) session limit.
 ///
 /// The screen recording is NOT here: it's produced by the separate
 /// BroadcastExtension (the only capture path that includes the system
@@ -14,7 +14,7 @@ import Observation
 @Observable
 final class SessionRecorder {
 
-    static let sessionDuration: TimeInterval = 180
+    static let sessionDuration: TimeInterval = 60
 
     private(set) var isRecording = false
     private(set) var elapsed: TimeInterval = 0
@@ -24,15 +24,23 @@ final class SessionRecorder {
     private var segImageFrameIndex = 0
 
     private var timer: Timer?
+    private var timerStarted = false
     private var workingDirectory: URL?
     private var onAutoStop: (() -> Void)?
 
-    func start(hand: HoldingHand, onAutoStop: @escaping () -> Void, completion: @escaping (Error?) -> Void) {
+    func start(hand: HoldingHand, sessionNumber: Int, prompt: String, onAutoStop: @escaping () -> Void, completion: @escaping (Error?) -> Void) {
         guard !isRecording else { return }
 
-        let directory = RecordingSession.sessionsDirectory()
+        let handRoot = RecordingSession.sessionsDirectory()
             .appendingPathComponent(hand.rawValue, isDirectory: true)
-            .appendingPathComponent(Self.timestampFolderName(), isDirectory: true)
+        let participantName = ParticipantStore.shared.name ?? "Unknown"
+        let folderName = SessionNaming.uniqueFolderName(
+            name: participantName,
+            number: sessionNumber,
+            hand: hand,
+            exists: { FileManager.default.fileExists(atPath: handRoot.appendingPathComponent($0).path) }
+        )
+        let directory = handRoot.appendingPathComponent(folderName, isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         } catch {
@@ -42,7 +50,8 @@ final class SessionRecorder {
         workingDirectory = directory
         self.onAutoStop = onAutoStop
         segImageFrameIndex = 0
-        Self.writeMeta(hand: hand, to: directory)
+        timerStarted = false
+        Self.writeMeta(hand: hand, sessionNumber: sessionNumber, prompt: prompt, to: directory)
 
         let sessionID = directory.lastPathComponent
         faceWriter.onSegImage = { [weak self] image, _ in
@@ -75,7 +84,9 @@ final class SessionRecorder {
             }
             self.isRecording = true
             self.elapsed = 0
-            self.startTimer()
+            // The countdown starts on the first keystroke (beginTimerIfNeeded),
+            // so the participant gets a full minute of typing time no matter how
+            // long the pre-typing reminder/setup takes.
             completion(nil)
         }
     }
@@ -110,6 +121,15 @@ final class SessionRecorder {
         }
     }
 
+    /// Starts the 1-minute countdown. Call on the first keystroke; idempotent,
+    /// so later keystrokes are no-ops. Recording (face/IMU/seg-images) already
+    /// began in start(); only the countdown waits for typing to begin.
+    func beginTimerIfNeeded() {
+        guard isRecording, !timerStarted else { return }
+        timerStarted = true
+        startTimer()
+    }
+
     private func startTimer() {
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
@@ -139,23 +159,21 @@ final class SessionRecorder {
         faceWriter.updateLiveLabel("\(posture.displayName) \(confidencePercent)%")
     }
 
-    private static func timestampFolderName() -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd_HHmmss"
-        return formatter.string(from: Date())
-    }
-
-    private struct SessionMeta: Encodable {
-        let participant: String
-        let hand: String
-        let startedAt: String
-    }
-
-    private static func writeMeta(hand: HoldingHand, to directory: URL) {
+    private static func writeMeta(hand: HoldingHand, sessionNumber: Int, prompt: String, to directory: URL) {
+        let store = ParticipantStore.shared
         let meta = SessionMeta(
-            participant: ParticipantStore.shared.name ?? "Unknown",
+            participant: store.name ?? "Unknown",
             hand: hand.rawValue,
-            startedAt: ISO8601DateFormatter().string(from: Date())
+            startedAt: ISO8601DateFormatter().string(from: Date()),
+            age: store.age,
+            sex: store.sex.rawValue,
+            dominantHand: store.dominantHand.rawValue,
+            deviceModel: DeviceInfo.modelName,
+            deviceModelIdentifier: DeviceInfo.hardwareIdentifier,
+            systemVersion: DeviceInfo.systemVersion,
+            appVersion: DeviceInfo.appVersion,
+            sessionNumber: sessionNumber,
+            prompt: prompt
         )
         if let data = try? JSONEncoder().encode(meta) {
             try? data.write(to: directory.appendingPathComponent("session_meta.json"))

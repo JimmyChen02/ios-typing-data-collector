@@ -2,6 +2,8 @@ import SwiftUI
 
 struct NotepadView: View {
     let hand: HoldingHand
+    let sessionNumber: Int
+    let prompt: String
 
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
@@ -28,6 +30,12 @@ struct NotepadView: View {
     @State private var isStartingSession = false
     // True after "End Early" is tapped, while the broadcast is winding down.
     @State private var endingEarly = false
+    // Ensures the study protocol counts this session exactly once, no matter
+    // which finalize path (End Early, broadcast stop, or disappear) fires.
+    @State private var didFinalize = false
+    // Shown once, right when recording begins: reminds the participant of
+    // their posture and which hand to use this session.
+    @State private var showStartReminder = false
 
     // How long to wait for the finished video after the broadcast stops
     // before saving the session without it (safety valve against a hang).
@@ -37,10 +45,23 @@ struct NotepadView: View {
         max(SessionRecorder.sessionDuration - recorder.elapsed, 0)
     }
 
+    // Reminder shown when recording starts: sit up + which hand to use.
+    private var startReminderMessage: String {
+        let handPhrase: String
+        switch hand {
+        case .left: handPhrase = "your LEFT hand"
+        case .right: handPhrase = "your RIGHT hand"
+        case .both: handPhrase = "BOTH hands"
+        case .unknown: handPhrase = "your assigned hand"
+        }
+        return "Sit up straight and keep your arm off the desk. Type with \(handPhrase) for this session."
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 broadcastStatusBar
+                sessionHeader
 
                 LoggingTextView(text: $text, isEditable: recorder.isRecording)
                     .padding()
@@ -72,12 +93,46 @@ struct NotepadView: View {
             } message: {
                 Text(errorMessage)
             }
+            .alert("Remember", isPresented: $showStartReminder) {
+                Button("OK, got it", role: .cancel) {}
+            } message: {
+                Text(startReminderMessage)
+            }
+        }
+        .onChange(of: text) { _, newValue in
+            // Start the 1-minute countdown on the first keystroke, so the
+            // pre-typing reminder popup doesn't eat into recording time.
+            if recorder.isRecording && !newValue.isEmpty {
+                recorder.beginTimerIfNeeded()
+            }
         }
         .onAppear(perform: startPolling)
         .onDisappear(perform: handleDisappear)
     }
 
     // MARK: - Broadcast status / start UI
+
+    @ViewBuilder
+    private var sessionHeader: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Session \(sessionNumber) of \(StudyProtocol.totalSessions)")
+                    .font(.subheadline).bold()
+                Spacer()
+                Label(hand.displayName, systemImage: "hand.raised.fill")
+                    .font(.caption).bold()
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(.tint.opacity(0.15), in: Capsule())
+            }
+            Text(prompt)
+                .font(.headline)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.background)
+    }
 
     @ViewBuilder
     private var broadcastStatusBar: some View {
@@ -92,18 +147,18 @@ struct NotepadView: View {
                 if broadcast.appGroupUnavailable {
                     Text("Screen recording unavailable")
                         .font(.caption).bold().foregroundStyle(.orange)
-                    Text("App Group isn't set up — see docs/SCREEN_BROADCAST_SETUP.md.")
+                    Text("App Group isn't set up. See docs/SCREEN_BROADCAST_SETUP.md.")
                         .font(.caption2).foregroundStyle(.secondary)
                 } else if pendingDirectory != nil {
                     if broadcast.isBroadcasting {
-                        // 3-min limit reached but broadcast still running.
-                        Text("Time's up — stop the broadcast to finish")
+                        // 1-min limit reached but broadcast still running.
+                        Text("Time's up. Stop the broadcast to finish.")
                             .font(.caption).bold()
                         Text("Tap the red time in the status bar → Stop.")
                             .font(.caption2).foregroundStyle(.secondary)
                     } else {
                         Text("Saving your recording…").font(.caption).bold()
-                        Text("Please wait — this closes automatically. Don't close the app.")
+                        Text("Please wait. This closes automatically; don't close the app.")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                 } else if broadcast.isBroadcasting {
@@ -111,7 +166,7 @@ struct NotepadView: View {
                         Text("Stopping…").font(.caption).bold()
                     } else {
                         Text("Recording, type freely").font(.system(size: 24)).bold()
-                        Text("Step 2: when done, tap End Early (top right) — or stop the broadcast from the status bar. Everything saves automatically.")
+                        Text("Step 2: when done, tap End Early (top right), or stop the broadcast from the status bar. Everything saves automatically.")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                 } else {
@@ -141,13 +196,14 @@ struct NotepadView: View {
         isStartingSession = true
         text = ""
         RecentKeysTracker.shared.reset()
-        recorder.start(hand: hand, onAutoStop: stopRecording) { error in
+        recorder.start(hand: hand, sessionNumber: sessionNumber, prompt: prompt, onAutoStop: stopRecording) { error in
             isStartingSession = false
             if let error {
                 errorMessage = error.localizedDescription
                 showError = true
             } else {
                 RippleController.shared.isRecording = true
+                showStartReminder = true
             }
         }
     }
@@ -183,7 +239,7 @@ struct NotepadView: View {
                 pendingDirectory = directory
                 checkPendingBroadcastFinished()
             } else {
-                Self.finalizeAndBackUp(directory, hand: hand)
+                finalize(directory)
                 dismiss()
             }
         }
@@ -243,7 +299,7 @@ struct NotepadView: View {
     private func finishPending(_ directory: URL) {
         pendingDirectory = nil
         pendingBroadcastEndedAt = nil
-        Self.finalizeAndBackUp(directory, hand: hand)
+        finalize(directory)
         dismiss()
     }
 
@@ -256,19 +312,22 @@ struct NotepadView: View {
                 guard let directory else { return }
                 // Best-effort: grab a broadcast file if one already landed.
                 BroadcastCoordinator.shared.collectRecording(into: directory)
-                Self.finalizeAndBackUp(directory, hand: hand)
+                finalize(directory)
             }
         }
     }
 
-    // Collects the session's files (videos, IMU/keystroke CSVs, seg-images)
-    // and hands them to SessionBackup. Runs after dismiss-worthy state is
-    // set, so a slow/failed upload never blocks closing the notepad.
-    private static func finalizeAndBackUp(_ directory: URL, hand: HoldingHand) {
+    // The single finalize path: count the session in the study protocol
+    // (once), then hand its files to the backup pipeline. Runs after
+    // dismiss-worthy state is set, so a slow upload never blocks closing.
+    private func finalize(_ directory: URL) {
+        guard !didFinalize else { return }
+        didFinalize = true
+        StudyProtocol.shared.recordCompletion(hand: hand)
         SessionBackup.attempt(
             sessionDirectory: directory,
             sessionID: directory.lastPathComponent,
-            participantName: ParticipantStore.shared.name ?? "Unknown",
+            participantName: ParticipantStore.shared.driveFolderName,
             hand: hand
         )
     }

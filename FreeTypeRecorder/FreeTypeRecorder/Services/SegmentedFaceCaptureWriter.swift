@@ -43,7 +43,7 @@ final class SegmentedFaceCaptureWriter: NSObject {
     // continuous video) that feeds the same offline CNN training pipeline
     // TypingResearch's hand-posture dataset uses, which expects discrete
     // labeled images rather than a video.
-    private nonisolated static let segImageInterval: TimeInterval = 3.0
+    private nonisolated static let segImageInterval: TimeInterval = 1.0
     // Guarded the same way HandBurstCapture's throttle state is: sessionQueue
     // is a serial queue and the sole reader/writer of this value.
     nonisolated(unsafe) private var lastSegImagePTS: CMTime = .invalid

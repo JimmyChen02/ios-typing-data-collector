@@ -1,0 +1,256 @@
+<title>Posture Guide Figures — Preview</title>
+<style>
+  :root {
+    --bg: #f1f3f6;
+    --panel: #ffffff;
+    --ink: #2b2f36;
+    --furniture: #98a1ad;
+    --muted: #656d78;
+    --line: #e3e7ec;
+    --do: #1f9d57;
+    --dont: #d64545;
+    --accent: #3b6ea5;
+    --radius: 18px;
+    --shadow: 0 1px 2px rgba(20,25,35,.04), 0 8px 24px rgba(20,25,35,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151a;
+      --panel: #1b1f26;
+      --ink: #e7eaef;
+      --furniture: #656d78;
+      --muted: #9aa2ad;
+      --line: #2a2f37;
+      --do: #35c07a;
+      --dont: #ef6b6b;
+      --accent: #7aa5d6;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 28px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f1f3f6; --panel: #ffffff; --ink: #2b2f36; --furniture: #98a1ad;
+    --muted: #656d78; --line: #e3e7ec; --do: #1f9d57; --dont: #d64545; --accent: #3b6ea5;
+    --shadow: 0 1px 2px rgba(20,25,35,.04), 0 8px 24px rgba(20,25,35,.06);
+  }
+  :root[data-theme="dark"] {
+    --bg: #12151a; --panel: #1b1f26; --ink: #e7eaef; --furniture: #656d78;
+    --muted: #9aa2ad; --line: #2a2f37; --do: #35c07a; --dont: #ef6b6b; --accent: #7aa5d6;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 28px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.55;
+  }
+  .wrap {
+    max-width: 780px;
+    margin: 0 auto;
+    padding: 48px 24px 64px;
+  }
+  .eyebrow {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 10px;
+  }
+  h1 {
+    font-size: clamp(26px, 4vw, 34px);
+    font-weight: 700;
+    letter-spacing: -.01em;
+    text-wrap: balance;
+    margin: 0 0 12px;
+  }
+  .lede {
+    font-size: 16px;
+    color: var(--muted);
+    max-width: 60ch;
+    margin: 0 0 36px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+  }
+  @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+
+  .panel {
+    position: relative;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 20px 20px 22px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .figure-stage {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    padding: 8px 0 6px;
+  }
+  svg.figure { width: 210px; height: 231px; display: block; }
+  .body-line { stroke: var(--ink); stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+  .furn-line { stroke: var(--furniture); stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+  .furn-fill { fill: var(--furniture); }
+  .ink-fill { fill: var(--ink); }
+  .guide { stroke: var(--do); stroke-width: 3; stroke-dasharray: 3 6; stroke-linecap: round; fill: none; opacity: .9; }
+  .warn { stroke: var(--dont); stroke-width: 5; stroke-linecap: round; fill: none; }
+  .badge circle { }
+  .badge-do circle { fill: var(--do); }
+  .badge-dont circle { fill: var(--dont); }
+  .badge path { stroke: #fff; stroke-width: 3.4; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: .02em;
+    padding: 5px 12px;
+    border-radius: 999px;
+    margin-top: 6px;
+  }
+  .tag-do { color: var(--do); background: color-mix(in srgb, var(--do) 14%, transparent); }
+  .tag-dont { color: var(--dont); background: color-mix(in srgb, var(--dont) 14%, transparent); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .dot-do { background: var(--do); }
+  .dot-dont { background: var(--dont); }
+  .caption {
+    margin: 12px 2px 0;
+    font-size: 14px;
+    color: var(--muted);
+    text-align: center;
+    max-width: 26ch;
+  }
+
+  .note {
+    margin-top: 34px;
+    padding: 18px 20px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+  }
+  .note h2 {
+    font-size: 12px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 10px;
+  }
+  .note p { margin: 0 0 10px; font-size: 14.5px; }
+  .note p:last-child { margin-bottom: 0; }
+  .note .app-copy {
+    border-left: 3px solid var(--accent);
+    padding-left: 14px;
+    color: var(--ink);
+  }
+  .note .app-copy strong { font-weight: 700; }
+</style>
+
+<div class="wrap">
+  <p class="eyebrow">FreeTypeRecorder · Posture Guide</p>
+  <h1>How to sit for a recording</h1>
+  <p class="lede">Shown once after sign-up and re-openable from the menu. Two line-art figures make the rule read at a glance: sit tall, hold the phone up, keep your arm off the desk.</p>
+
+  <div class="grid">
+    <!-- DO -->
+    <div class="panel">
+      <span class="badge" style="position:absolute;top:14px;right:14px;">
+        <svg class="badge badge-do" width="34" height="34" viewBox="0 0 34 34" aria-hidden="true">
+          <circle cx="17" cy="17" r="16"></circle>
+          <path d="M10 17.5 L15 22.5 L24 11.5"></path>
+        </svg>
+      </span>
+      <div class="figure-stage">
+        <svg class="figure" viewBox="0 0 210 231" role="img" aria-label="A person sitting upright in a chair, holding a phone up with their arm off the desk">
+          <!-- floor -->
+          <line class="furn-line" x1="14" y1="204" x2="196" y2="204" opacity=".55"></line>
+          <!-- desk (present but unused) -->
+          <line class="furn-line" x1="18" y1="138" x2="78" y2="138"></line>
+          <line class="furn-line" x1="26" y1="138" x2="26" y2="203"></line>
+          <!-- chair -->
+          <line class="furn-line" x1="120" y1="158" x2="120" y2="100"></line>
+          <line class="furn-line" x1="84" y1="158" x2="130" y2="158"></line>
+          <line class="furn-line" x1="88" y1="158" x2="88" y2="203"></line>
+          <line class="furn-line" x1="124" y1="158" x2="124" y2="203"></line>
+          <!-- upright spine guide -->
+          <line class="guide" x1="102" y1="66" x2="112" y2="152"></line>
+          <!-- person -->
+          <!-- head -->
+          <circle class="body-line" cx="100" cy="52" r="15"></circle>
+          <!-- spine (upright) -->
+          <path class="body-line" d="M101 67 L112 152"></path>
+          <!-- thigh + shin + foot -->
+          <path class="body-line" d="M112 152 L78 152"></path>
+          <path class="body-line" d="M78 152 L74 202"></path>
+          <path class="body-line" d="M62 202 L86 202"></path>
+          <!-- upper arm -->
+          <path class="body-line" d="M103 80 L100 118"></path>
+          <!-- forearm raised, holding phone up -->
+          <path class="body-line" d="M100 118 L74 96"></path>
+          <!-- phone -->
+          <rect class="ink-fill" x="55" y="80" width="15" height="24" rx="3" transform="rotate(-22 62 92)"></rect>
+        </svg>
+      </div>
+      <span class="tag tag-do"><span class="dot dot-do"></span>Do this</span>
+      <p class="caption">Back straight, phone held up, forearm free of the desk.</p>
+    </div>
+
+    <!-- DON'T -->
+    <div class="panel">
+      <span class="badge" style="position:absolute;top:14px;right:14px;">
+        <svg class="badge badge-dont" width="34" height="34" viewBox="0 0 34 34" aria-hidden="true">
+          <circle cx="17" cy="17" r="16"></circle>
+          <path d="M11.5 11.5 L22.5 22.5 M22.5 11.5 L11.5 22.5"></path>
+        </svg>
+      </span>
+      <div class="figure-stage">
+        <svg class="figure" viewBox="0 0 210 231" role="img" aria-label="A person slouching with their forearm resting on the desk">
+          <!-- floor -->
+          <line class="furn-line" x1="14" y1="204" x2="196" y2="204" opacity=".55"></line>
+          <!-- desk (arm rests on it) -->
+          <line class="furn-line" x1="18" y1="140" x2="82" y2="140"></line>
+          <line class="furn-line" x1="26" y1="140" x2="26" y2="203"></line>
+          <!-- chair -->
+          <line class="furn-line" x1="120" y1="158" x2="120" y2="100"></line>
+          <line class="furn-line" x1="84" y1="158" x2="130" y2="158"></line>
+          <line class="furn-line" x1="88" y1="158" x2="88" y2="203"></line>
+          <line class="furn-line" x1="124" y1="158" x2="124" y2="203"></line>
+          <!-- person -->
+          <!-- head (forward + down) -->
+          <circle class="body-line" cx="84" cy="70" r="15"></circle>
+          <!-- slouched spine -->
+          <path class="body-line" d="M92 84 C80 104 92 138 112 154"></path>
+          <!-- thigh + shin + foot -->
+          <path class="body-line" d="M112 154 L78 153"></path>
+          <path class="body-line" d="M78 153 L74 202"></path>
+          <path class="body-line" d="M62 202 L86 202"></path>
+          <!-- upper arm -->
+          <path class="body-line" d="M95 92 L92 128"></path>
+          <!-- forearm resting flat on desk -->
+          <path class="body-line" d="M92 128 L42 133"></path>
+          <!-- phone flat on desk -->
+          <rect class="ink-fill" x="30" y="122" width="22" height="12" rx="3" transform="rotate(-6 41 128)"></rect>
+          <!-- contact stress marks where forearm meets desk -->
+          <path class="warn" d="M40 141 l6 5 M50 141 l6 5" opacity=".9"></path>
+        </svg>
+      </div>
+      <span class="tag tag-dont"><span class="dot dot-dont"></span>Not this</span>
+      <p class="caption">Slouched, forearm propped on the desk or table.</p>
+    </div>
+  </div>
+
+  <div class="note">
+    <h2>What ships in the app</h2>
+    <p class="app-copy"><strong>Sit upright in a chair with your back straight.</strong> Hold the phone with the hand shown for each session. Keep your arm up — don’t rest it on a desk or table, and don’t lean on anything.</p>
+    <p>Figures are vector art: crisp at any size and re-tinted automatically for light and dark mode. The <strong>Ready?</strong> screen before each session also shows which hand (Left / Right / Both) to use that round.</p>
+  </div>
+</div>
