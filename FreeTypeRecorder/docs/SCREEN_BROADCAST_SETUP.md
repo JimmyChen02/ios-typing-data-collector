@@ -51,12 +51,10 @@ for the app's own recorders.
    **Start Broadcast** → 3-second countdown. The status-bar clock turns
    red and the **session auto-starts** (face video, IMU, keystrokes,
    seg-images all begin).
-3. Type (up to 3 minutes).
-4. End it either way:
-   - Tap **End Early** (top-right) — the app stops the broadcast for you
-     (iOS shows a brief "Recording finished." confirmation), or
-   - Stop the broadcast yourself from the **red clock in the status bar →
-     Stop**.
+3. Type for the full minute (the countdown starts on your first keystroke).
+4. When the minute is up, stop the broadcast from the **red clock in the
+   status bar → Stop**. Stopping *before* the minute is up discards the
+   session — the app tells you it was too short and you run it again.
 5. The app shows **"Saving…"** (exit is locked here), collects the video
    into the session folder as `screen.mov`, backs everything up, and
    **closes automatically**.

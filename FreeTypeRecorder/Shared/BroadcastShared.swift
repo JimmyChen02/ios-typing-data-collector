@@ -43,7 +43,8 @@ enum BroadcastShared {
 
     /// The app drops this to ask the extension to stop itself (an app can't
     /// stop a broadcast directly; the extension polls for it each frame and
-    /// calls finishBroadcastWithError when it appears). Powers "End Early".
+    /// calls finishBroadcastWithError when it appears). Currently unused by
+    /// the UI; kept as the app→extension stop primitive.
     static func stopRequestURL() -> URL? {
         containerURL()?.appendingPathComponent("broadcast_stop_request")
     }

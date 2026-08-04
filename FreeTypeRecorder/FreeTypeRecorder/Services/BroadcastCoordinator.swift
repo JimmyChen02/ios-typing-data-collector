@@ -57,9 +57,21 @@ final class BroadcastCoordinator {
         }
     }
 
-    /// Asks the running extension to stop itself (powers "End Early"). The
-    /// extension polls for this file each frame and ends the broadcast when
-    /// it appears; the normal stop→collect→save flow then runs.
+    /// Deletes any finished recording sitting in the shared container without
+    /// collecting it — used when a session is aborted (broadcast stopped
+    /// before the full minute) so a stray video can't leak into the next one.
+    func discardFinishedRecording() {
+        if let url = BroadcastShared.finishedURL() {
+            try? FileManager.default.removeItem(at: url)
+        }
+        refresh()
+    }
+
+    /// Asks the running extension to stop itself: the extension polls for
+    /// this file each frame and ends the broadcast when it appears, after
+    /// which the normal stop→collect→save flow runs. Currently unused by the
+    /// UI (sessions end on their timer or when the participant stops the
+    /// broadcast); retained as the app→extension stop primitive.
     func requestStop() {
         guard let url = BroadcastShared.stopRequestURL() else { return }
         try? Data().write(to: url)

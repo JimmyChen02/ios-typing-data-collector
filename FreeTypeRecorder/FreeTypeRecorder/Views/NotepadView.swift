@@ -28,11 +28,14 @@ struct NotepadView: View {
     // Guards the async gap between calling recorder.start and it flipping
     // isRecording, so the 0.5s poll can't auto-start the session twice.
     @State private var isStartingSession = false
-    // True after "End Early" is tapped, while the broadcast is winding down.
-    @State private var endingEarly = false
     // Ensures the study protocol counts this session exactly once, no matter
-    // which finalize path (End Early, broadcast stop, or disappear) fires.
+    // which finalize path (broadcast stop or disappear) fires.
     @State private var didFinalize = false
+    // Guards the abort path (broadcast stopped before the full minute) from
+    // re-entry, since the 0.5s poll would otherwise fire it repeatedly.
+    @State private var isAborting = false
+    // Drives the "session too short, please redo" alert after an abort.
+    @State private var showAbort = false
     // Shown once, right when recording begins: reminds the participant of
     // their posture and which hand to use this session.
     @State private var showStartReminder = false
@@ -78,15 +81,6 @@ struct NotepadView: View {
                         Button("Cancel", action: dismiss.callAsFunction)
                     }
                 }
-                ToolbarItem(placement: .primaryAction) {
-                    // End Early stops the broadcast for you (the extension
-                    // ends itself when it sees the request), then the normal
-                    // save + auto-close flow runs.
-                    if recorder.isRecording && pendingDirectory == nil {
-                        Button("End Early", role: .destructive, action: endEarly)
-                            .disabled(endingEarly)
-                    }
-                }
             }
             .alert("Recording Error", isPresented: $showError) {
                 Button("OK", action: dismiss.callAsFunction)
@@ -97,6 +91,11 @@ struct NotepadView: View {
                 Button("OK, got it", role: .cancel) {}
             } message: {
                 Text(startReminderMessage)
+            }
+            .alert("Session too short", isPresented: $showAbort) {
+                Button("OK", action: dismiss.callAsFunction)
+            } message: {
+                Text("The broadcast stopped before the full minute, so this session wasn't saved. Please run it again and type for the full time.")
             }
         }
         .onChange(of: text) { _, newValue in
@@ -162,13 +161,9 @@ struct NotepadView: View {
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                 } else if broadcast.isBroadcasting {
-                    if endingEarly {
-                        Text("Stopping…").font(.caption).bold()
-                    } else {
-                        Text("Recording, type freely").font(.system(size: 24)).bold()
-                        Text("Step 2: when done, tap End Early (top right), or stop the broadcast from the status bar. Everything saves automatically.")
-                            .font(.caption2).foregroundStyle(.secondary)
-                    }
+                    Text("Recording, type freely").font(.system(size: 24)).bold()
+                    Text("Type for the full minute. Don't stop the broadcast early — the session is only saved once the time is up.")
+                        .font(.caption2).foregroundStyle(.secondary)
                 } else {
                     Text("Step 1: tap ● → FreeTypeRecorder → Start Broadcast")
                         .font(.caption).bold()
@@ -208,18 +203,22 @@ struct NotepadView: View {
         }
     }
 
-    // Requests the extension stop the broadcast. Everything else (ending the
-    // session, collecting the video, saving, auto-closing) then happens
-    // automatically via the poll, exactly as if the user had stopped the
-    // broadcast from the status bar.
-    private func endEarly() {
-        guard !endingEarly else { return }
-        endingEarly = true
-        if broadcast.isBroadcasting {
-            broadcast.requestStop()
-        } else {
-            // No broadcast running — just stop the session directly.
-            stopRecording()
+    // The participant stopped the broadcast before the session's full minute
+    // elapsed. Sessions must run the full time, so discard the partial
+    // recording, leave the study count untouched (finalize is never called),
+    // and send them back to redo the session.
+    private func abortSession() {
+        guard !isAborting, !didFinalize else { return }
+        isAborting = true
+        RippleController.shared.isRecording = false
+        recorder.stop { directory in
+            if let directory {
+                try? FileManager.default.removeItem(at: directory)
+            }
+            // Drop any screen recording the extension just finished so a
+            // stray video can't leak into the next session.
+            broadcast.discardFinishedRecording()
+            showAbort = true
         }
     }
 
@@ -263,9 +262,11 @@ struct NotepadView: View {
                         startRecording()
                     }
                 } else if broadcastWasUsed && recorder.isRecording {
-                    // Broadcast ended (participant stopped it) → end the
-                    // session too, and collect its file.
-                    stopRecording()
+                    // Broadcast stopped before the full minute elapsed →
+                    // abort. Reaching the full duration fires onAutoStop,
+                    // which stops the recorder first, so isRecording still
+                    // being true here always means an early stop.
+                    abortSession()
                 }
                 checkPendingBroadcastFinished()
             }

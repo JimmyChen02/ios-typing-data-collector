@@ -64,7 +64,7 @@ class SampleHandler: RPBroadcastSampleHandler {
     }
 
     override func processSampleBuffer(_ sampleBuffer: CMSampleBuffer, with sampleBufferType: RPSampleBufferType) {
-        // Stop-request (End Early) check runs first, for any sample type, so
+        // App-requested stop check runs first, for any sample type, so
         // stopping works even between video frames.
         if !stopping, let stopURL = BroadcastShared.stopRequestURL(),
            FileManager.default.fileExists(atPath: stopURL.path) {

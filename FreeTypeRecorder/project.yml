@@ -24,6 +24,9 @@ targets:
     info:
       path: Generated-Info.plist
       properties:
+        # App uses no encryption beyond what iOS/HTTPS exempts, so App Store
+        # Connect skips the export-compliance prompt on every upload.
+        ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait

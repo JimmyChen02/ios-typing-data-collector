@@ -45,3 +45,9 @@ Model-Training-Test/exports/
 
 # Local agent design docs (plans/specs) — keep out of history
 docs/superpowers/
+
+# Analysis output frames, sample/threshold test exports, and scratch work
+# (kept locally for reference, out of git)
+tran_key_frames/
+csv_threshold_test/
+scratchpad/

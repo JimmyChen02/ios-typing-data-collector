@@ -20,8 +20,10 @@ keystroke, then backs it all up to Google Drive automatically.
    which conditions remain.
 6. **Each session:** tap **Start next session**, pick a hand, then tap the
    ● → **FreeTypeRecorder → Start Broadcast**. When recording starts, a popup
-   reminds you which hand to use and to sit up. Type about the prompt for one
-   minute; everything saves and uploads automatically.
+   reminds you which hand to use and to sit up. Type about the prompt for the
+   full minute, then stop the broadcast to finish; everything saves and uploads
+   automatically. Stopping before the minute is up discards the session and you
+   redo it, so let the timer run out.
 7. **Where it goes:** Google Drive under
    `<your name> - <phone>/<hand>/<name>,<trial>,<hand>/` (e.g.
    `Alex - iPhone 15 Pro/left/Alex,3,left/`), with `session_meta.json` carrying
