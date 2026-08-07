@@ -90,7 +90,7 @@
 /* Begin PBXFileReference section */
 		02A85B0A44037A18A4F8D796 /* FolderBackupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderBackupService.swift; sourceTree = "<group>"; };
 		0524287072C3CC12CC4BF2B2 /* NotepadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotepadView.swift; sourceTree = "<group>"; };
-		06C4A945C15972D2CC1CE6DA /* BroadcastExtension.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = BroadcastExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		06C4A945C15972D2CC1CE6DA /* BroadcastExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = BroadcastExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		07263DBA38E2833EC60CE1C2 /* SegmentedFaceCaptureWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentedFaceCaptureWriter.swift; sourceTree = "<group>"; };
 		0EA536AD6311FB101C5DB8FA /* StudyProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyProtocol.swift; sourceTree = "<group>"; };
 		14540511074886FD93272AC4 /* ParticipantStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParticipantStore.swift; sourceTree = "<group>"; };
@@ -108,7 +108,7 @@
 		465207665FE5228B3E8DDEDC /* PromptBankTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptBankTests.swift; sourceTree = "<group>"; };
 		4AEC7148A0948F2A2DCA3A6B /* DeviceInfoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceInfoTests.swift; sourceTree = "<group>"; };
 		4FCC2EC32F831057977421EF /* BroadcastCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BroadcastCoordinator.swift; sourceTree = "<group>"; };
-		5113C8EDCB3081095A2FB154 /* FreeTypeRecorderTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = FreeTypeRecorderTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		5113C8EDCB3081095A2FB154 /* FreeTypeRecorderTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FreeTypeRecorderTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5B14128D7F05121FD1CB99A5 /* SessionMetaTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionMetaTests.swift; sourceTree = "<group>"; };
 		5C089869B3ADCC6649A24E6C /* PostureGuideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostureGuideView.swift; sourceTree = "<group>"; };
 		61A1EA3EBC5FBA2C35D8ABAE /* LoggingTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoggingTextView.swift; sourceTree = "<group>"; };
@@ -124,10 +124,10 @@
 		9F550F7F8960C6457FBB93AE /* KeystrokeLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeystrokeLogger.swift; sourceTree = "<group>"; };
 		A594BB5EF449CDE0A7B3EDBA /* SessionRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRecorder.swift; sourceTree = "<group>"; };
 		AAAB3271F9CCF6B8F9FD3C99 /* Demographics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Demographics.swift; sourceTree = "<group>"; };
-		AE6C48768843F9CD14756524 /* posture_imu.mlpackage */ = {isa = PBXFileReference; path = posture_imu.mlpackage; sourceTree = "<group>"; };
+		AE6C48768843F9CD14756524 /* posture_imu.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = posture_imu.mlpackage; sourceTree = "<group>"; };
 		BECA23CE03682B17BFA3F06D /* HoldingHand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoldingHand.swift; sourceTree = "<group>"; };
 		C04C8FCF1B15FBF795C00045 /* StudyProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyProtocolTests.swift; sourceTree = "<group>"; };
-		C80F9E0DD33A96AFFBC3FC4C /* FreeTypeRecorder.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = FreeTypeRecorder.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C80F9E0DD33A96AFFBC3FC4C /* FreeTypeRecorder.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FreeTypeRecorder.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C8B04BCFCB8E13345BDF5BB9 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		CE28C552AF0598286CB03B1C /* RecordingSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingSession.swift; sourceTree = "<group>"; };
 		D1571B3726B805236DC3DC48 /* UploadStatusStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadStatusStore.swift; sourceTree = "<group>"; };
@@ -349,7 +349,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 1430;
+				LastUpgradeCheck = 2610;
 				TargetAttributes = {
 					06E547FD9059D6F594B4EBC4 = {
 						DevelopmentTeam = P2LUTF8N6F;
@@ -489,7 +489,6 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = P2LUTF8N6F;
 				INFOPLIST_FILE = "Generated-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -507,7 +506,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				DEVELOPMENT_TEAM = P2LUTF8N6F;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -524,7 +522,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				DEVELOPMENT_TEAM = P2LUTF8N6F;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -545,7 +542,6 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = P2LUTF8N6F;
 				INFOPLIST_FILE = "Generated-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -565,7 +561,6 @@
 				CODE_SIGN_ENTITLEMENTS = BroadcastExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = P2LUTF8N6F;
 				INFOPLIST_FILE = "BroadcastExtension/Generated-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -586,7 +581,6 @@
 				CODE_SIGN_ENTITLEMENTS = BroadcastExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = P2LUTF8N6F;
 				INFOPLIST_FILE = "BroadcastExtension/Generated-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -636,8 +630,10 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = P2LUTF8N6F;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -658,6 +654,7 @@
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
@@ -699,8 +696,10 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = P2LUTF8N6F;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -714,6 +713,7 @@
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;

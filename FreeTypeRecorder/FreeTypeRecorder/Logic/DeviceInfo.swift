@@ -59,6 +59,10 @@ enum DeviceInfo {
         "iPhone17,3": "iPhone 16 Pro",
         "iPhone17,4": "iPhone 16 Pro Max",
         "iPhone17,5": "iPhone 16e",
+        "iPhone18,1": "iPhone 17 Pro",
+        "iPhone18,2": "iPhone 17 Pro Max",
+        "iPhone18,3": "iPhone 17",
+        "iPhone18,4": "iPhone Air",
         "arm64":      "Simulator (arm64)",
         "x86_64":     "Simulator (x86_64)",
     ]

@@ -36,7 +36,6 @@ struct StudyHomeView: View {
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Menu {
-                    Button("Review posture guide") { showingPostureGuide = true }
                     Button("Change Participant", role: .destructive) {
                         ParticipantStore.shared.clear()
                     }
@@ -45,6 +44,13 @@ struct StudyHomeView: View {
                     }
                 } label: {
                     Label(ParticipantStore.shared.name ?? "Participant", systemImage: "person.crop.circle")
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showingPostureGuide = true
+                } label: {
+                    Label("Review posture guide", systemImage: "figure.stand")
                 }
             }
         }

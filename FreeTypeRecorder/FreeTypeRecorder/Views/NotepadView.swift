@@ -150,10 +150,11 @@ struct NotepadView: View {
                         .font(.caption2).foregroundStyle(.secondary)
                 } else if pendingDirectory != nil {
                     if broadcast.isBroadcasting {
-                        // 1-min limit reached but broadcast still running.
-                        Text("Time's up. Stop the broadcast to finish.")
+                        // 1-min limit reached; we've asked the extension to
+                        // stop the broadcast and are waiting for it to end.
+                        Text("Time's up! Finishing up…")
                             .font(.caption).bold()
-                        Text("Tap the red time in the status bar → Stop.")
+                        Text("Stopping the recording automatically. Please wait.")
                             .font(.caption2).foregroundStyle(.secondary)
                     } else {
                         Text("Saving your recording…").font(.caption).bold()
@@ -234,6 +235,15 @@ struct NotepadView: View {
             // already sitting in the shared container, wait to collect it
             // before finalizing. Otherwise finalize now (no screen recording).
             if broadcastWasUsed || broadcast.isBroadcasting || broadcast.hasFinishedRecording {
+                // The minute is up (this only runs from the auto-stop timer),
+                // so end the broadcast automatically instead of making the
+                // participant stop it by hand — an app can't stop a broadcast
+                // directly, but the extension polls for this request each frame
+                // and ends itself, after which its finished file lands and the
+                // collect→finalize flow below runs on its own.
+                if broadcast.isBroadcasting {
+                    broadcast.requestStop()
+                }
                 pendingBroadcastEndedAt = nil
                 pendingDirectory = directory
                 checkPendingBroadcastFinished()
