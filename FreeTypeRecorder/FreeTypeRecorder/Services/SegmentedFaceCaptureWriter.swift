@@ -72,6 +72,14 @@ final class SegmentedFaceCaptureWriter: NSObject {
     private var pixelBufferAdaptor: AVAssetWriterInputPixelBufferAdaptor?
     private var sessionStarted = false
 
+    // Held only while finishWriting() is in flight, so the OS grants us the
+    // extra runtime to flush the trailing moov if we're finalizing during
+    // backgrounding instead of suspending us mid-write. Belt-and-suspenders
+    // alongside movieFragmentInterval (which already makes an ungracefully
+    // killed recording playable): this keeps the *graceful* background case
+    // producing a fully, non-fragment-indexed file.
+    private var finishBackgroundTask: UIBackgroundTaskIdentifier = .invalid
+
     func start(outputURL: URL, completion: @escaping (Error?) -> Void) {
         guard AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) != nil else {
             completion(SegmentedFaceCaptureError.noFrontCamera)
@@ -104,7 +112,18 @@ final class SegmentedFaceCaptureWriter: NSObject {
         }
 
         do {
-            assetWriter = try AVAssetWriter(outputURL: outputURL, fileType: .mov)
+            let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mov)
+            // Write the movie header plus periodic fragments *during* capture,
+            // rather than only a single moov atom on a clean finishWriting().
+            // Without this, an interrupted session (app backgrounded/suspended/
+            // killed, or torn down before finishWriting's async completion runs)
+            // leaves a file with no moov at all — intact video samples in mdat
+            // that no player can index or decode. With a fragment interval the
+            // file stays playable up to the last flushed fragment even if
+            // finishWriting never completes. Set before startWriting() (below,
+            // lazily on the first frame). See finishWriter() for the clean path.
+            writer.movieFragmentInterval = CMTime(seconds: 2, preferredTimescale: 600)
+            assetWriter = writer
         } catch {
             completion(error)
             return
@@ -181,10 +200,25 @@ final class SegmentedFaceCaptureWriter: NSObject {
             completion()
             return
         }
+        beginFinishBackgroundTask()
         videoInput?.markAsFinished()
-        assetWriter.finishWriting {
+        assetWriter.finishWriting { [weak self] in
+            Task { @MainActor in self?.endFinishBackgroundTask() }
             completion()
         }
+    }
+
+    private func beginFinishBackgroundTask() {
+        endFinishBackgroundTask()
+        finishBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "FinishFaceRecording") { [weak self] in
+            Task { @MainActor in self?.endFinishBackgroundTask() }
+        }
+    }
+
+    private func endFinishBackgroundTask() {
+        guard finishBackgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(finishBackgroundTask)
+        finishBackgroundTask = .invalid
     }
 
     // Runs on the MainActor after a hop from the capture delegate queue.
