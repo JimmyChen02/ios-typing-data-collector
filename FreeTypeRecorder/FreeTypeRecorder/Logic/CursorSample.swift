@@ -18,9 +18,13 @@ struct CursorSample: Equatable {
     let touchY: Double?
     let touchPhase: String?
     let touchAgeMs: Double?
-    /// True when this selection change was merely the consequence of a text
-    /// edit (the caret advancing as you type), rather than a reposition.
-    let afterTextChange: Bool
+    /// ms since the most recent text edit, or nil if no edit has happened yet.
+    /// Raw rather than a derived "was this typing?" flag: a timestamp cannot go
+    /// stale the way a one-shot latch can. UIKit fires no selection change for a
+    /// same-length edit ("teh " -> "the " autocorrect leaves the caret where it
+    /// was), which stranded the old latch and mislabeled a later, unrelated
+    /// caret move as typing. Analysis thresholds this offline.
+    let msSinceLastTextChange: Double?
     /// True when the app assigned the text wholesale, not the participant.
     let programmatic: Bool
     let textLength: Int
@@ -28,7 +32,7 @@ struct CursorSample: Equatable {
     /// Signed caret displacement; negative means the caret moved backward.
     var deltaChars: Int { selStart - prevSelStart }
 
-    static let csvHeader = "t_ms,sel_start,sel_length,prev_sel_start,prev_sel_length,delta_chars,caret_x,caret_y,caret_h,touch_x,touch_y,touch_phase,touch_age_ms,after_text_change,programmatic,text_length"
+    static let csvHeader = "t_ms,sel_start,sel_length,prev_sel_start,prev_sel_length,delta_chars,caret_x,caret_y,caret_h,touch_x,touch_y,touch_phase,touch_age_ms,ms_since_last_text_change,programmatic,text_length"
 
     /// One CSV row. Unavailable geometry is written as an empty field rather
     /// than 0, so analysis can tell "no touch was in flight" from "a touch at
@@ -44,7 +48,7 @@ struct CursorSample: Equatable {
             Self.format(touchX), Self.format(touchY),
             touchPhase ?? "",
             Self.format(touchAgeMs),
-            afterTextChange ? "1" : "0",
+            Self.format(msSinceLastTextChange),
             programmatic ? "1" : "0",
             "\(textLength)"
         ].joined(separator: ",")

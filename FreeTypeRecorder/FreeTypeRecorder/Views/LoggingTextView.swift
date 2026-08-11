@@ -46,10 +46,10 @@ struct LoggingTextView: UIViewRepresentable {
     final class Coordinator: NSObject, UITextViewDelegate {
         private let text: Binding<String>
 
-        /// Set by shouldChangeTextIn and consumed by the next selection
-        /// change, which distinguishes the caret merely advancing as you type
-        /// from a deliberate reposition.
-        private var pendingAfterTextChange = false
+        /// When the last text edit was observed. A timestamp rather than a
+        /// one-shot flag: UIKit delivers no selection change for a same-length
+        /// edit, which would strand a latch and mislabel a later caret move.
+        private var lastTextChangeAt: Date?
 
         /// Set by updateUIView while it assigns `text` wholesale. Consumed by
         /// the next selection change, since UIKit may deliver that callback
@@ -106,7 +106,7 @@ struct LoggingTextView: UIViewRepresentable {
 
             // Consumed by the textViewDidChangeSelection that UIKit delivers
             // once this edit is applied.
-            pendingAfterTextChange = true
+            lastTextChangeAt = Date()
 
             // Let UIKit apply the edit itself — this is purely an observer.
             // Returning false and reassigning `text` ourselves would replace
@@ -122,9 +122,8 @@ struct LoggingTextView: UIViewRepresentable {
 
         func textViewDidChangeSelection(_ textView: UITextView) {
             let range = textView.selectedRange
-            let afterTextChange = pendingAfterTextChange
+            let msSinceLastTextChange = lastTextChangeAt.map { Date().timeIntervalSince($0) * 1000.0 }
             let programmatic = pendingProgrammatic
-            pendingAfterTextChange = false
             pendingProgrammatic = false
 
             var caretX: Double?
@@ -133,8 +132,10 @@ struct LoggingTextView: UIViewRepresentable {
             if let selection = textView.selectedTextRange {
                 let rect = textView.caretRect(for: selection.start)
                 // caretRect can return a null/infinite rect while the layout
-                // is in flux; an empty column beats a garbage coordinate.
-                if rect.origin.x.isFinite, rect.origin.y.isFinite, rect.height.isFinite {
+                // is in flux; an empty column beats a garbage coordinate. A
+                // caret is never legitimately zero-height, so reject
+                // CGRect.zero too rather than writing three fake 0.000s.
+                if rect.origin.x.isFinite, rect.origin.y.isFinite, rect.height.isFinite, rect.height > 0 {
                     caretX = Double(rect.origin.x)
                     caretY = Double(rect.origin.y)
                     caretH = Double(rect.height)
@@ -145,12 +146,16 @@ struct LoggingTextView: UIViewRepresentable {
             var touchY: Double?
             var touchPhase: String?
             var touchAgeMs: Double?
-            if let touch = LastTouchTracker.shared.latest, let window = textView.window {
-                let local = textView.convert(touch.point, from: window)
-                touchX = Double(local.x)
-                touchY = Double(local.y)
+            if let touch = LastTouchTracker.shared.latest {
+                // Phase/age need no coordinate space, so populate them even
+                // when there's no window to convert the point into.
                 touchPhase = touch.phase
                 touchAgeMs = Date().timeIntervalSince(touch.date) * 1000.0
+                if let window = textView.window {
+                    let local = textView.convert(touch.point, from: window)
+                    touchX = Double(local.x)
+                    touchY = Double(local.y)
+                }
             }
 
             CursorLogger.shared.log(CursorSample(
@@ -161,7 +166,7 @@ struct LoggingTextView: UIViewRepresentable {
                 caretX: caretX, caretY: caretY, caretH: caretH,
                 touchX: touchX, touchY: touchY,
                 touchPhase: touchPhase, touchAgeMs: touchAgeMs,
-                afterTextChange: afterTextChange,
+                msSinceLastTextChange: msSinceLastTextChange,
                 programmatic: programmatic,
                 // NSString length, not String.count: selectedRange is a
                 // UTF-16 offset, so the length must be in the same units for

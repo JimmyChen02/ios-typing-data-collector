@@ -13,7 +13,7 @@ final class CursorSampleTests: XCTestCase {
             prevSelStart: prevSelStart, prevSelLength: 0,
             caretX: caretX, caretY: 8.0, caretH: 20.5,
             touchX: touchX, touchY: 15.9, touchPhase: phase, touchAgeMs: 11.4,
-            afterTextChange: false, programmatic: false, textLength: 18
+            msSinceLastTextChange: nil, programmatic: false, textLength: 18
         )
     }
 
@@ -54,17 +54,32 @@ final class CursorSampleTests: XCTestCase {
         XCTAssertEqual(row[h.firstIndex(of: "touch_phase")!], "")
     }
 
-    func test_flagsAreWrittenAsZeroOrOne() {
+    func test_programmaticIsWrittenAsZeroOrOne() {
         let s = CursorSample(
             selStart: 5, selLength: 0, prevSelStart: 4, prevSelLength: 0,
             caretX: nil, caretY: nil, caretH: nil,
             touchX: nil, touchY: nil, touchPhase: nil, touchAgeMs: nil,
-            afterTextChange: true, programmatic: false, textLength: 5
+            msSinceLastTextChange: nil, programmatic: true, textLength: 5
         )
         let row = fields(s.csvRow(tMs: 0))
-        let h = header()
-        XCTAssertEqual(row[h.firstIndex(of: "after_text_change")!], "1")
-        XCTAssertEqual(row[h.firstIndex(of: "programmatic")!], "0")
+        XCTAssertEqual(row[header().firstIndex(of: "programmatic")!], "1")
+    }
+
+    func test_msSinceLastTextChangeIsWrittenWhenPresent() {
+        let s = CursorSample(
+            selStart: 5, selLength: 0, prevSelStart: 4, prevSelLength: 0,
+            caretX: nil, caretY: nil, caretH: nil,
+            touchX: nil, touchY: nil, touchPhase: nil, touchAgeMs: nil,
+            msSinceLastTextChange: 12.5, programmatic: false, textLength: 5
+        )
+        let row = fields(s.csvRow(tMs: 0))
+        XCTAssertEqual(row[header().firstIndex(of: "ms_since_last_text_change")!], "12.500")
+    }
+
+    func test_msSinceLastTextChangeIsEmptyWhenNoEditHasHappened() {
+        let row = fields(sample().csvRow(tMs: 0))
+        XCTAssertEqual(row[header().firstIndex(of: "ms_since_last_text_change")!], "",
+                       "absent must be empty, not 0 - 0 would mean an edit just happened")
     }
 
     func test_selectionLengthIsPreservedForSelections() {
@@ -72,7 +87,7 @@ final class CursorSampleTests: XCTestCase {
             selStart: 10, selLength: 4, prevSelStart: 18, prevSelLength: 0,
             caretX: nil, caretY: nil, caretH: nil,
             touchX: nil, touchY: nil, touchPhase: nil, touchAgeMs: nil,
-            afterTextChange: false, programmatic: false, textLength: 18
+            msSinceLastTextChange: nil, programmatic: false, textLength: 18
         )
         let row = fields(s.csvRow(tMs: 0))
         let h = header()
