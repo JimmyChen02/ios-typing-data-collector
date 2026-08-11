@@ -31,9 +31,6 @@ struct LoggingTextView: UIViewRepresentable {
 
     func updateUIView(_ uiView: UITextView, context: Context) {
         if uiView.text != text {
-            // Assigning text moves the caret; flag it so the resulting
-            // selection change isn't logged as the participant repositioning.
-            context.coordinator.pendingProgrammatic = true
             uiView.text = text
         }
         uiView.isEditable = isEditable
@@ -50,11 +47,6 @@ struct LoggingTextView: UIViewRepresentable {
         /// one-shot flag: UIKit delivers no selection change for a same-length
         /// edit, which would strand a latch and mislabel a later caret move.
         private var lastTextChangeAt: Date?
-
-        /// Set by updateUIView while it assigns `text` wholesale. Consumed by
-        /// the next selection change, since UIKit may deliver that callback
-        /// asynchronously.
-        var pendingProgrammatic = false
 
         private var prevSelStart = 0
         private var prevSelLength = 0
@@ -123,8 +115,6 @@ struct LoggingTextView: UIViewRepresentable {
         func textViewDidChangeSelection(_ textView: UITextView) {
             let range = textView.selectedRange
             let msSinceLastTextChange = lastTextChangeAt.map { Date().timeIntervalSince($0) * 1000.0 }
-            let programmatic = pendingProgrammatic
-            pendingProgrammatic = false
 
             var caretX: Double?
             var caretY: Double?
@@ -167,7 +157,6 @@ struct LoggingTextView: UIViewRepresentable {
                 touchX: touchX, touchY: touchY,
                 touchPhase: touchPhase, touchAgeMs: touchAgeMs,
                 msSinceLastTextChange: msSinceLastTextChange,
-                programmatic: programmatic,
                 // NSString length, not String.count: selectedRange is a
                 // UTF-16 offset, so the length must be in the same units for
                 // the two to be comparable.

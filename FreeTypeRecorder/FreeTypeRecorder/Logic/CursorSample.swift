@@ -25,14 +25,12 @@ struct CursorSample: Equatable {
     /// was), which stranded the old latch and mislabeled a later, unrelated
     /// caret move as typing. Analysis thresholds this offline.
     let msSinceLastTextChange: Double?
-    /// True when the app assigned the text wholesale, not the participant.
-    let programmatic: Bool
     let textLength: Int
 
     /// Signed caret displacement; negative means the caret moved backward.
     var deltaChars: Int { selStart - prevSelStart }
 
-    static let csvHeader = "t_ms,sel_start,sel_length,prev_sel_start,prev_sel_length,delta_chars,caret_x,caret_y,caret_h,touch_x,touch_y,touch_phase,touch_age_ms,ms_since_last_text_change,programmatic,text_length"
+    static let csvHeader = "t_ms,sel_start,sel_length,prev_sel_start,prev_sel_length,delta_chars,caret_x,caret_y,caret_h,touch_x,touch_y,touch_phase,touch_age_ms,ms_since_last_text_change,text_length"
 
     /// One CSV row. Unavailable geometry is written as an empty field rather
     /// than 0, so analysis can tell "no touch was in flight" from "a touch at
@@ -49,7 +47,6 @@ struct CursorSample: Equatable {
             touchPhase ?? "",
             Self.format(touchAgeMs),
             Self.format(msSinceLastTextChange),
-            programmatic ? "1" : "0",
             "\(textLength)"
         ].joined(separator: ",")
     }
