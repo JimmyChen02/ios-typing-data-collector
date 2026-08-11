@@ -74,6 +74,19 @@ def _from_u16(data):
     return data.decode("utf-16-le")
 
 
+def _slice_u16(text, start, length):
+    """Slice a Python str by UTF-16 code-unit offsets (NSRange semantics).
+
+    `text` is indexed by code point, but `start`/`length` come from an
+    NSRange logged by iOS, which counts UTF-16 code units. Slicing `text`
+    directly silently misaligns as soon as a non-BMP character (e.g. an
+    emoji) appears anywhere earlier in the buffer. Round-tripping through
+    UTF-16-LE bytes keeps the offsets correct.
+    """
+    data = _u16(text)
+    return _from_u16(data[start * 2:(start + length) * 2])
+
+
 def replay(events):
     """Rebuild the buffer after every event.
 
@@ -251,12 +264,40 @@ def _is_character_insert(replayed_event):
 def classify(replayed, ac_window_ms=AC_WINDOW_MS):
     """Label every event with the mechanism that produced it.
 
-    Autocorrect versus suggestion is decided by *temporal isolation*: an
-    autocorrect fires synchronously inside the triggering keystroke's runloop
-    turn, so a character insert sits within ac_window_ms of it, whereas a
-    QuickType tap is a standalone user action. Discriminating on isolation
-    rather than on interval sign avoids depending on which order UIKit fires
-    the two delegate calls.
+    `replace` events are fully resolved by rules 1-5 below; `insert`/`delete`
+    events by rules 6-9. Applied in priority order (first match wins):
+
+      1. smart_punctuation - replace, (old, new) in the smart-punctuation map.
+      2. paste             - any event_type == "paste". Must win over
+                              cursor_move, or a mid-text paste would wrongly
+                              open a repair episode.
+      3. autocorrect       - replace, a trailing edit, AND a character-insert
+                              event within ac_window_ms.
+      4. suggestion        - replace, a trailing edit, temporally isolated
+                              (no character-insert within ac_window_ms).
+      5. select_retype     - any other replace (the replaced range does not
+                              end at the cursor - a reach-back selection
+                              overwrite).
+      6. cursor_move       - insert/delete whose range isn't contiguous with
+                              the cursor.
+      7. backspace         - delete, range_length == 1, contiguous.
+      8. bulk_delete       - delete, range_length > 1, contiguous.
+      9. insert            - ordinary forward typing.
+
+    A *trailing edit* means range_start + range_length == cursor_before.
+
+    Autocorrect versus suggestion is a conjunction, not timing alone: a
+    replace also has to be a trailing edit, or an unrelated mid-sentence
+    replace that merely happens to land within ac_window_ms of some other
+    keystroke would be mislabeled autocorrect (rule 3), when in fact it must
+    fall through to select_retype (rule 5) since it isn't a trailing edit at
+    all.
+
+    Autocorrect fires synchronously inside the triggering keystroke's
+    runloop turn, so a character insert sits within ac_window_ms of it,
+    whereas a QuickType tap is a standalone user action. Discriminating on
+    isolation rather than on interval sign avoids depending on which order
+    UIKit fires the two delegate calls.
 
     ac_window_ms is a calibration parameter, not a known constant. See the
     spec's Departure 2 - it must be fitted against hand-labelled screen
@@ -266,30 +307,30 @@ def classify(replayed, ac_window_ms=AC_WINDOW_MS):
 
     for position, item in enumerate(replayed):
         event = item.event
-        old_text = item.buffer_before[
-            event.range_start:event.range_start + event.range_length
-        ]
+        old_text = _slice_u16(item.buffer_before, event.range_start, event.range_length)
 
         if event.event_type == "replace" and (old_text, event.replacement_text) in SMART_PUNCTUATION:
             labels.append("smart_punctuation")
             continue
 
+        if event.event_type == "paste":
+            labels.append("paste")
+            continue
+
         if event.event_type == "replace":
-            near_character_insert = False
-            for other_position, other in enumerate(replayed):
-                if other_position == position:
-                    continue
-                if not _is_character_insert(other):
-                    continue
-                if abs(other.event.t_ms - event.t_ms) <= ac_window_ms:
-                    near_character_insert = True
-                    break
-            if near_character_insert:
-                labels.append("autocorrect")
-            elif event.range_length > 1 and not _replaces_trailing_word(item):
-                labels.append("select_retype")
+            if _is_trailing_edit(item):
+                near_character_insert = False
+                for other_position, other in enumerate(replayed):
+                    if other_position == position:
+                        continue
+                    if not _is_character_insert(other):
+                        continue
+                    if abs(other.event.t_ms - event.t_ms) <= ac_window_ms:
+                        near_character_insert = True
+                        break
+                labels.append("autocorrect" if near_character_insert else "suggestion")
             else:
-                labels.append("suggestion")
+                labels.append("select_retype")
             continue
 
         edit_end = event.range_start + event.range_length
@@ -310,11 +351,7 @@ def classify(replayed, ac_window_ms=AC_WINDOW_MS):
     return labels
 
 
-def _replaces_trailing_word(item):
-    """True if the replaced range is the word immediately before the cursor."""
+def _is_trailing_edit(item):
+    """True if the replaced range ends exactly at the cursor before the event."""
     event = item.event
-    edit_end = event.range_start + event.range_length
-    if edit_end != item.cursor_before:
-        return False
-    old_text = item.buffer_before[event.range_start:edit_end]
-    return bool(old_text) and " " not in old_text
+    return event.range_start + event.range_length == item.cursor_before

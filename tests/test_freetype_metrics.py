@@ -317,3 +317,69 @@ def test_classify_detects_bulk_delete():
     ]
     replayed, _ = fm.replay(events)
     assert fm.classify(replayed)[1] == "bulk_delete"
+
+
+def test_classify_slices_old_text_by_utf16_code_units_across_non_bmp_buffer():
+    # Buffer becomes "a\U0001F600b'" - the emoji is 2 UTF-16 code units but 1
+    # Python code point, so the trailing "'" sits at UTF-16 offset 4 but
+    # Python code-point offset 3. A replace targeting range_start=4 must slice
+    # "'" (the correct old_text) via UTF-16 offsets, not "" via code-point
+    # offsets, or the smart-punctuation match below is silently missed and
+    # this event is misclassified as autocorrect instead (there's a
+    # temporally adjacent character insert to make that mistake tempting).
+    events = [
+        make_event("insert", "a", 0, 0, 1, t_ms=0),
+        make_event("insert", "\U0001F600", 1, 0, 2, t_ms=200),
+        make_event("insert", "b", 3, 0, 3, t_ms=400),
+        make_event("insert", "'", 4, 0, 4, t_ms=600),
+        make_event("replace", "’", 4, 1, 4, t_ms=610),
+    ]
+    replayed, _ = fm.replay(events)
+    assert replayed[-1].buffer_before == "a\U0001F600b'"
+    assert fm.classify(replayed)[4] == "smart_punctuation"
+
+
+def test_classify_requires_trailing_edit_for_autocorrect():
+    # "cat dog bird", then a mid-sentence replace of "dog" -> "FOX" (the
+    # replaced range ends well before the cursor, which sits at the end of
+    # the sentence), then an unrelated "!" keystroke 10ms later. The replace
+    # is temporally adjacent to a character insert, but it is not a trailing
+    # edit, so rule 3 (autocorrect) must not fire - this must fall through to
+    # rule 5 (select_retype), not be labelled autocorrect by timing alone.
+    events = [
+        make_event("insert", "cat dog bird", 0, 0, 12, t_ms=0),
+        make_event("replace", "FOX", 4, 3, 12, t_ms=1000),
+        make_event("insert", "!", 7, 0, 13, t_ms=1010),
+    ]
+    replayed, _ = fm.replay(events)
+    assert fm.classify(replayed)[1] == "select_retype"
+
+
+def test_classify_detects_mid_text_paste():
+    # A paste landing mid-text (not contiguous with the cursor) must be
+    # labelled "paste", not "cursor_move" - rule 2 (paste) outranks rule 6
+    # (cursor_move), or a paste would wrongly open a bogus repair episode.
+    events = [
+        make_event("insert", "cat dog", 0, 0, 7, t_ms=0),
+        make_event("paste", "big ", 4, 0, 11, t_ms=500),
+    ]
+    replayed, _ = fm.replay(events)
+    assert fm.classify(replayed)[1] == "paste"
+
+
+def test_classify_detects_reach_back_selection_overwrite():
+    # Type "bipe", then reach back and replace the single character "i"
+    # (index 1) with "o". The replaced range ends at index 2, well short of
+    # the cursor (4), so this is not a trailing edit: rule 5 (select_retype)
+    # applies regardless of range_length or timing isolation. The event is
+    # temporally isolated (t=5000, far from any insert), which under the old
+    # range_length > 1 gate would have fallen through to "suggestion".
+    events = [
+        make_event("insert", "b", 0, 0, 1, t_ms=0),
+        make_event("insert", "i", 1, 0, 2, t_ms=150),
+        make_event("insert", "p", 2, 0, 3, t_ms=300),
+        make_event("insert", "e", 3, 0, 4, t_ms=450),
+        make_event("replace", "o", 1, 1, 4, t_ms=5000),
+    ]
+    replayed, _ = fm.replay(events)
+    assert fm.classify(replayed)[4] == "select_retype"
