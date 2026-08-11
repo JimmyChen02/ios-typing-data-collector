@@ -31,6 +31,9 @@ struct LoggingTextView: UIViewRepresentable {
 
     func updateUIView(_ uiView: UITextView, context: Context) {
         if uiView.text != text {
+            // Assigning text moves the caret; flag it so the resulting
+            // selection change isn't logged as the participant repositioning.
+            context.coordinator.pendingProgrammatic = true
             uiView.text = text
         }
         uiView.isEditable = isEditable
@@ -42,6 +45,19 @@ struct LoggingTextView: UIViewRepresentable {
 
     final class Coordinator: NSObject, UITextViewDelegate {
         private let text: Binding<String>
+
+        /// Set by shouldChangeTextIn and consumed by the next selection
+        /// change, which distinguishes the caret merely advancing as you type
+        /// from a deliberate reposition.
+        private var pendingAfterTextChange = false
+
+        /// Set by updateUIView while it assigns `text` wholesale. Consumed by
+        /// the next selection change, since UIKit may deliver that callback
+        /// asynchronously.
+        var pendingProgrammatic = false
+
+        private var prevSelStart = 0
+        private var prevSelLength = 0
 
         init(text: Binding<String>) {
             self.text = text
@@ -88,6 +104,10 @@ struct LoggingTextView: UIViewRepresentable {
                 RecentKeysTracker.shared.record(replacementText)
             }
 
+            // Consumed by the textViewDidChangeSelection that UIKit delivers
+            // once this edit is applied.
+            pendingAfterTextChange = true
+
             // Let UIKit apply the edit itself — this is purely an observer.
             // Returning false and reassigning `text` ourselves would replace
             // uiView.text wholesale on every keystroke via updateUIView,
@@ -98,6 +118,59 @@ struct LoggingTextView: UIViewRepresentable {
 
         func textViewDidChange(_ textView: UITextView) {
             text.wrappedValue = textView.text
+        }
+
+        func textViewDidChangeSelection(_ textView: UITextView) {
+            let range = textView.selectedRange
+            let afterTextChange = pendingAfterTextChange
+            let programmatic = pendingProgrammatic
+            pendingAfterTextChange = false
+            pendingProgrammatic = false
+
+            var caretX: Double?
+            var caretY: Double?
+            var caretH: Double?
+            if let selection = textView.selectedTextRange {
+                let rect = textView.caretRect(for: selection.start)
+                // caretRect can return a null/infinite rect while the layout
+                // is in flux; an empty column beats a garbage coordinate.
+                if rect.origin.x.isFinite, rect.origin.y.isFinite, rect.height.isFinite {
+                    caretX = Double(rect.origin.x)
+                    caretY = Double(rect.origin.y)
+                    caretH = Double(rect.height)
+                }
+            }
+
+            var touchX: Double?
+            var touchY: Double?
+            var touchPhase: String?
+            var touchAgeMs: Double?
+            if let touch = LastTouchTracker.shared.latest, let window = textView.window {
+                let local = textView.convert(touch.point, from: window)
+                touchX = Double(local.x)
+                touchY = Double(local.y)
+                touchPhase = touch.phase
+                touchAgeMs = Date().timeIntervalSince(touch.date) * 1000.0
+            }
+
+            CursorLogger.shared.log(CursorSample(
+                selStart: range.location,
+                selLength: range.length,
+                prevSelStart: prevSelStart,
+                prevSelLength: prevSelLength,
+                caretX: caretX, caretY: caretY, caretH: caretH,
+                touchX: touchX, touchY: touchY,
+                touchPhase: touchPhase, touchAgeMs: touchAgeMs,
+                afterTextChange: afterTextChange,
+                programmatic: programmatic,
+                // NSString length, not String.count: selectedRange is a
+                // UTF-16 offset, so the length must be in the same units for
+                // the two to be comparable.
+                textLength: (textView.text as NSString).length
+            ))
+
+            prevSelStart = range.location
+            prevSelLength = range.length
         }
     }
 }
