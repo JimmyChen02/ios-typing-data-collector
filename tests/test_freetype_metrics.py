@@ -174,3 +174,65 @@ def test_weighted_ops_normalises_across_alignments():
     expected = sum(len(a) for a in alignments) / len(alignments)
     assert round(expected, 6) == 8.25
     assert round(sum(o.weight for o in ops), 6) == round(expected, 6)
+
+
+def test_all_optimal_alignments_handles_long_input_without_recursion_error():
+    # A held backspace over a long paragraph in a free-typing session can
+    # produce an arbitrarily long typed/intended region. walk()'s traversal
+    # must not recurse with Python's call stack - depth used to scale with
+    # len(a) + len(b), which `cap` does not bound (cap only limits how many
+    # completed alignments are kept), so a long single-path input like this
+    # one used to raise RecursionError well before reaching 2000.
+    msd, alignments = fm.all_optimal_alignments("x" * 2000, "")
+    assert msd == 2000
+    # Deleting against an empty intended string is unambiguous: there is
+    # exactly one optimal alignment (omit every character).
+    assert len(alignments) == 1
+
+
+def test_all_optimal_alignments_respects_cap_and_flags_cap_hit():
+    # "xxxxx" typed vs "xxx" intended: every optimal alignment matches 3 of
+    # the 5 x's and omits the other 2, so the true count is C(5,2) = 10,
+    # which exceeds a small explicit cap of 8. The truncated set must still
+    # be internally valid even though it's incomplete.
+    msd, alignments = fm.all_optimal_alignments("xxxxx", "xxx", cap=8)
+    assert msd == 2
+    assert len(alignments) <= 8
+
+    ops, cap_hit = fm.weighted_ops("xxxxx", "xxx", cap=8)
+    assert cap_hit is True
+
+    for alignment in alignments:
+        typed = "".join(op[1] for op in alignment)
+        intended = "".join(op[2] for op in alignment)
+        assert typed == "xxxxx"
+        assert intended == "xxx"
+
+
+def test_omit_op_carries_typed_char_with_empty_intended():
+    # "abc" typed vs "ac" intended: the user typed an extra "b" that was
+    # never intended. This is unambiguous (one edit), so there's exactly one
+    # optimal alignment. `omit` must carry the typed character with
+    # intended == "" - never the reverse - since a later task keys off
+    # `intended == ""` to identify omissions.
+    _, alignments = fm.all_optimal_alignments("abc", "ac")
+    assert len(alignments) == 1
+    omits = [op for op in alignments[0] if op[0] == "omit"]
+    assert len(omits) == 1
+    _, typed, intended = omits[0]
+    assert typed == "b"
+    assert intended == ""
+
+
+def test_ins_op_carries_intended_char_with_empty_typed():
+    # "ac" typed vs "abc" intended: the user never typed the intended "b" at
+    # all. `ins` must carry intended == "b" with typed == "" - critically,
+    # `typed` must never be non-empty for an `ins` op, or a later task would
+    # wrongly count it as an erroneous keystroke the user actually made.
+    _, alignments = fm.all_optimal_alignments("ac", "abc")
+    assert len(alignments) == 1
+    inserts = [op for op in alignments[0] if op[0] == "ins"]
+    assert len(inserts) == 1
+    _, typed, intended = inserts[0]
+    assert typed == ""
+    assert intended == "b"

@@ -162,23 +162,48 @@ def all_optimal_alignments(a, b, cap=MAX_ALIGNMENTS):
 
     alignments = []
 
-    def walk(i, j, acc):
+    # Iterative DFS with an explicit stack instead of recursion: `walk`'s
+    # call depth used to scale with len(a) + len(b), which `cap` does not
+    # bound (`cap` only limits how many completed alignments are kept), so a
+    # long single-path input (e.g. one string empty, the other very long)
+    # blew Python's recursion limit. `acc` is a singly linked list of ops;
+    # each step conses the newly-decided (rightmost-so-far) op onto the
+    # front, so by the time a path reaches (0, 0) the list head is the
+    # leftmost op and the tail is the rightmost - walking head-to-tail
+    # yields left-to-right order directly, with no reverse needed.
+    stack = [(n, m, None)]
+
+    while stack:
         if len(alignments) >= cap:
-            return
+            break
+        i, j, acc = stack.pop()
         if i == 0 and j == 0:
-            alignments.append(list(reversed(acc)))
-            return
+            ops = []
+            node = acc
+            while node is not None:
+                ops.append(node[0])
+                node = node[1]
+            alignments.append(ops)
+            continue
+
+        # Collect every tied-minimum transition (diagonal/up/left checked
+        # independently, not elif) so no optimal alignment is missed.
+        frames = []
         if i > 0 and j > 0:
             cost = 0 if a[i - 1] == b[j - 1] else 1
             if dist[i][j] == dist[i - 1][j - 1] + cost:
                 op = "match" if cost == 0 else "sub"
-                walk(i - 1, j - 1, acc + [(op, a[i - 1], b[j - 1])])
+                frames.append((i - 1, j - 1, ((op, a[i - 1], b[j - 1]), acc)))
         if i > 0 and dist[i][j] == dist[i - 1][j] + 1:
-            walk(i - 1, j, acc + [("omit", a[i - 1], "")])
+            frames.append((i - 1, j, (("omit", a[i - 1], ""), acc)))
         if j > 0 and dist[i][j] == dist[i][j - 1] + 1:
-            walk(i, j - 1, acc + [("ins", "", b[j - 1])])
+            frames.append((i, j - 1, (("ins", "", b[j - 1]), acc)))
 
-    walk(n, m, [])
+        # Stack is LIFO, so push in reverse to explore diagonal/omit/ins in
+        # the same priority order the old recursive calls did.
+        for frame in reversed(frames):
+            stack.append(frame)
+
     return dist[n][m], alignments
 
 
