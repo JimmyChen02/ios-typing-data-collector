@@ -250,6 +250,59 @@ alignments and a known expected result: substitution for "i" tallies 0.75, omiss
 - An autocorrect immediately reverted by backspace credits no user error.
 - UTF-16 index handling: a fixture containing a non-BMP character.
 
+## Departures from published method
+
+What is taken directly from prior work, and what is not. The novel parts are forced by
+the setting, but each needs defending in writing rather than presenting as standard.
+
+**Faithful to published method:**
+
+| Element | Source |
+|---|---|
+| `C/INF/IF/F` classes and the error-rate family | Soukoreff & MacKenzie 2003 |
+| Corrected-no-error class | Wobbrock & Myers 2006 §3.1.2 |
+| All-optimal-alignments with fractional weighting | Wobbrock & Myers 2006 |
+| Editing-episode unit and correction latency | Alharbi et al. 2020 |
+| Treating in-vocabulary completed words as labelled data | backoff paper, word-level method |
+
+**Departures:**
+
+1. **No presented text.** Wobbrock & Myers' algorithm aligns `P`, `T`, and `IS`;
+   "unconstrained" in their sense means subjects still transcribe a presented string and
+   are merely free to correct or not. Free composition has no `P` at all. This design
+   applies their *alignment technique* to `(D, R)` pairs recovered from repairs, not to
+   `(P, T)`. That is an adaptation of their method, not an application of it, and their
+   assumption "subjects proceed sequentially through `P`" (§3.2.1) has no meaning here.
+   Their remaining assumptions — one insert/omit in a row, backspaces accurate and
+   intentional — do carry over and are adopted.
+
+2. **Autocorrect and suggestion detection by temporal isolation.** No published
+   precedent. Alharbi et al. simulated both features rather than detecting them,
+   specifically because keyboard APIs do not expose the internals; their string-shape
+   heuristic was a warning that a participant had failed to disable their keyboard, not a
+   classifier. This rule is new, `AC_WINDOW_MS` is unvalidated, and the entire
+   assisted-versus-manual split rests on it. **Highest methodological risk in this
+   design.** The screen-recording validation is what converts it from assertion to
+   measured accuracy; until that is done, `IF_a`, `IF_m`, and `assistance share` should
+   not be reported.
+
+3. **Splitting `IF` into assisted and manual.** Soukoreff & MacKenzie's `F` class presumes
+   a fix is a keystroke. An autocorrect fixes a genuine user tap error with `F = 0`,
+   which makes `IF/F` undefined and makes KSPC understate difficulty. The split is
+   necessary for an assisted keyboard and is an extension of the 2003 framework, not part
+   of it.
+
+4. **Vocabulary-based `INF`.** Precedented in the adaptation literature but not in the
+   error-metrics literature. Gaines et al. directly evaluated reference-recovery methods
+   for composition tasks and endorsed participant-supplied references, having found even
+   crowdsourced judging underestimates true error. Dictionary inference is weaker than the
+   method they rejected. This is why every `INF`-dependent metric is reported as a bound,
+   and it is the strongest argument for eventually adding a retype step to the protocol.
+
+Departures 1 and 3 are defensible as contributions: extending repair-based intent
+recovery beyond backspace-only is precisely the gap the backoff paper names as its own
+limitation. Departure 2 is a validation obligation. Departure 4 is a stated limitation.
+
 ## Out of scope
 
 - **Tap coordinates.** The stock keyboard exposes none. Recovering them would mean
