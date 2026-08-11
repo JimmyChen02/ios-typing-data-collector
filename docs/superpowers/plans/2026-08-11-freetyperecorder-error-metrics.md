@@ -21,6 +21,7 @@
 - `MAX_ALIGNMENTS = 64`, `AC_WINDOW_MS = 30.0` — module-level constants.
 - Every `INF`-dependent metric is emitted with a `_lower_bound` suffix. Never report them as point estimates.
 - `IF_a`, `IF_m`, and `assistance_share` are gated: emitted only when `--assisted-metrics` is passed, because the autocorrect/suggestion detection rule is unvalidated (spec, Departure 2).
+- The `Expected: PASS, N passed` counts are **cumulative and advisory**. Review rounds legitimately add tests, so a higher actual count is fine. What matters is that every test passes and that no earlier task's tests were removed or weakened. Do not delete tests to match the number.
 
 ---
 
@@ -423,7 +424,7 @@ def weighted_ops(a, b, cap=MAX_ALIGNMENTS):
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `$PY -m pytest tests/test_freetype_metrics.py -v`
-Expected: PASS, 10 passed
+Expected: PASS, 15 passed
 
 - [ ] **Step 5: Commit**
 
@@ -625,7 +626,7 @@ def _replaces_trailing_word(item):
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `$PY -m pytest tests/test_freetype_metrics.py -v`
-Expected: PASS, 15 passed
+Expected: PASS, 20 passed
 
 - [ ] **Step 5: Commit**
 
@@ -911,7 +912,7 @@ def extract_episodes(replayed, labels):
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `$PY -m pytest tests/test_freetype_metrics.py -v`
-Expected: PASS, 21 passed
+Expected: PASS, 26 passed
 
 - [ ] **Step 5: Commit**
 
@@ -1048,7 +1049,7 @@ def mark_reverts(replayed, episodes):
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `$PY -m pytest tests/test_freetype_metrics.py -v`
-Expected: PASS, 23 passed
+Expected: PASS, 28 passed
 
 - [ ] **Step 5: Commit**
 
@@ -1271,7 +1272,7 @@ def accumulate(replayed, labels, episodes):
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `$PY -m pytest tests/test_freetype_metrics.py -v`
-Expected: PASS, 29 passed
+Expected: PASS, 34 passed
 
 - [ ] **Step 5: Commit**
 
@@ -1422,7 +1423,7 @@ def estimate_inf(final_text, vocab):
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `$PY -m pytest tests/test_freetype_metrics.py -v`
-Expected: PASS, 35 passed
+Expected: PASS, 40 passed
 
 - [ ] **Step 5: Commit**
 
@@ -1602,7 +1603,7 @@ def compute_metrics(counts, inf_lower_bound, episodes, total_keystrokes,
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `$PY -m pytest tests/test_freetype_metrics.py -v`
-Expected: PASS, 39 passed
+Expected: PASS, 44 passed
 
 - [ ] **Step 5: Commit**
 
@@ -1832,7 +1833,7 @@ if __name__ == "__main__":
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `$PY -m pytest tests/test_freetype_metrics.py -v`
-Expected: PASS, 42 passed
+Expected: PASS, 47 passed
 
 - [ ] **Step 5: Verify the CLI runs end to end**
 
@@ -1896,7 +1897,7 @@ Design: `docs/superpowers/specs/2026-08-11-freetyperecorder-error-metrics-design
 - [ ] **Step 2: Run the full test suite**
 
 Run: `$PY -m pytest tests/test_freetype_metrics.py -v`
-Expected: PASS, 42 passed
+Expected: PASS, 47 passed
 
 - [ ] **Step 3: Commit**
 

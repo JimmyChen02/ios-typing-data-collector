@@ -236,3 +236,18 @@ def test_ins_op_carries_intended_char_with_empty_typed():
     _, typed, intended = inserts[0]
     assert typed == ""
     assert intended == "b"
+
+
+def test_all_optimal_alignments_preserves_left_to_right_order():
+    # Left-to-right op order is part of this function's public contract, and
+    # later tasks read the alignment positionally. Every other test here is
+    # blind to order: weighted_ops tallies into an order-invariant dict, and
+    # the cap and long-input tests use single-character-repeated strings where
+    # a reversal is undetectable. This case uses distinct characters and pins
+    # the whole list, so a reversed traversal fails loudly - which is exactly
+    # the bug that was introduced and caught by hand during the iterative
+    # rewrite.
+    _, alignments = fm.all_optimal_alignments("abc", "ac")
+    assert alignments == [
+        [("match", "a", "a"), ("omit", "b", ""), ("match", "c", "c")]
+    ]
