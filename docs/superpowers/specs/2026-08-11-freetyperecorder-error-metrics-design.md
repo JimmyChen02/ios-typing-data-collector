@@ -81,22 +81,42 @@ Output per event: buffer before, buffer after, cursor before, cursor after.
 
 Applied in priority order. `prev_cursor` is the cursor after the previous event.
 
-| Order | Mechanism | Rule |
-|---|---|---|
-| 1 | `smart_punctuation` | `replace` and `(old, new)` in the smart-punctuation map (`'→’`, `"→“”`, `--→—`). **Excluded from repair analysis** — not a user repair |
-| 2 | `autocorrect` | `replace` over the trailing word, **and** a character-insert event occurs within `AC_WINDOW_MS` of this event |
-| 3 | `suggestion` | `replace` over the trailing (possibly partial) word, temporally isolated — no character-insert within `AC_WINDOW_MS` either before or after |
-| 4 | `cursor_move` | `range_start` not contiguous with `prev_cursor` |
-| 5 | `backspace` | `delete`, `range_length == 1`, contiguous at cursor |
-| 6 | `bulk_delete` | `delete`, `range_length > 1` |
-| 7 | `select_retype` | `replace`, `range_length > 1`, unmatched above |
-| 8 | `insert` | ordinary forward typing |
+`replace` events are fully resolved by rules 1–5; `insert` and `delete` events by
+rules 6–9. A *trailing edit* means the replaced range ends exactly at the cursor
+(`range_start + range_length == cursor_before`).
+
+| Order | Applies to | Mechanism | Rule |
+|---|---|---|---|
+| 1 | `replace` | `smart_punctuation` | `(old, new)` in the smart-punctuation map (`'→’`, `"→“”`, `--→—`). **Excluded from repair analysis** — not a user repair |
+| 2 | any | `paste` | `event_type == paste`. **Excluded from repair analysis** — not a user repair |
+| 3 | `replace` | `autocorrect` | a trailing edit, **and** a character-insert event occurs within `AC_WINDOW_MS` |
+| 4 | `replace` | `suggestion` | a trailing edit, temporally isolated — no character-insert within `AC_WINDOW_MS` either before or after |
+| 5 | `replace` | `select_retype` | any other `replace` — the replaced range does not end at the cursor, i.e. a reach-back selection overwrite |
+| 6 | `insert`/`delete` | `cursor_move` | range not contiguous with the cursor |
+| 7 | `delete` | `backspace` | `range_length == 1`, contiguous |
+| 8 | `delete` | `bulk_delete` | `range_length > 1`, contiguous |
+| 9 | `insert` | `insert` | ordinary forward typing |
 
 **Autocorrect vs suggestion.** Autocorrect fires synchronously inside the triggering
 keystroke's runloop turn, so a character insert sits adjacent to it in time. A QuickType
 tap is a standalone user action with no accompanying character and a human-scale
 interval. Discriminating on *temporal isolation* rather than on the sign of the interval
 avoids depending on which order UIKit fires the two delegate calls.
+
+**Why `cursor_move` does not apply to `replace`.** An earlier draft ranked `cursor_move`
+above `select_retype` for all event types, which would have made `select_retype`
+practically unreachable — nearly every real select-and-retype requires navigating away
+from the current cursor first. The two are genuinely different user actions: a
+`cursor_move` repair is *delete-then-retype* at a moved position and spans several
+events, while a `select_retype` is a *single* event replacing a selection. Position is
+what distinguishes reaching back from editing in place; the event type is what
+distinguishes selecting from backspacing. Both matter, so both are used.
+
+**Known ambiguity.** A user who selects the *last* word and retypes it produces the same
+log signature as a QuickType tap: a temporally isolated trailing-edit `replace`. Neither
+the range nor the timing separates them, so such events are classified `suggestion` and
+will slightly inflate the assisted ledger. This is one more thing the screen-recording
+validation should measure.
 
 `AC_WINDOW_MS` defaults to 30 ms and **is a calibration parameter, not a known
 constant.** It must be fit against labelled data (see Validation) before any reported
