@@ -231,3 +231,90 @@ def weighted_ops(a, b, cap=MAX_ALIGNMENTS):
         WeightedOp(op=op, typed=typed, intended=intended, weight=value)
         for (op, typed, intended), value in tally.items()
     ], cap_hit
+
+
+SMART_PUNCTUATION = {
+    ("'", "’"),   # straight to curly apostrophe
+    ("'", "‘"),
+    ('"', "“"),
+    ('"', "”"),
+    ("--", "—"),  # double hyphen to em dash
+    ("...", "…"),
+}
+
+
+def _is_character_insert(replayed_event):
+    event = replayed_event.event
+    return event.event_type == "insert" and len(event.replacement_text) == 1
+
+
+def classify(replayed, ac_window_ms=AC_WINDOW_MS):
+    """Label every event with the mechanism that produced it.
+
+    Autocorrect versus suggestion is decided by *temporal isolation*: an
+    autocorrect fires synchronously inside the triggering keystroke's runloop
+    turn, so a character insert sits within ac_window_ms of it, whereas a
+    QuickType tap is a standalone user action. Discriminating on isolation
+    rather than on interval sign avoids depending on which order UIKit fires
+    the two delegate calls.
+
+    ac_window_ms is a calibration parameter, not a known constant. See the
+    spec's Departure 2 - it must be fitted against hand-labelled screen
+    recordings before any reported number depends on it.
+    """
+    labels = []
+
+    for position, item in enumerate(replayed):
+        event = item.event
+        old_text = item.buffer_before[
+            event.range_start:event.range_start + event.range_length
+        ]
+
+        if event.event_type == "replace" and (old_text, event.replacement_text) in SMART_PUNCTUATION:
+            labels.append("smart_punctuation")
+            continue
+
+        if event.event_type == "replace":
+            near_character_insert = False
+            for other_position, other in enumerate(replayed):
+                if other_position == position:
+                    continue
+                if not _is_character_insert(other):
+                    continue
+                if abs(other.event.t_ms - event.t_ms) <= ac_window_ms:
+                    near_character_insert = True
+                    break
+            if near_character_insert:
+                labels.append("autocorrect")
+            elif event.range_length > 1 and not _replaces_trailing_word(item):
+                labels.append("select_retype")
+            else:
+                labels.append("suggestion")
+            continue
+
+        edit_end = event.range_start + event.range_length
+        contiguous = (
+            event.range_start == item.cursor_before
+            or edit_end == item.cursor_before
+        )
+        if not contiguous:
+            labels.append("cursor_move")
+            continue
+
+        if event.event_type == "delete":
+            labels.append("backspace" if event.range_length == 1 else "bulk_delete")
+            continue
+
+        labels.append(event.event_type)
+
+    return labels
+
+
+def _replaces_trailing_word(item):
+    """True if the replaced range is the word immediately before the cursor."""
+    event = item.event
+    edit_end = event.range_start + event.range_length
+    if edit_end != item.cursor_before:
+        return False
+    old_text = item.buffer_before[event.range_start:edit_end]
+    return bool(old_text) and " " not in old_text

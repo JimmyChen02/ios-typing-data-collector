@@ -251,3 +251,69 @@ def test_all_optimal_alignments_preserves_left_to_right_order():
     assert alignments == [
         [("match", "a", "a"), ("omit", "b", ""), ("match", "c", "c")]
     ]
+
+
+def test_classify_labels_ordinary_typing_and_backspace():
+    events = [
+        make_event("insert", "b", 0, 0, 1, t_ms=0),
+        make_event("insert", "i", 1, 0, 2, t_ms=200),
+        make_event("delete", "", 1, 1, 1, t_ms=400),
+    ]
+    replayed, _ = fm.replay(events)
+    assert fm.classify(replayed) == ["insert", "insert", "backspace"]
+
+
+def test_classify_detects_smart_punctuation():
+    events = [
+        make_event("insert", "a", 0, 0, 1, t_ms=0),
+        make_event("insert", "'", 1, 0, 2, t_ms=200),
+        make_event("replace", "’", 1, 1, 2, t_ms=210),
+    ]
+    replayed, _ = fm.replay(events)
+    assert fm.classify(replayed)[2] == "smart_punctuation"
+
+
+def test_classify_distinguishes_autocorrect_from_suggestion():
+    # Autocorrect: a replace sitting within AC_WINDOW_MS of a character insert,
+    # because it fires inside the triggering keystroke's runloop turn.
+    autocorrect = [
+        make_event("insert", "b", 0, 0, 1, t_ms=0),
+        make_event("insert", "i", 1, 0, 2, t_ms=150),
+        make_event("insert", "p", 2, 0, 3, t_ms=300),
+        make_event("insert", "e", 3, 0, 4, t_ms=450),
+        make_event("insert", " ", 4, 0, 5, t_ms=600),
+        make_event("replace", "bike ", 0, 5, 5, t_ms=605),
+    ]
+    replayed, _ = fm.replay(autocorrect)
+    assert fm.classify(replayed)[5] == "autocorrect"
+
+    # Suggestion: a temporally isolated replace, no adjacent character insert.
+    suggestion = [
+        make_event("insert", "b", 0, 0, 1, t_ms=0),
+        make_event("insert", "i", 1, 0, 2, t_ms=150),
+        make_event("replace", "bike ", 0, 2, 5, t_ms=900),
+    ]
+    replayed, _ = fm.replay(suggestion)
+    assert fm.classify(replayed)[2] == "suggestion"
+
+
+def test_classify_detects_cursor_movement():
+    # Type "bipe", then reach back and delete the "p" at index 2.
+    events = [
+        make_event("insert", "b", 0, 0, 1, t_ms=0),
+        make_event("insert", "i", 1, 0, 2, t_ms=150),
+        make_event("insert", "p", 2, 0, 3, t_ms=300),
+        make_event("insert", "e", 3, 0, 4, t_ms=450),
+        make_event("delete", "", 2, 1, 3, t_ms=1200),
+    ]
+    replayed, _ = fm.replay(events)
+    assert fm.classify(replayed)[4] == "cursor_move"
+
+
+def test_classify_detects_bulk_delete():
+    events = [
+        make_event("insert", "bike", 0, 0, 4, t_ms=0),
+        make_event("delete", "", 0, 4, 0, t_ms=500),
+    ]
+    replayed, _ = fm.replay(events)
+    assert fm.classify(replayed)[1] == "bulk_delete"
