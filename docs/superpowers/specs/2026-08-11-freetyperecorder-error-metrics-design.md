@@ -229,8 +229,11 @@ counts, coverage, and the count of alignment-cap hits.
 
 ## Validation
 
-**Replay invariant.** Stage 0's length assertion runs on every session; any failure
-blocks analysis of that session.
+**Replay invariant.** Stage 0's length check runs on every session and surfaces as
+warnings, not as a blocking assertion — see Stage 0 for why a blanket assertion would
+be wrong. A non-zero warning count on an ASCII session means the replay and the logger
+genuinely disagree and that session's numbers should not be trusted; a single
+non-ASCII warning is expected and benign.
 
 **Mechanism classifier accuracy.** The screen recordings already on Drive show the
 keyboard. Hand-label the mechanism for a sample of episodes across participants and
