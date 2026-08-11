@@ -212,7 +212,7 @@ struct NotepadView: View {
         guard !isAborting, !didFinalize else { return }
         isAborting = true
         RippleController.shared.isRecording = false
-        recorder.stop { directory in
+        recorder.stop(finalText: text) { directory in
             if let directory {
                 try? FileManager.default.removeItem(at: directory)
             }
@@ -225,7 +225,7 @@ struct NotepadView: View {
 
     private func stopRecording() {
         RippleController.shared.isRecording = false
-        recorder.stop { directory in
+        recorder.stop(finalText: text) { directory in
             guard let directory else {
                 dismiss()
                 return
@@ -319,7 +319,7 @@ struct NotepadView: View {
         pollTimer?.invalidate()
         pollTimer = nil
         if recorder.isRecording {
-            recorder.stop { directory in
+            recorder.stop(finalText: text) { directory in
                 guard let directory else { return }
                 // Best-effort: grab a broadcast file if one already landed.
                 BroadcastCoordinator.shared.collectRecording(into: directory)

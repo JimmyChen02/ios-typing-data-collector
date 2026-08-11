@@ -74,6 +74,10 @@ final class SessionRecorder {
         IMURecorder.shared.start()
         PosturePredictor.shared.start()
         KeystrokeLogger.shared.start()
+        CursorLogger.shared.start()
+        // Clear any touch left over from the setup screens so the session's
+        // first caret move can't be attributed to a pre-session tap.
+        LastTouchTracker.shared.reset()
 
         faceWriter.start(outputURL: directory.appendingPathComponent("face.mov")) { [weak self] error in
             guard let self else { return }
@@ -92,8 +96,9 @@ final class SessionRecorder {
     }
 
     /// Stops every recorder; `completion` receives the finished session's
-    /// directory (nil if recording wasn't active).
-    func stop(completion: @escaping (URL?) -> Void) {
+    /// directory (nil if recording wasn't active). `finalText` is the notepad's
+    /// contents, saved as the checksum for replaying keystrokes.csv.
+    func stop(finalText: String, completion: @escaping (URL?) -> Void) {
         guard isRecording else {
             completion(nil)
             return
@@ -108,6 +113,12 @@ final class SessionRecorder {
         if let directory {
             _ = IMURecorder.shared.stop(writingTo: directory.appendingPathComponent("imu.csv"))
             _ = KeystrokeLogger.shared.stop(writingTo: directory.appendingPathComponent("keystrokes.csv"))
+            _ = CursorLogger.shared.stop(writingTo: directory.appendingPathComponent("cursor.csv"))
+            try? finalText.write(
+                to: directory.appendingPathComponent("final_text.txt"),
+                atomically: true,
+                encoding: .utf8
+            )
         }
 
         faceWriter.stop { [weak self] in
