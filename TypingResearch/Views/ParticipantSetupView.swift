@@ -13,18 +13,41 @@ struct ParticipantSetupView: View {
 
     @State private var showError: Bool = false
     @State private var errorMessage: String = ""
-    @State private var totalSessions: Int = 4  // min 2, step 2
-    @State private var studyDesign: StudyDesign = .classicAndAdaptive
+    @State private var totalSessions: Int = 4
 
     // D2a — opt-in "Posture training run" sub-flow entry point. NOT folded
     // into the default timed study (see the D2 spec's research-integrity
     // requirement) — presented as a separate screen reachable from setup.
     @State private var showPostureSelect: Bool = false
     @State private var showLiveDemo: Bool = false
+    @State private var showKeyboardPlayground: Bool = false
 
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    Button {
+                        showKeyboardPlayground = true
+                    } label: {
+                        HStack {
+                            Spacer()
+                            VStack(spacing: 2) {
+                                Text("Open Keyboard")
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.white)
+                                Text("Focus mode — fix touch / suggestions / export CSV")
+                                    .font(.caption2)
+                                    .foregroundColor(.white.opacity(0.85))
+                            }
+                            .padding(.vertical, 8)
+                            Spacer()
+                        }
+                    }
+                    .listRowBackground(Color.blue)
+                } footer: {
+                    Text("Use this first. Letter keys are sized from this iPhone’s screen width (iOS-style); opening the keyboard briefly calibrates total height to the system keyboard. Suggestions appear in the bar; tap to accept. Space applies spelling autocorrect only.")
+                }
+
                 Section("Participant Information") {
                     TextField("First Name", text: $firstName)
                         .autocorrectionDisabled()
@@ -46,18 +69,10 @@ struct ParticipantSetupView: View {
                 }
 
                 Section("Study Setup") {
-                    Picker("Mode", selection: $studyDesign) {
-                        Text("Classic + Adaptive").tag(StudyDesign.classicAndAdaptive)
-                        Text("Classic Only").tag(StudyDesign.classicOnly)
-                    }
-                    .pickerStyle(.segmented)
-                    .onChange(of: studyDesign) { _, newDesign in
-                        if newDesign == .classicAndAdaptive, totalSessions % 2 != 0 {
-                            totalSessions += 1
-                        }
-                    }
-
-                    Stepper(value: $totalSessions, in: 2...20, step: studyDesign == .classicAndAdaptive ? 2 : 1) {
+                    // Gaussian / adaptive routing is paused while we lock the
+                    // classic iOS keyboard feel. Studies always use classic.
+                    LabeledContent("Keyboard", value: "Classic (iOS-style)")
+                    Stepper(value: $totalSessions, in: 1...20, step: 1) {
                         HStack {
                             Text("Sessions")
                             Spacer()
@@ -66,17 +81,8 @@ struct ParticipantSetupView: View {
                                 .monospacedDigit()
                         }
                     }
-
-                    if studyDesign == .classicAndAdaptive {
-                        LabeledContent("Classic sessions", value: "\(totalSessions / 2) × 1 min")
-                        LabeledContent("Adaptive sessions", value: "\(totalSessions / 2) × 1 min")
-                        Text("First \(totalSessions / 2) sessions use the standard keyboard. Gaussian adaptive keyboard activates for the remaining \(totalSessions / 2).")
-                            .font(.caption).foregroundColor(.secondary)
-                    } else {
-                        LabeledContent("Classic sessions", value: "\(totalSessions) × 1 min")
-                        Text("All sessions use the standard keyboard. No Gaussian adaptive keyboard.")
-                            .font(.caption).foregroundColor(.secondary)
-                    }
+                    Text("All sessions use the classic in-app keyboard. Adaptive/Gaussian hit routing is disabled for now.")
+                        .font(.caption).foregroundColor(.secondary)
                 }
 
                 Section("Device Info") {
@@ -145,6 +151,9 @@ struct ParticipantSetupView: View {
                 }
             }
             .navigationTitle("TypingResearch")
+            .fullScreenCover(isPresented: $showKeyboardPlayground) {
+                KeyboardPlaygroundView()
+            }
             .fullScreenCover(isPresented: $showLiveDemo) {
                 LivePostureDemoView()
             }
@@ -161,11 +170,11 @@ struct ParticipantSetupView: View {
                 NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)
             ) { notification in
                 if let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
-                    sessionManager.measuredKeyboardHeight = frame.height
-                    if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                       let window = windowScene.windows.first {
-                        sessionManager.safeAreaBottom = window.safeAreaInsets.bottom
-                    }
+                    // Capture this device's real system keyboard once so the
+                    // in-app keyboard can match it across iPhone models.
+                    SystemKeyboardMetrics.recordSystemKeyboardFrame(frame)
+                    sessionManager.measuredKeyboardHeight = SystemKeyboardMetrics.totalDockedHeight()
+                    sessionManager.safeAreaBottom = SystemKeyboardMetrics.bottomSafeAreaInset()
                 }
             }
             .alert("Error", isPresented: $showError) {
@@ -196,7 +205,11 @@ struct ParticipantSetupView: View {
         )
         modelContext.insert(participant)
         sessionManager.configure(modelContext: modelContext)
-        sessionManager.startStudy(participant: participant, totalSessions: totalSessions, design: studyDesign)
+        sessionManager.startStudy(
+            participant: participant,
+            totalSessions: totalSessions,
+            design: .classicOnly
+        )
     }
 
     // MARK: - Posture Training Run (D2a/D2b)

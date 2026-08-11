@@ -60,6 +60,13 @@ struct InputEventData: Sendable {
     let sessionMode: String        // "classic" or "gaussian"
     let studySessionIndex: Int     // 0-based index within the study
     let trialIndex: Int            // 0-based trial index within the session
+    let editSource: String         // key, candidate, autocorrection, etc.
+    let editKind: String           // insert, delete, or replace lineage
+    let originalText: String
+    let emittedText: String
+    let touchGestureJSON: String   // full coordinates/radius/force/timing samples
+    let suggestionsOffered: String // pipe-separated suggestion bar texts
+    let selectedSuggestion: String // tapped/autocorrected suggestion, if any
 
     // Computed for legacy exporter compatibility (not exported to CSV)
     var tapNormX: Double { keyWidth  > 0 ? tapLocalX / keyWidth  : 0.5 }
@@ -77,6 +84,13 @@ struct RawInputEvent: Sendable {
     let textBefore: String
     let textAfter: String
     let tapInfo: TapInfo
+    let editSource: String
+    let editKind: String
+    let originalText: String
+    let emittedText: String
+    let touchGestureJSON: String
+    let suggestionsOffered: String
+    let selectedSuggestion: String
 }
 
 // MARK: - StudySessionSummary
@@ -181,7 +195,14 @@ private extension RawInputEvent {
             interKeyIntervalMs: iki,
             sessionMode: sessionMode == .gaussian ? "gaussian" : "classic",
             studySessionIndex: studySessionIndex,
-            trialIndex: trial.trialIndex
+            trialIndex: trial.trialIndex,
+            editSource: editSource,
+            editKind: editKind,
+            originalText: originalText,
+            emittedText: emittedText,
+            touchGestureJSON: touchGestureJSON,
+            suggestionsOffered: suggestionsOffered,
+            selectedSuggestion: selectedSuggestion
         )
     }
 }
@@ -243,9 +264,10 @@ final class SessionManager {
         }
     }
 
-    // Measured system keyboard height and safe area — set by ParticipantSetupView on first keyboard show
-    var measuredKeyboardHeight: CGFloat = 291   // iPhone 16 default until measured
-    var safeAreaBottom: CGFloat = 34            // iPhone 16 default until measured
+    // Device-adaptive keyboard chrome — updated from SystemKeyboardMetrics /
+    // live system-keyboard measurement so each iPhone model matches itself.
+    var measuredKeyboardHeight: CGFloat = SystemKeyboardMetrics.totalDockedHeight()
+    var safeAreaBottom: CGFloat = SystemKeyboardMetrics.bottomSafeAreaInset()
 
     // Timer state
     var sessionDurationSeconds: Int = 300   // default 5 minutes
@@ -538,7 +560,14 @@ final class SessionManager {
         rangeStart: Int,
         rangeLength: Int,
         eventType: InputEventType,
-        tapInfo: TapInfo
+        tapInfo: TapInfo,
+        editSource: String = "key",
+        editKind: String = "",
+        originalText: String = "",
+        emittedText: String = "",
+        touchGestureJSON: String = "",
+        suggestionsOffered: String = "",
+        selectedSuggestion: String = ""
     ) -> RawInputEvent {
         RawInputEvent(
             timestamp: Date(),
@@ -548,7 +577,14 @@ final class SessionManager {
             rangeLength: rangeLength,
             textBefore: textBefore,
             textAfter: textAfter,
-            tapInfo: tapInfo
+            tapInfo: tapInfo,
+            editSource: editSource,
+            editKind: editKind,
+            originalText: originalText,
+            emittedText: emittedText,
+            touchGestureJSON: touchGestureJSON,
+            suggestionsOffered: suggestionsOffered,
+            selectedSuggestion: selectedSuggestion
         )
     }
 
@@ -729,7 +765,6 @@ final class SessionManager {
         isSessionActive = false
         isTrialActive = false
         isSessionComplete = true
-        BackendClient.shared.flush()
         let _ = MotionRecorder.shared.stop()
         try? modelContext?.save()
 
@@ -769,17 +804,16 @@ final class SessionManager {
                 keyScreenX: data.keyScreenX,
                 keyScreenY: data.keyScreenY,
                 keyWidth: data.keyWidth,
-                keyHeight: data.keyHeight
+                keyHeight: data.keyHeight,
+                editSource: data.editSource,
+                editKind: data.editKind,
+                originalText: data.originalText,
+                emittedText: data.emittedText,
+                touchGestureJSON: data.touchGestureJSON,
+                suggestionsOffered: data.suggestionsOffered,
+                selectedSuggestion: data.selectedSuggestion
             )
             modelContext?.insert(event)
-
-            if let session = currentSession, let participant = participant {
-                BackendClient.shared.enqueue(
-                    event: data,
-                    sessionId: session.id,
-                    participantId: participant.id
-                )
-            }
         }
     }
 

@@ -53,7 +53,10 @@ final class DataExporter {
             "key_row", "key_col",
             "expected_char", "actual_char", "corrected_char", "is_correct",
             "previous_key_label",
-            "text_before",
+            "text_before", "text_after",
+            "edit_source", "edit_kind", "original_text", "emitted_text",
+            "suggestions_offered", "selected_suggestion",
+            "touch_gesture_json",
             "timestamp_ms", "inter_key_interval_ms"
         ]
         if cleaned {
@@ -93,6 +96,14 @@ final class DataExporter {
                 isCorrectStr,
                 csvEscape(event.previousKeyLabel),
                 csvEscape(event.textBefore),
+                csvEscape(event.textAfter),
+                csvEscape(event.editSource),
+                csvEscape(event.editKind),
+                csvEscape(event.originalText),
+                csvEscape(event.emittedText),
+                csvEscape(event.suggestionsOffered),
+                csvEscape(event.selectedSuggestion),
+                csvEscape(event.touchGestureJSON),
                 String(format: "%.3f", event.timestamp.timeIntervalSince(sessionStart) * 1000),
                 String(format: "%.3f", event.interKeyIntervalMs)
             ]

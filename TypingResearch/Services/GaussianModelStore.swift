@@ -153,7 +153,14 @@ private extension GaussianModelStore.PersistedTap {
             interKeyIntervalMs: 0,
             sessionMode: "classic",
             studySessionIndex: 0,
-            trialIndex: 0
+            trialIndex: 0,
+            editSource: "",
+            editKind: "",
+            originalText: "",
+            emittedText: "",
+            touchGestureJSON: "",
+            suggestionsOffered: "",
+            selectedSuggestion: ""
         )
     }
 }

@@ -5,34 +5,25 @@ struct TrialView: View {
     var onTrialComplete: () -> Void
 
     @State private var typedText: String = ""
-    @State private var showNumericKeyboard: Bool = false
-    @State private var gaussianModel: GaussianKeyModel = GaussianKeyModel()
+    @State private var caretUTF16: Int = 0
+    @State private var keyboardSize = KeyboardSizeModel()
     @Environment(\.colorScheme) private var colorScheme
     private let showsTapDiagnostics = false
 
-    // D2c — posture camera-preview overlay toggle. Only shown/usable during
-    // a posture training run (sessionManager.isPostureTrainingRun); a plain
-    // overlay layer (not a .sheet) so it never steals keyboard focus or
-    // pauses the session/timer running underneath.
+    // D2c — posture camera-preview overlay toggle.
     @State private var showCameraOverlay: Bool = false
 
-    // Mirror CustomKeyboardView layout constants so the buffer strip maps taps correctly
-    private let kbSidePad: CGFloat = 5
-    private let kbKeyGap:  CGFloat = 6
-    private let kbBufH:    CGFloat = 8
-    private let alphaTop = ["q","w","e","r","t","y","u","i","o","p"]
-    private let numTop   = ["1","2","3","4","5","6","7","8","9","0"]
     private let textWindowBeforeCursor = 140
     private let textWindowAfterCursor = 260
 
     private var keyboardHeight: CGFloat {
-        max(180, sessionManager.measuredKeyboardHeight - sessionManager.safeAreaBottom)
+        keyboardSize.contentHeight
     }
 
     private var kbBgColor: Color {
         colorScheme == .dark
             ? Color(red: 0.176, green: 0.176, blue: 0.184)
-            : Color(red: 0.816, green: 0.827, blue: 0.851)
+            : Color(red: 0.82, green: 0.835, blue: 0.86)
     }
 
     var body: some View {
@@ -53,40 +44,19 @@ struct TrialView: View {
 
             Spacer()
 
-            // Buffer strip: same keyboard background color, forwards taps to nearest top-row key
-            bufferStrip
-
-            Group {
-                if sessionManager.sessionMode == .gaussian {
-                    GaussianKeyboardView(
-                        overlayMode: false,
-                        showNumeric: $showNumericKeyboard,
-                        model: gaussianModel
-                    ) { key, tapInfo in
-                        handleKeyTap(key: key, tapInfo: tapInfo)
-                    }
-                } else {
-                    CustomKeyboardView(overlayMode: false, showNumeric: $showNumericKeyboard) { key, tapInfo in
-                        handleKeyTap(key: key, tapInfo: tapInfo)
-                    }
-                }
+            // Classic iOS-style keyboard only — Gaussian hit routing removed for now.
+            InAppResearchKeyboardView(text: typedText, caretUTF16: $caretUTF16) { edits in
+                handleKeyboardEdits(edits)
             }
             .frame(height: keyboardHeight)
         }
         .padding(.top, 16)
         .background(alignment: .bottom) {
             kbBgColor
-                .frame(height: keyboardHeight + kbBufH + sessionManager.safeAreaBottom)
+                .frame(height: keyboardSize.totalDockedHeight)
                 .ignoresSafeArea(edges: .bottom)
         }
         .overlay(alignment: .bottomTrailing) {
-            // D2c — camera toggle + floating picture-in-picture preview.
-            // Anchored in the empty region just above the keyboard (trailing
-            // edge) so neither ever covers the top bar, the target text, or
-            // any key. The preview card has hit-testing disabled, so even if
-            // a stray touch lands on it, it passes through — typing is never
-            // hindered. Not a .sheet: keyboard focus and the session timer
-            // keep running untouched.
             if sessionManager.isPostureTrainingRun {
                 VStack(alignment: .trailing, spacing: 10) {
                     if showCameraOverlay {
@@ -96,111 +66,133 @@ struct TrialView: View {
                     PostureCameraToggleButton(isPresented: $showCameraOverlay)
                 }
                 .padding(.trailing, 12)
-                .padding(.bottom, keyboardHeight + kbBufH + 64)
+                .padding(.bottom, keyboardHeight + 64)
             }
         }
         .onAppear {
-            if sessionManager.sessionMode == .gaussian {
-                gaussianModel = GaussianModelStore.shared.loadModel(
-                    keys: GaussianKeyboardView.fittableKeys
-                )
-            }
-            // D2b — posture training run: start background labeled capture.
-            // No-op (guarded internally) when isPostureTrainingRun == false,
-            // so normal timed studies see zero behavioral change. Capture
-            // runs strictly in the background — keystroke logging, timers,
-            // and event flow below are completely untouched.
+            SystemKeyboardMetrics.ensureMeasured()
+            keyboardSize.refresh()
+            sessionManager.measuredKeyboardHeight = keyboardSize.totalDockedHeight
+            sessionManager.safeAreaBottom = keyboardSize.bottomInset
             sessionManager.startPostureCapture()
         }
+        .onReceive(
+            NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)
+        ) { _ in
+            keyboardSize.refresh()
+            sessionManager.measuredKeyboardHeight = keyboardSize.totalDockedHeight
+            sessionManager.safeAreaBottom = keyboardSize.bottomInset
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: SystemKeyboardMetrics.didUpdateNotification)
+        ) { _ in
+            keyboardSize.refresh()
+            sessionManager.measuredKeyboardHeight = keyboardSize.totalDockedHeight
+            sessionManager.safeAreaBottom = keyboardSize.bottomInset
+        }
         .onDisappear {
-            // Stop capture on disappear (including early dismiss of the
-            // typing screen). Frames already saved are KEPT — this is
-            // training data, unlike HandCaptureView's discard-on-dismiss
-            // (see SessionManager.stopPostureCapture() for the rationale).
             sessionManager.stopPostureCapture()
         }
     }
 
-    // MARK: - Key Tap Handler
+    // MARK: - Keyboard edit logging
 
-    private func handleKeyTap(key: String, tapInfo: TapInfo) {
-        let textBefore = typedText
-        let textAfter: String
-        let replacementString: String
-        let eventType: InputEventType
-        let rangeStart: Int
-        let rangeLength: Int
-
-        switch key {
-        case "delete":
-            guard !textBefore.isEmpty else { return }
-            textAfter = String(textBefore.dropLast())
-            replacementString = ""
-            eventType = .delete
-            rangeStart = textAfter.count
-            rangeLength = 1
-        case "space", "return":
-            textAfter = textBefore + " "
-            replacementString = " "
-            eventType = .insert
-            rangeStart = textBefore.count
-            rangeLength = 0
-            if showNumericKeyboard { showNumericKeyboard = false }
-        default:
-            textAfter = textBefore + key
-            replacementString = key
-            eventType = .insert
-            rangeStart = textBefore.count
-            rangeLength = 0
+    private func handleKeyboardEdits(_ edits: [InAppKeyboardEdit]) {
+        for edit in edits {
+            let metadata = metadata(for: edit)
+            switch edit.kind {
+            case .insert:
+                for character in edit.emittedText {
+                    recordInsert(String(character), tapInfo: edit.tapInfo, metadata: metadata)
+                }
+            case .delete:
+                for _ in edit.originalText {
+                    recordDelete(tapInfo: edit.tapInfo, metadata: metadata)
+                }
+            case .replace:
+                for _ in edit.originalText {
+                    recordDelete(tapInfo: edit.tapInfo, metadata: metadata)
+                }
+                for character in edit.emittedText {
+                    recordInsert(String(character), tapInfo: edit.tapInfo, metadata: metadata)
+                }
+            }
         }
+    }
 
+    private func metadata(for edit: InAppKeyboardEdit) -> KeyboardEventMetadata {
+        let kind: String
+        switch edit.kind {
+        case .insert: kind = "insert"
+        case .delete: kind = "delete"
+        case .replace: kind = "replace"
+        }
+        let gestureJSON = edit.gesture.flatMap { gesture -> String? in
+            guard let data = try? JSONEncoder().encode(gesture) else { return nil }
+            return String(data: data, encoding: .utf8)
+        } ?? ""
+        return KeyboardEventMetadata(
+            source: edit.source.rawValue,
+            kind: kind,
+            originalText: edit.originalText,
+            emittedText: edit.emittedText,
+            touchGestureJSON: gestureJSON,
+            suggestionsOffered: edit.suggestionsOffered.joined(separator: "|"),
+            selectedSuggestion: edit.selectedSuggestion ?? ""
+        )
+    }
+
+    private func recordInsert(
+        _ text: String,
+        tapInfo: TapInfo,
+        metadata: KeyboardEventMetadata
+    ) {
+        let textBefore = typedText
+        let textAfter = textBefore + text
         let rawEvent = sessionManager.captureRawKeyboardEvent(
             textBefore: textBefore,
             textAfter: textAfter,
-            replacementString: replacementString,
-            rangeStart: rangeStart,
-            rangeLength: rangeLength,
-            eventType: eventType,
-            tapInfo: tapInfo
+            replacementString: text,
+            rangeStart: textBefore.count,
+            rangeLength: 0,
+            eventType: .insert,
+            tapInfo: tapInfo,
+            editSource: metadata.source,
+            editKind: metadata.kind,
+            originalText: metadata.originalText,
+            emittedText: metadata.emittedText,
+            touchGestureJSON: metadata.touchGestureJSON,
+            suggestionsOffered: metadata.suggestionsOffered,
+            selectedSuggestion: metadata.selectedSuggestion
         )
         sessionManager.captureEvent(rawEvent)
         typedText = textAfter
+        caretUTF16 = (textAfter as NSString).length
     }
 
-    // MARK: - Buffer Strip
-
-    private var bufferStrip: some View {
-        GeometryReader { geo in
-            let globalFrame = geo.frame(in: .global)
-            bufferStripContent(width: geo.size.width, globalFrame: globalFrame)
-        }
-        .frame(height: kbBufH)
-    }
-
-    private func bufferStripContent(width: CGFloat, globalFrame: CGRect) -> some View {
-        let kw   = (width - 2*kbSidePad - 9*kbKeyGap) / 10
-        let step = kw + kbKeyGap
-        // Approximate key height from keyboard frame (5 rows share available height)
-        let keyH = max(34, (keyboardHeight - 3 * 11) / 5)
-        return kbBgColor
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0, coordinateSpace: .local)
-                    .onEnded { value in
-                        let row    = showNumericKeyboard ? numTop : alphaTop
-                        let x      = value.location.x - kbSidePad
-                        let idx    = max(0, min(Int(x / step), row.count - 1))
-                        let localX = min(max(x - CGFloat(idx) * step, 0), kw)
-                        let tapInfo = TapInfo(
-                            keyLabel:  row[idx],
-                            tapLocalX: Double(localX),
-                            tapLocalY: Double(value.location.y),
-                            keyWidth:  Double(kw),
-                            keyHeight: Double(keyH)
-                        )
-                        handleKeyTap(key: row[idx], tapInfo: tapInfo)
-                    }
-            )
+    private func recordDelete(tapInfo: TapInfo, metadata: KeyboardEventMetadata) {
+        guard let deletedCharacter = typedText.last else { return }
+        let textBefore = typedText
+        let textAfter = String(textBefore.dropLast())
+        let rawEvent = sessionManager.captureRawKeyboardEvent(
+            textBefore: textBefore,
+            textAfter: textAfter,
+            replacementString: "",
+            rangeStart: textAfter.count,
+            rangeLength: String(deletedCharacter).count,
+            eventType: .delete,
+            tapInfo: tapInfo,
+            editSource: metadata.source,
+            editKind: metadata.kind,
+            originalText: metadata.originalText,
+            emittedText: metadata.emittedText,
+            touchGestureJSON: metadata.touchGestureJSON,
+            suggestionsOffered: metadata.suggestionsOffered,
+            selectedSuggestion: metadata.selectedSuggestion
+        )
+        sessionManager.captureEvent(rawEvent)
+        typedText = textAfter
+        caretUTF16 = (textAfter as NSString).length
     }
 
     // MARK: - Top Bar
@@ -212,9 +204,8 @@ struct TrialView: View {
                     .font(.title2).fontWeight(.bold)
                     .foregroundColor(sessionManager.remainingSeconds < 30 ? .red : .primary)
                     .monospacedDigit()
-                let modeLabel = sessionManager.sessionMode == .gaussian ? "Adaptive" : "Classic"
                 let sessionNum = sessionManager.completedStudySessions + 1
-                Text("Session \(sessionNum) of \(sessionManager.totalStudySessions) · \(modeLabel)")
+                Text("Session \(sessionNum) of \(sessionManager.totalStudySessions) · Classic")
                     .font(.caption).foregroundColor(.secondary)
             }
             Spacer()
@@ -298,7 +289,6 @@ struct TrialView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .onChange(of: typedText) { _, _ in
-                        // Avoid animating every keypress; this reduces frequent main-thread work.
                         if cursorIndex < 24 || cursorIndex % 3 == 0 {
                             proxy.scrollTo(scrollTarget, anchor: .center)
                         }
@@ -342,5 +332,15 @@ struct TrialView: View {
             Text(label).font(.system(size: 9, design: .monospaced))
         }
         .frame(minWidth: 52)
+    }
+
+    private struct KeyboardEventMetadata {
+        let source: String
+        let kind: String
+        let originalText: String
+        let emittedText: String
+        let touchGestureJSON: String
+        let suggestionsOffered: String
+        let selectedSuggestion: String
     }
 }

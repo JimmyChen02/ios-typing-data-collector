@@ -257,20 +257,6 @@ final class AdaptiveKeyboardCoreTests: XCTestCase {
         XCTAssertNil(decoded.modelProvenance)
     }
 
-    func testRecordingRequiresConsentAndCanBePaused() {
-        let suite = "AdaptiveKeyboardCoreTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let preferences = SharedKeyboardPreferences(defaults: defaults)
-        let uploadState = KeyboardUploadStateStore(defaults: defaults)
-
-        XCTAssertFalse(preferences.isRecording)
-        uploadState.setConsent(granted: true)
-        XCTAssertTrue(preferences.isRecording)
-        preferences.recordingPaused = true
-        XCTAssertFalse(preferences.isRecording)
-    }
-
     func testKeyboardBehaviorDefaultsMatchIOS() {
         let suite = "AdaptiveKeyboardCoreTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
@@ -431,235 +417,27 @@ final class AdaptiveKeyboardCoreTests: XCTestCase {
             "Candidates: \(candidates)"
         )
     }
-}
 
-final class KeyboardEventUploaderTests: XCTestCase {
-    private let fixedDate = Date(timeIntervalSince1970: 1_800_000_000)
-
-    func testUploadRequiresConsent() async throws {
-        let fixture = makeFixture(events: [event(1)], consent: false)
-        do {
-            _ = try await fixture.uploader.uploadNow()
-            XCTFail("Expected consentRequired")
-        } catch {
-            XCTAssertEqual(error as? KeyboardUploadError, .consentRequired)
-        }
-        XCTAssertEqual(fixture.transport.requestCount, 0)
-    }
-
-    func testSuccessfulUploadBatchesAndPersistsAcknowledgements() async throws {
-        let events = (0..<51).map(event)
-        let fixture = makeFixture(events: events)
-        let result = try await fixture.uploader.uploadNow()
-
-        XCTAssertEqual(result.uploadedEvents, 51)
-        XCTAssertEqual(result.remainingEvents, 0)
-        XCTAssertEqual(fixture.transport.requestCount, 2)
-        XCTAssertEqual(fixture.state.acknowledgedIDs(), Set(events.map(\.id)))
-
-        let restartedState = KeyboardUploadStateStore(defaults: fixture.defaults)
-        XCTAssertEqual(restartedState.acknowledgedIDs(), Set(events.map(\.id)))
-        let status = try await fixture.uploader.status()
-        XCTAssertEqual(status.pendingEvents, 0)
-    }
-
-    func testEventsRecordedBeforeConsentAreNeverUploaded() async throws {
-        let oldEvent = KeyboardResearchEvent(
-            id: UUID(uuidString: "00000000-0000-4000-8000-000000000099")!,
-            timestamp: fixedDate.addingTimeInterval(-1),
-            sessionID: UUID(uuidString: "10000000-0000-4000-8000-000000000001")!,
-            kind: .insert,
-            layout: .letters,
-            key: "x",
-            rawContext: "pre-consent text"
-        )
-        let fixture = makeFixture(events: [oldEvent])
-        let result = try await fixture.uploader.uploadNow()
-
-        XCTAssertEqual(result.uploadedEvents, 0)
-        XCTAssertEqual(fixture.transport.requestCount, 0)
-        let status = try await fixture.uploader.status()
-        XCTAssertEqual(status.totalEvents, 1)
-        XCTAssertEqual(status.pendingEvents, 0)
-    }
-
-    func testAutomaticUploadIsThrottledForFifteenMinutes() async throws {
-        let fixture = makeFixture(events: [event(1)])
-        let firstResult = try await fixture.uploader.uploadIfDue()
-        let secondResult = try await fixture.uploader.uploadIfDue()
-        XCTAssertNotNil(firstResult)
-        XCTAssertNil(secondResult)
-        XCTAssertEqual(fixture.transport.requestCount, 1)
-    }
-
-    func testHTTPFailurePreservesPendingEventsAndManualRetrySucceeds() async throws {
-        let fixture = makeFixture(events: [event(1)])
-        fixture.transport.forcedStatus = 503
-        do {
-            _ = try await fixture.uploader.uploadNow()
-            XCTFail("Expected server failure")
-        } catch let error as KeyboardUploadError {
-            guard case .server(status: 503, _) = error else {
-                return XCTFail("Unexpected error: \(error)")
-            }
-        }
-        let failedStatus = try await fixture.uploader.status()
-        XCTAssertEqual(failedStatus.pendingEvents, 1)
-
-        fixture.transport.forcedStatus = nil
-        let result = try await fixture.uploader.uploadNow()
-        XCTAssertEqual(result.uploadedEvents, 1)
-        let successfulStatus = try await fixture.uploader.status()
-        XCTAssertEqual(successfulStatus.pendingEvents, 0)
-    }
-
-    func testMalformedReceiptDoesNotAcknowledgeEvents() async throws {
-        let fixture = makeFixture(events: [event(1)])
-        fixture.transport.returnsMalformedReceipt = true
-        do {
-            _ = try await fixture.uploader.uploadNow()
-            XCTFail("Expected invalid response")
-        } catch {
-            XCTAssertEqual(error as? KeyboardUploadError, .invalidServerResponse)
-        }
-        XCTAssertTrue(fixture.state.acknowledgedIDs().isEmpty)
-    }
-
-    func testMissingConfigurationIsReportedWithoutNetworkRequest() async throws {
-        let fixture = makeFixture(events: [event(1)], configured: false)
-        do {
-            _ = try await fixture.uploader.uploadNow()
-            XCTFail("Expected notConfigured")
-        } catch {
-            XCTAssertEqual(error as? KeyboardUploadError, .notConfigured)
-        }
-        XCTAssertEqual(fixture.transport.requestCount, 0)
-    }
-
-    private func event(_ number: Int) -> KeyboardResearchEvent {
-        KeyboardResearchEvent(
-            id: UUID(uuidString: String(format: "00000000-0000-4000-8000-%012d", number))!,
-            timestamp: fixedDate.addingTimeInterval(Double(number)),
-            sessionID: UUID(uuidString: "10000000-0000-4000-8000-000000000001")!,
-            kind: .insert,
-            layout: .letters,
-            key: "a",
-            emittedText: "a",
-            rawContext: "private text \(number)"
-        )
-    }
-
-    private func makeFixture(
-        events: [KeyboardResearchEvent],
-        consent: Bool = true,
-        configured: Bool = true
-    ) -> UploaderFixture {
-        let suiteName = "KeyboardEventUploaderTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
-        let state = KeyboardUploadStateStore(defaults: defaults)
-        state.setConsent(granted: consent, at: fixedDate)
-        let transport = StubKeyboardUploadTransport()
-        let authStore = StubKeyboardUploadAuthStore(
-            session: KeyboardUploadAuthSession(
-                accessToken: "access",
-                refreshToken: "refresh",
-                expiresAt: fixedDate.addingTimeInterval(3_600)
-            )
-        )
-        let configuration = KeyboardUploadConfiguration(
-            projectURL: configured ? URL(string: "https://example.supabase.co") : nil,
-            publishableKey: configured ? "publishable-key" : ""
-        )
-        let uploader = KeyboardEventUploader(
-            configuration: configuration,
-            state: state,
-            eventSource: StubKeyboardEventSource(events: events),
-            transport: transport,
-            authStore: authStore,
-            now: { self.fixedDate }
-        )
-        addTeardownBlock {
-            defaults.removePersistentDomain(forName: suiteName)
-        }
-        return UploaderFixture(
-            uploader: uploader,
-            state: state,
-            transport: transport,
-            defaults: defaults
-        )
-    }
-}
-
-private struct UploaderFixture {
-    let uploader: KeyboardEventUploader
-    let state: KeyboardUploadStateStore
-    let transport: StubKeyboardUploadTransport
-    let defaults: UserDefaults
-}
-
-private struct StubKeyboardEventSource: KeyboardEventSource {
-    let events: [KeyboardResearchEvent]
-
-    func uploadEvents() throws -> [KeyboardResearchEvent] {
-        events
-    }
-}
-
-private final class StubKeyboardUploadAuthStore: KeyboardUploadAuthStoring, @unchecked Sendable {
-    private var session: KeyboardUploadAuthSession?
-
-    init(session: KeyboardUploadAuthSession?) {
-        self.session = session
-    }
-
-    func load() -> KeyboardUploadAuthSession? { session }
-    func save(_ session: KeyboardUploadAuthSession) { self.session = session }
-    func clear() { session = nil }
-}
-
-private final class StubKeyboardUploadTransport: KeyboardUploadTransport, @unchecked Sendable {
-    var forcedStatus: Int?
-    var returnsMalformedReceipt = false
-    private(set) var requestCount = 0
-    private let lock = NSLock()
-
-    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
-        let (status, malformed) = responseSettings()
-
-        let responseStatus = status ?? 200
-        let response = HTTPURLResponse(
-            url: request.url!,
-            statusCode: responseStatus,
-            httpVersion: nil,
-            headerFields: ["Content-Type": "application/json"]
-        )!
-        if responseStatus != 200 {
-            return (Data("{\"error\":\"temporarily unavailable\"}".utf8), response)
-        }
-        if malformed {
-            return (Data("{\"batchId\":\"bad\"}".utf8), response)
-        }
-
-        let body = try XCTUnwrap(request.httpBody)
-        let object = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: body) as? [String: Any]
-        )
-        let batchID = try XCTUnwrap(object["batchId"] as? String)
-        let events = try XCTUnwrap(object["events"] as? [[String: Any]])
-        let ids = events.compactMap { $0["id"] as? String }
-        let receipt: [String: Any] = [
-            "batchId": batchID,
-            "acknowledgedEventIDs": ids,
-            "serverTime": "2027-01-15T08:00:00Z"
+    func testAutomaticCorrectionNeverAppliesPrefixCompletions() {
+        let candidates = [
+            DecoderCandidate(text: "hel", score: 1.0, languageScore: 0, isLiteral: true),
+            DecoderCandidate(text: "hello", score: 3.5, languageScore: 4.0),
+            DecoderCandidate(text: "help", score: 3.0, languageScore: 3.5)
         ]
-        return (try JSONSerialization.data(withJSONObject: receipt), response)
+        XCTAssertNil(
+            CorrectionFeedbackPolicy.automaticCorrection(from: candidates, literal: "hel"),
+            "Prefix completions must stay tap-to-accept, never apply on space"
+        )
     }
 
-    private func responseSettings() -> (Int?, Bool) {
-        lock.lock()
-        defer { lock.unlock() }
-        requestCount += 1
-        return (forcedStatus, returnsMalformedReceipt)
+    func testAutomaticCorrectionSkipsKnownDictionaryWords() {
+        let candidates = [
+            DecoderCandidate(text: "hell", score: 2.5, languageScore: 3.0, isLiteral: true),
+            DecoderCandidate(text: "hello", score: 4.0, languageScore: 4.5)
+        ]
+        XCTAssertNil(
+            CorrectionFeedbackPolicy.automaticCorrection(from: candidates, literal: "hell"),
+            "Known words should not be force-replaced on space"
+        )
     }
 }

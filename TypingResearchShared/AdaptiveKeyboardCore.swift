@@ -770,13 +770,9 @@ public final class SharedKeyboardPreferences {
         set { defaults.set(newValue, forKey: Key.lastRetentionPurge) }
     }
 
-    /// Full-schema telemetry can contain typed and surrounding text. Recording
-    /// stays disabled until the containing app records current consent.
-    public var hasTelemetryConsent: Bool {
-        KeyboardUploadStateStore(defaults: defaults).hasCurrentConsent
-    }
-
-    public var isRecording: Bool { !recordingPaused && hasTelemetryConsent }
+    /// The system-keyboard telemetry pipeline is retired. The legacy ledger
+    /// remains decodable for now, but must not record new events.
+    public var isRecording: Bool { false }
 }
 
 public enum SharedKeyboardStorage {
@@ -1264,28 +1260,104 @@ public enum SmartPunctuation {
 }
 
 public enum CorrectionFeedbackPolicy {
-    /// Correct confident substitutions, transpositions, and one-character
-    /// insertion/deletion typos without treating prefix completions as corrections.
+    /// Space-bar autocorrect for spelling typos only — never autocomplete.
+    ///
+    /// iOS QuickType behavior we mirror:
+    /// - Completions / next-word suggestions stay in the bar until tapped.
+    /// - While a spelling correction is pending, the bar emphasizes it
+    ///   (`“typed”` | correction | alternate) but the text is unchanged.
+    /// - Space (or tapping the correction) applies that spelling fix.
+    /// - Prefix completions (`hel` → `hello`) are never applied on space.
+    /// - Known dictionary words are left alone on space.
     public static func automaticCorrection(
         from candidates: [DecoderCandidate],
         literal: String
     ) -> DecoderCandidate? {
         let lowered = literal.lowercased()
         guard lowered.count >= 3 else { return nil }
-        let literalScore = candidates.first(where: \.isLiteral)?.score ?? 0
-        return candidates.first {
-            guard !$0.isLiteral,
-                  abs($0.text.count - lowered.count) <= 1,
-                  $0.score >= literalScore + 0.35 else {
+
+        let literalCandidate = candidates.first(where: \.isLiteral)
+        let literalScore = literalCandidate?.score ?? 0
+        // If the typed token is already a known vocabulary word, do not
+        // force-replace it on space (suggestions may still offer alternatives).
+        if let literalCandidate, literalCandidate.languageScore > 0 {
+            return nil
+        }
+
+        return candidates.first { candidate in
+            guard !candidate.isLiteral else { return false }
+            let text = candidate.text.lowercased()
+
+            // Autocomplete / prefix completion — never apply on space.
+            if text.hasPrefix(lowered), text.count > lowered.count {
                 return false
             }
-            // "hel" → "hello" is completion; "helo" → "hello" is correction.
-            if $0.text.count > lowered.count,
-               $0.text.lowercased().hasPrefix(lowered) {
-                return false
-            }
+            // Spelling fixes stay near the typed length (sub / del / ins / transpose).
+            guard abs(text.count - lowered.count) <= 1 else { return false }
+            guard isSingleEditSpellingFix(lowered, text) else { return false }
+            // Require a clear win over keeping the typed literal.
+            guard candidate.score >= literalScore + 0.55 else { return false }
             return true
         }
     }
 
+    /// True for one substitution, one insertion, one deletion, or one adjacent swap.
+    private static func isSingleEditSpellingFix(_ typed: String, _ candidate: String) -> Bool {
+        if typed == candidate { return false }
+        let a = Array(typed)
+        let b = Array(candidate)
+        if a.count == b.count {
+            var diffs = 0
+            var first = -1
+            for i in a.indices where a[i] != b[i] {
+                diffs += 1
+                if first < 0 { first = i }
+                if diffs > 2 { return false }
+            }
+            if diffs == 1 { return true }
+            // Adjacent transposition: "teh" → "the", "hte" → "the"
+            return diffs == 2
+                && first >= 0
+                && first + 1 < a.count
+                && a[first] == b[first + 1]
+                && a[first + 1] == b[first]
+        }
+        if a.count + 1 == b.count {
+            // One insertion in candidate ("helo" → "hello")
+            var i = 0
+            var j = 0
+            var skipped = false
+            while i < a.count && j < b.count {
+                if a[i] == b[j] {
+                    i += 1
+                    j += 1
+                } else if !skipped {
+                    skipped = true
+                    j += 1
+                } else {
+                    return false
+                }
+            }
+            return true
+        }
+        if a.count == b.count + 1 {
+            // One deletion from typed ("helllo" → "hello")
+            var i = 0
+            var j = 0
+            var skipped = false
+            while i < a.count && j < b.count {
+                if a[i] == b[j] {
+                    i += 1
+                    j += 1
+                } else if !skipped {
+                    skipped = true
+                    i += 1
+                } else {
+                    return false
+                }
+            }
+            return true
+        }
+        return false
+    }
 }

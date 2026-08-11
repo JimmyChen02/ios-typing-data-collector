@@ -159,6 +159,13 @@ final class InputEvent {
     var keyScreenY: Double     // key origin y on screen (global coords)
     var keyWidth: Double       // key width in points
     var keyHeight: Double      // key height in points
+    var editSource: String
+    var editKind: String
+    var originalText: String
+    var emittedText: String
+    var touchGestureJSON: String
+    var suggestionsOffered: String
+    var selectedSuggestion: String
 
     init(
         trialId: UUID,
@@ -182,7 +189,14 @@ final class InputEvent {
         keyScreenX: Double = 0.0,
         keyScreenY: Double = 0.0,
         keyWidth: Double = 0.0,
-        keyHeight: Double = 0.0
+        keyHeight: Double = 0.0,
+        editSource: String = "",
+        editKind: String = "",
+        originalText: String = "",
+        emittedText: String = "",
+        touchGestureJSON: String = "",
+        suggestionsOffered: String = "",
+        selectedSuggestion: String = ""
     ) {
         self.id = UUID()
         self.trialId = trialId
@@ -207,5 +221,12 @@ final class InputEvent {
         self.keyScreenY = keyScreenY
         self.keyWidth = keyWidth
         self.keyHeight = keyHeight
+        self.editSource = editSource
+        self.editKind = editKind
+        self.originalText = originalText
+        self.emittedText = emittedText
+        self.touchGestureJSON = touchGestureJSON
+        self.suggestionsOffered = suggestionsOffered
+        self.selectedSuggestion = selectedSuggestion
     }
 }

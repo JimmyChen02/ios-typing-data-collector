@@ -8,8 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		879B4A262FFD7C4B0002F39D /* posture_imu.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = 879B4A252FFD7C4A0002F39D /* posture_imu.mlpackage */; };
-		87AA804B2F6C999900764884 /* BackendClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87AA80492F6C999900764884 /* BackendClient.swift */; };
 		87AA804C2F6C999900764884 /* KeyReportExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87AA804A2F6C999900764884 /* KeyReportExporter.swift */; };
+		SKM00000000000000000001 /* SystemKeyboardMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = SKM00000000000000000002 /* SystemKeyboardMetrics.swift */; };
 		87AA804E2F6C99AA00764884 /* TapDotPlotView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87AA804D2F6C99AA00764884 /* TapDotPlotView.swift */; };
 		87AA80522F6DB50D00764884 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 87AA80512F6DB50D00764884 /* Assets.xcassets */; };
 		AA000000000000000000001 /* TypingResearchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000001 /* TypingResearchApp.swift */; };
@@ -18,6 +18,9 @@
 		AA000000000000000000004 /* ParticipantSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000004 /* ParticipantSetupView.swift */; };
 		AA000000000000000000005 /* SessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000005 /* SessionView.swift */; };
 		AA000000000000000000006 /* TrialView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000006 /* TrialView.swift */; };
+		IRK00000000000000000001 /* InAppResearchKeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = IRK00000000000000000002 /* InAppResearchKeyboardView.swift */; };
+		IRK00000000000000000003 /* KeyboardPlaygroundView.swift in Sources */ = {isa = PBXBuildFile; fileRef = IRK00000000000000000004 /* KeyboardPlaygroundView.swift */; };
+		IRK00000000000000000005 /* AnnotatedTypingCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = IRK00000000000000000006 /* AnnotatedTypingCanvas.swift */; };
 		AA000000000000000000007 /* LoggingTextField.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000007 /* LoggingTextField.swift */; };
 		AA000000000000000000008 /* DataExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000008 /* DataExporter.swift */; };
 		AA000000000000000000009 /* Utilities.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000009 /* Utilities.swift */; };
@@ -27,19 +30,10 @@
 		AA000000000000000000015 /* GaussianKeyboardExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000015 /* GaussianKeyboardExporter.swift */; };
 		AA000000000000000000016 /* GaussianKeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000016 /* GaussianKeyboardView.swift */; };
 		AK000000000000000000001 /* AdaptiveKeyboardCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AK000000000000000000101 /* AdaptiveKeyboardCore.swift */; };
-		AK000000000000000000002 /* AdaptiveKeyboardHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AK000000000000000000102 /* AdaptiveKeyboardHomeView.swift */; };
-		AK000000000000000000003 /* AdaptiveKeyboardCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AK000000000000000000101 /* AdaptiveKeyboardCore.swift */; };
-		AK000000000000000000004 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AK000000000000000000103 /* KeyboardViewController.swift */; };
-		AK000000000000000000005 /* AdaptiveKeyboard.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = AK000000000000000000199 /* AdaptiveKeyboard.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		AK000000000000000000006 /* AdaptiveKeyboardCoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AK000000000000000000107 /* AdaptiveKeyboardCoreTests.swift */; };
-		AK000000000000000000007 /* EmojiKeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AK000000000000000000108 /* EmojiKeyboardView.swift */; };
 		AK000000000000000000008 /* EnglishLanguageModelData.swift in Sources */ = {isa = PBXBuildFile; fileRef = AK000000000000000000109 /* EnglishLanguageModelData.swift */; };
-		AK000000000000000000009 /* EnglishLanguageModelData.swift in Sources */ = {isa = PBXBuildFile; fileRef = AK000000000000000000109 /* EnglishLanguageModelData.swift */; };
 		AK00000000000000000000A /* symspell_en_30k.tsv in Resources */ = {isa = PBXBuildFile; fileRef = AK00000000000000000010A /* symspell_en_30k.tsv */; };
-		AK00000000000000000000B /* symspell_en_30k.tsv in Resources */ = {isa = PBXBuildFile; fileRef = AK00000000000000000010A /* symspell_en_30k.tsv */; };
 		AK00000000000000000000C /* symspell_en_30k.tsv in Resources */ = {isa = PBXBuildFile; fileRef = AK00000000000000000010A /* symspell_en_30k.tsv */; };
-		AK00000000000000000000D /* KeyboardEventUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = AK00000000000000000010B /* KeyboardEventUploader.swift */; };
-		AK00000000000000000000E /* KeyboardEventUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = AK00000000000000000010B /* KeyboardEventUploader.swift */; };
 		HC000000000000000000001 /* HandSample.swift in Sources */ = {isa = PBXBuildFile; fileRef = HC000000000000000000002 /* HandSample.swift */; };
 		HC000000000000000000003 /* HandImageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = HC000000000000000000004 /* HandImageStore.swift */; };
 		HC000000000000000000005 /* MotionRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = HC000000000000000000006 /* MotionRecorder.swift */; };
@@ -54,13 +48,6 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
-		AK000000000000000000301 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = GG000000000000000000001 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = AK000000000000000000401;
-			remoteInfo = AdaptiveKeyboard;
-		};
 		AK000000000000000000303 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = GG000000000000000000001 /* Project object */;
@@ -70,45 +57,26 @@
 		};
 /* End PBXContainerItemProxy section */
 
-/* Begin PBXCopyFilesBuildPhase section */
-		AK000000000000000000201 /* Embed App Extensions */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 13;
-			files = (
-				AK000000000000000000005 /* AdaptiveKeyboard.appex in Embed App Extensions */,
-			);
-			name = "Embed App Extensions";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXCopyFilesBuildPhase section */
-
 /* Begin PBXFileReference section */
 		879B4A252FFD7C4A0002F39D /* posture_imu.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = posture_imu.mlpackage; sourceTree = "<group>"; };
-		87AA80492F6C999900764884 /* BackendClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendClient.swift; sourceTree = "<group>"; };
 		87AA804A2F6C999900764884 /* KeyReportExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyReportExporter.swift; sourceTree = "<group>"; };
+		SKM00000000000000000002 /* SystemKeyboardMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemKeyboardMetrics.swift; sourceTree = "<group>"; };
 		87AA804D2F6C99AA00764884 /* TapDotPlotView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TapDotPlotView.swift; sourceTree = "<group>"; };
 		87AA80512F6DB50D00764884 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		AK000000000000000000101 /* AdaptiveKeyboardCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveKeyboardCore.swift; sourceTree = "<group>"; };
-		AK000000000000000000102 /* AdaptiveKeyboardHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveKeyboardHomeView.swift; sourceTree = "<group>"; };
-		AK000000000000000000103 /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewController.swift; sourceTree = "<group>"; };
-		AK000000000000000000104 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		AK000000000000000000105 /* TypingResearch.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TypingResearch.entitlements; sourceTree = "<group>"; };
-		AK000000000000000000106 /* AdaptiveKeyboard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AdaptiveKeyboard.entitlements; sourceTree = "<group>"; };
 		AK000000000000000000107 /* AdaptiveKeyboardCoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdaptiveKeyboardCoreTests.swift; sourceTree = "<group>"; };
-		AK000000000000000000108 /* EmojiKeyboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmojiKeyboardView.swift; sourceTree = "<group>"; };
 		AK000000000000000000109 /* EnglishLanguageModelData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnglishLanguageModelData.swift; sourceTree = "<group>"; };
 		AK00000000000000000010A /* symspell_en_30k.tsv */ = {isa = PBXFileReference; lastKnownFileType = text; path = symspell_en_30k.tsv; sourceTree = "<group>"; };
-		AK00000000000000000010B /* KeyboardEventUploader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardEventUploader.swift; sourceTree = "<group>"; };
 		AK000000000000000000198 /* TypingResearchTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TypingResearchTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		AK000000000000000000199 /* AdaptiveKeyboard.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AdaptiveKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		BB000000000000000000001 /* TypingResearchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypingResearchApp.swift; sourceTree = "<group>"; };
 		BB000000000000000000002 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		BB000000000000000000003 /* SessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionManager.swift; sourceTree = "<group>"; };
 		BB000000000000000000004 /* ParticipantSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParticipantSetupView.swift; sourceTree = "<group>"; };
 		BB000000000000000000005 /* SessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionView.swift; sourceTree = "<group>"; };
 		BB000000000000000000006 /* TrialView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrialView.swift; sourceTree = "<group>"; };
+		IRK00000000000000000002 /* InAppResearchKeyboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InAppResearchKeyboardView.swift; sourceTree = "<group>"; };
+		IRK00000000000000000004 /* KeyboardPlaygroundView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardPlaygroundView.swift; sourceTree = "<group>"; };
+		IRK00000000000000000006 /* AnnotatedTypingCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotatedTypingCanvas.swift; sourceTree = "<group>"; };
 		BB000000000000000000007 /* LoggingTextField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoggingTextField.swift; sourceTree = "<group>"; };
 		BB000000000000000000008 /* DataExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataExporter.swift; sourceTree = "<group>"; };
 		BB000000000000000000009 /* Utilities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Utilities.swift; sourceTree = "<group>"; };
@@ -132,13 +100,6 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		AK000000000000000000202 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		AK000000000000000000205 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -160,22 +121,10 @@
 			isa = PBXGroup;
 			children = (
 				AK000000000000000000101 /* AdaptiveKeyboardCore.swift */,
-				AK00000000000000000010B /* KeyboardEventUploader.swift */,
 				AK000000000000000000109 /* EnglishLanguageModelData.swift */,
 				AK00000000000000000010A /* symspell_en_30k.tsv */,
 			);
 			path = TypingResearchShared;
-			sourceTree = "<group>";
-		};
-		AK000000000000000000502 /* AdaptiveKeyboard */ = {
-			isa = PBXGroup;
-			children = (
-				AK000000000000000000103 /* KeyboardViewController.swift */,
-				AK000000000000000000108 /* EmojiKeyboardView.swift */,
-				AK000000000000000000104 /* Info.plist */,
-				AK000000000000000000106 /* AdaptiveKeyboard.entitlements */,
-			);
-			path = AdaptiveKeyboard;
 			sourceTree = "<group>";
 		};
 		AK000000000000000000503 /* TypingResearchTests */ = {
@@ -193,7 +142,6 @@
 				87AA80512F6DB50D00764884 /* Assets.xcassets */,
 				DD000000000000000000002 /* TypingResearch */,
 				AK000000000000000000501 /* TypingResearchShared */,
-				AK000000000000000000502 /* AdaptiveKeyboard */,
 				AK000000000000000000503 /* TypingResearchTests */,
 				DD000000000000000000003 /* Products */,
 			);
@@ -203,7 +151,6 @@
 			isa = PBXGroup;
 			children = (
 				BB000000000000000000001 /* TypingResearchApp.swift */,
-				AK000000000000000000105 /* TypingResearch.entitlements */,
 				DD000000000000000000010 /* Models */,
 				DD000000000000000000020 /* ViewModels */,
 				DD000000000000000000030 /* Views */,
@@ -217,7 +164,6 @@
 			isa = PBXGroup;
 			children = (
 				BB000000000000000000099 /* TypingResearch.app */,
-				AK000000000000000000199 /* AdaptiveKeyboard.appex */,
 				AK000000000000000000198 /* TypingResearchTests.xctest */,
 			);
 			name = Products;
@@ -243,11 +189,13 @@
 		DD000000000000000000030 /* Views */ = {
 			isa = PBXGroup;
 			children = (
-				AK000000000000000000102 /* AdaptiveKeyboardHomeView.swift */,
 				87AA804D2F6C99AA00764884 /* TapDotPlotView.swift */,
 				BB000000000000000000004 /* ParticipantSetupView.swift */,
 				BB000000000000000000005 /* SessionView.swift */,
 				BB000000000000000000006 /* TrialView.swift */,
+				IRK00000000000000000002 /* InAppResearchKeyboardView.swift */,
+				IRK00000000000000000004 /* KeyboardPlaygroundView.swift */,
+				IRK00000000000000000006 /* AnnotatedTypingCanvas.swift */,
 				BB000000000000000000007 /* LoggingTextField.swift */,
 				JJ000000000000000000011 /* CustomKeyboardView.swift */,
 				BB000000000000000000016 /* GaussianKeyboardView.swift */,
@@ -278,8 +226,8 @@
 		DD000000000000000000050 /* Utilities */ = {
 			isa = PBXGroup;
 			children = (
-				87AA80492F6C999900764884 /* BackendClient.swift */,
 				87AA804A2F6C999900764884 /* KeyReportExporter.swift */,
+				SKM00000000000000000002 /* SystemKeyboardMetrics.swift */,
 				BB000000000000000000009 /* Utilities.swift */,
 				BB000000000000000000015 /* GaussianKeyboardExporter.swift */,
 			);
@@ -289,23 +237,6 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		AK000000000000000000401 /* AdaptiveKeyboard */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = AK000000000000000000601 /* Build configuration list for PBXNativeTarget "AdaptiveKeyboard" */;
-			buildPhases = (
-				AK000000000000000000202 /* Frameworks */,
-				AK000000000000000000203 /* Sources */,
-				AK000000000000000000204 /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			name = AdaptiveKeyboard;
-			productName = AdaptiveKeyboard;
-			productReference = AK000000000000000000199 /* AdaptiveKeyboard.appex */;
-			productType = "com.apple.product-type.app-extension";
-		};
 		AK000000000000000000402 /* TypingResearchTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = AK000000000000000000602 /* Build configuration list for PBXNativeTarget "TypingResearchTests" */;
@@ -331,12 +262,10 @@
 				CC000000000000000000001 /* Frameworks */,
 				CC000000000000000000002 /* Sources */,
 				CC000000000000000000003 /* Resources */,
-				AK000000000000000000201 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
-				AK000000000000000000302 /* PBXTargetDependency */,
 			);
 			name = TypingResearch;
 			productName = TypingResearch;
@@ -353,9 +282,6 @@
 				LastSwiftUpdateCheck = 1500;
 				LastUpgradeCheck = 1500;
 				TargetAttributes = {
-					AK000000000000000000401 = {
-						CreatedOnToolsVersion = 16.0;
-					};
 					AK000000000000000000402 = {
 						CreatedOnToolsVersion = 16.0;
 						TestTargetID = EE000000000000000000001;
@@ -379,21 +305,12 @@
 			projectRoot = "";
 			targets = (
 				EE000000000000000000001 /* TypingResearch */,
-				AK000000000000000000401 /* AdaptiveKeyboard */,
 				AK000000000000000000402 /* TypingResearchTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		AK000000000000000000204 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				AK00000000000000000000B /* symspell_en_30k.tsv in Resources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		AK000000000000000000207 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -414,18 +331,6 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		AK000000000000000000203 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				AK000000000000000000003 /* AdaptiveKeyboardCore.swift in Sources */,
-				AK00000000000000000000E /* KeyboardEventUploader.swift in Sources */,
-				AK000000000000000000009 /* EnglishLanguageModelData.swift in Sources */,
-				AK000000000000000000004 /* KeyboardViewController.swift in Sources */,
-				AK000000000000000000007 /* EmojiKeyboardView.swift in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		AK000000000000000000206 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -439,18 +344,19 @@
 			buildActionMask = 2147483647;
 			files = (
 				AK000000000000000000001 /* AdaptiveKeyboardCore.swift in Sources */,
-				AK00000000000000000000D /* KeyboardEventUploader.swift in Sources */,
 				AK000000000000000000008 /* EnglishLanguageModelData.swift in Sources */,
-				AK000000000000000000002 /* AdaptiveKeyboardHomeView.swift in Sources */,
 				AA000000000000000000001 /* TypingResearchApp.swift in Sources */,
 				AA000000000000000000002 /* Models.swift in Sources */,
-				87AA804B2F6C999900764884 /* BackendClient.swift in Sources */,
 				87AA804C2F6C999900764884 /* KeyReportExporter.swift in Sources */,
+				SKM00000000000000000001 /* SystemKeyboardMetrics.swift in Sources */,
 				AA000000000000000000003 /* SessionManager.swift in Sources */,
 				87AA804E2F6C99AA00764884 /* TapDotPlotView.swift in Sources */,
 				AA000000000000000000004 /* ParticipantSetupView.swift in Sources */,
 				AA000000000000000000005 /* SessionView.swift in Sources */,
 				AA000000000000000000006 /* TrialView.swift in Sources */,
+				IRK00000000000000000001 /* InAppResearchKeyboardView.swift in Sources */,
+				IRK00000000000000000003 /* KeyboardPlaygroundView.swift in Sources */,
+				IRK00000000000000000005 /* AnnotatedTypingCanvas.swift in Sources */,
 				AA000000000000000000007 /* LoggingTextField.swift in Sources */,
 				AA000000000000000000008 /* DataExporter.swift in Sources */,
 				AA000000000000000000012 /* KeystrokeCleaner.swift in Sources */,
@@ -477,11 +383,6 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		AK000000000000000000302 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = AK000000000000000000401 /* AdaptiveKeyboard */;
-			targetProxy = AK000000000000000000301 /* PBXContainerItemProxy */;
-		};
 		AK000000000000000000304 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = EE000000000000000000001 /* TypingResearch */;
@@ -490,58 +391,6 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
-		AK000000000000000000701 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				APPLICATION_EXTENSION_API_ONLY = YES;
-				CODE_SIGN_ENTITLEMENTS = AdaptiveKeyboard/AdaptiveKeyboard.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = LJM55B5N37;
-				INFOPLIST_FILE = AdaptiveKeyboard/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../../Frameworks",
-				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = edu.cornell.ab3235.typingresearch.AdaptiveKeyboard;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SKIP_INSTALL = YES;
-				SUPABASE_PROJECT_URL = "https://YOUR_PROJECT_REF.supabase.co";
-				SUPABASE_PUBLISHABLE_KEY = YOUR_SUPABASE_PUBLISHABLE_KEY;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
-			};
-			name = Debug;
-		};
-		AK000000000000000000702 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				APPLICATION_EXTENSION_API_ONLY = YES;
-				CODE_SIGN_ENTITLEMENTS = AdaptiveKeyboard/AdaptiveKeyboard.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = LJM55B5N37;
-				INFOPLIST_FILE = AdaptiveKeyboard/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../../Frameworks",
-				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = edu.cornell.ab3235.typingresearch.AdaptiveKeyboard;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SKIP_INSTALL = YES;
-				SUPABASE_PROJECT_URL = "https://YOUR_PROJECT_REF.supabase.co";
-				SUPABASE_PUBLISHABLE_KEY = YOUR_SUPABASE_PUBLISHABLE_KEY;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
-			};
-			name = Release;
-		};
 		AK000000000000000000703 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -699,7 +548,6 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
-				CODE_SIGN_ENTITLEMENTS = TypingResearch/TypingResearch.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = LJM55B5N37;
@@ -707,9 +555,6 @@
 				INFOPLIST_KEY_NSCameraUsageDescription = "Capture a front-camera photo of your upper body so we can study which hand is holding the phone.";
 				INFOPLIST_KEY_NSMotionUsageDescription = "Record device motion to study how holding hand affects typing.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Attach a photo for holding-hand classification research.";
-				INFOPLIST_KEY_SharedKeychainAccessGroup = "$(AppIdentifierPrefix)edu.cornell.ab3235.typingresearch.shared";
-				INFOPLIST_KEY_SupabaseProjectURL = "$(SUPABASE_PROJECT_URL)";
-				INFOPLIST_KEY_SupabasePublishableKey = "$(SUPABASE_PUBLISHABLE_KEY)";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -722,8 +567,6 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = edu.cornell.ab3235.typingresearch;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SUPABASE_PROJECT_URL = "https://YOUR_PROJECT_REF.supabase.co";
-				SUPABASE_PUBLISHABLE_KEY = YOUR_SUPABASE_PUBLISHABLE_KEY;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -736,7 +579,6 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
-				CODE_SIGN_ENTITLEMENTS = TypingResearch/TypingResearch.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = LJM55B5N37;
@@ -744,9 +586,6 @@
 				INFOPLIST_KEY_NSCameraUsageDescription = "Capture a front-camera photo of your upper body so we can study which hand is holding the phone.";
 				INFOPLIST_KEY_NSMotionUsageDescription = "Record device motion to study how holding hand affects typing.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Attach a photo for holding-hand classification research.";
-				INFOPLIST_KEY_SharedKeychainAccessGroup = "$(AppIdentifierPrefix)edu.cornell.ab3235.typingresearch.shared";
-				INFOPLIST_KEY_SupabaseProjectURL = "$(SUPABASE_PROJECT_URL)";
-				INFOPLIST_KEY_SupabasePublishableKey = "$(SUPABASE_PUBLISHABLE_KEY)";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -759,8 +598,6 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = edu.cornell.ab3235.typingresearch;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SUPABASE_PROJECT_URL = "https://YOUR_PROJECT_REF.supabase.co";
-				SUPABASE_PUBLISHABLE_KEY = YOUR_SUPABASE_PUBLISHABLE_KEY;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -770,15 +607,6 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		AK000000000000000000601 /* Build configuration list for PBXNativeTarget "AdaptiveKeyboard" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				AK000000000000000000701 /* Debug */,
-				AK000000000000000000702 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
 		AK000000000000000000602 /* Build configuration list for PBXNativeTarget "TypingResearchTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
