@@ -36,6 +36,7 @@
 		5C11530DB156062DE045D91C /* BroadcastPickerButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EB2D7F0064416A478FA4B44 /* BroadcastPickerButton.swift */; };
 		5D00691EBDA8565A866A1DED /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DBAA31335E974F8B3264097 /* AppDelegate.swift */; };
 		62330CDBE74F0473C617C451 /* PromptBank.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90D12D913593AD612B39FFCB /* PromptBank.swift */; };
+		6532E32C74EC1B187F016B31 /* LastTouchTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF0E2ECE1EF2F8D69D4DFE37 /* LastTouchTrackerTests.swift */; };
 		66063586144E28C73717F212 /* SessionNaming.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6926609AF9D9BBE9B36DBBF /* SessionNaming.swift */; };
 		66200E1FD962A14C35478E25 /* CursorSampleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9F7A6B94C4760D364A58E9F /* CursorSampleTests.swift */; };
 		6CE324EA3042247149637162 /* TouchOverlayWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = E97E678E248C024D7100C1D9 /* TouchOverlayWindow.swift */; };
@@ -54,10 +55,12 @@
 		9F8DA4A6B8A315518C87A424 /* Demographics.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAB3271F9CCF6B8F9FD3C99 /* Demographics.swift */; };
 		A18F2FBF006E9CB90ADCA075 /* SessionRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A594BB5EF449CDE0A7B3EDBA /* SessionRecorder.swift */; };
 		A63BD70029EAFD701999CEFE /* PromptBank.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90D12D913593AD612B39FFCB /* PromptBank.swift */; };
+		A6DC76609C304E85DE9F3791 /* LastTouchTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2F104FB7829A8FF76A91AD0 /* LastTouchTracker.swift */; };
 		B2A8E378BEA9D1E528A53BEC /* IMURecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAF87907DC610AE003B85F1A /* IMURecorder.swift */; };
 		BAA61A0D66B31F54EB319567 /* DeviceInfoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AEC7148A0948F2A2DCA3A6B /* DeviceInfoTests.swift */; };
 		BB8CF5C8D9A2FB615F47D355 /* FolderBackupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02A85B0A44037A18A4F8D796 /* FolderBackupService.swift */; };
 		BC4ECEC74B7597EC4A2719AF /* StudyProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EA536AD6311FB101C5DB8FA /* StudyProtocol.swift */; };
+		BFC067D2BB69F9F6882308AC /* LastTouchTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2F104FB7829A8FF76A91AD0 /* LastTouchTracker.swift */; };
 		C07AD2964C40D3D18B52120A /* PromptBankTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 465207665FE5228B3E8DDEDC /* PromptBankTests.swift */; };
 		C208A8E0CAE50629817435F2 /* PosturePredictor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77503C2EBBB89111DED29D91 /* PosturePredictor.swift */; };
 		C4AA9E92D621B00F1203683E /* RecordingSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE28C552AF0598286CB03B1C /* RecordingSession.swift */; };
@@ -142,11 +145,13 @@
 		C8B04BCFCB8E13345BDF5BB9 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		CE28C552AF0598286CB03B1C /* RecordingSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingSession.swift; sourceTree = "<group>"; };
 		D1571B3726B805236DC3DC48 /* UploadStatusStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadStatusStore.swift; sourceTree = "<group>"; };
+		D2F104FB7829A8FF76A91AD0 /* LastTouchTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LastTouchTracker.swift; sourceTree = "<group>"; };
 		D3675FA5308F218C14697F7D /* KeystrokeLoggerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeystrokeLoggerTests.swift; sourceTree = "<group>"; };
 		D45D11A20FB039FAC92A7C16 /* SampleHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleHandler.swift; sourceTree = "<group>"; };
 		D9F7A6B94C4760D364A58E9F /* CursorSampleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorSampleTests.swift; sourceTree = "<group>"; };
 		E4D0438B5B4CE8E22A9988A9 /* SessionListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionListView.swift; sourceTree = "<group>"; };
 		E97E678E248C024D7100C1D9 /* TouchOverlayWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchOverlayWindow.swift; sourceTree = "<group>"; };
+		EF0E2ECE1EF2F8D69D4DFE37 /* LastTouchTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LastTouchTrackerTests.swift; sourceTree = "<group>"; };
 		F6926609AF9D9BBE9B36DBBF /* SessionNaming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionNaming.swift; sourceTree = "<group>"; };
 		FAF87907DC610AE003B85F1A /* IMURecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IMURecorder.swift; sourceTree = "<group>"; };
 		FD0B9DDA960CCABF70EC9D0C /* BroadcastShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BroadcastShared.swift; sourceTree = "<group>"; };
@@ -182,6 +187,7 @@
 				02A85B0A44037A18A4F8D796 /* FolderBackupService.swift */,
 				FAF87907DC610AE003B85F1A /* IMURecorder.swift */,
 				9F550F7F8960C6457FBB93AE /* KeystrokeLogger.swift */,
+				D2F104FB7829A8FF76A91AD0 /* LastTouchTracker.swift */,
 				14540511074886FD93272AC4 /* ParticipantStore.swift */,
 				77503C2EBBB89111DED29D91 /* PosturePredictor.swift */,
 				6203464082EDED59167C4413 /* RecentKeysTracker.swift */,
@@ -203,6 +209,7 @@
 				D9F7A6B94C4760D364A58E9F /* CursorSampleTests.swift */,
 				4AEC7148A0948F2A2DCA3A6B /* DeviceInfoTests.swift */,
 				D3675FA5308F218C14697F7D /* KeystrokeLoggerTests.swift */,
+				EF0E2ECE1EF2F8D69D4DFE37 /* LastTouchTrackerTests.swift */,
 				465207665FE5228B3E8DDEDC /* PromptBankTests.swift */,
 				5B14128D7F05121FD1CB99A5 /* SessionMetaTests.swift */,
 				8216C60AE087BA84FEFBD8B8 /* SessionNamingTests.swift */,
@@ -434,6 +441,7 @@
 				CA0934742F46D2DFDD2930A5 /* HoldingHand.swift in Sources */,
 				B2A8E378BEA9D1E528A53BEC /* IMURecorder.swift in Sources */,
 				400A12386D91E8228CD67615 /* KeystrokeLogger.swift in Sources */,
+				A6DC76609C304E85DE9F3791 /* LastTouchTracker.swift in Sources */,
 				7B026E8CA8BDC53124DFEB37 /* LoggingTextView.swift in Sources */,
 				095009A849A23E792941A492 /* NotepadView.swift in Sources */,
 				D42FE6084EBBE060F24F0D7F /* ParticipantSetupView.swift in Sources */,
@@ -485,6 +493,8 @@
 				DBFC04654F7D68CEA3B2EB99 /* HoldingHand.swift in Sources */,
 				00612607082A28D23DF08DEB /* KeystrokeLogger.swift in Sources */,
 				F48E4BBEE6D3737379E40FEB /* KeystrokeLoggerTests.swift in Sources */,
+				BFC067D2BB69F9F6882308AC /* LastTouchTracker.swift in Sources */,
+				6532E32C74EC1B187F016B31 /* LastTouchTrackerTests.swift in Sources */,
 				62330CDBE74F0473C617C451 /* PromptBank.swift in Sources */,
 				C07AD2964C40D3D18B52120A /* PromptBankTests.swift in Sources */,
 				5688C04403EAC6FEA51DD4EB /* SessionMeta.swift in Sources */,

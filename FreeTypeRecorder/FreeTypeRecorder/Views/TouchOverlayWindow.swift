@@ -37,8 +37,15 @@ final class TouchOverlayWindow: UIWindow {
         super.sendEvent(event)
 
         guard RippleController.shared.isRecording, let touches = event.allTouches else { return }
-        for touch in touches where touch.phase == .began {
-            dotView.addDot(at: touch.location(in: self))
+        for touch in touches {
+            let location = touch.location(in: self)
+            // Every phase feeds the tracker so a caret move can be attributed
+            // to the touch that caused it; only touch-downs get a dot, which
+            // is what the screen recording needs.
+            LastTouchTracker.shared.record(point: location, phase: touch.phase)
+            if touch.phase == .began {
+                dotView.addDot(at: location)
+            }
         }
     }
 }
