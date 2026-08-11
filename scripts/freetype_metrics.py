@@ -124,3 +124,85 @@ def replay(events):
         ))
 
     return replayed, warnings
+
+
+@dataclass
+class WeightedOp:
+    op: str          # "match" | "sub" | "omit" | "ins"
+    typed: str       # character from the typed string, or "" for "ins"
+    intended: str    # character from the intended string, or "" for "omit"
+    weight: float
+
+
+def all_optimal_alignments(a, b, cap=MAX_ALIGNMENTS):
+    """All minimum-cost alignments of a (typed) against b (intended).
+
+    Returns (msd, alignments). Each alignment is a list of
+    (op, typed_char, intended_char) tuples in left-to-right order, where a
+    missing character on either side is "".
+
+    Enumerating every optimal alignment - rather than picking one - is the
+    Wobbrock & Myers (2006) technique for handling the fact that a single
+    repair often has several equally valid readings.
+    """
+    n, m = len(a), len(b)
+    dist = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n + 1):
+        dist[i][0] = i
+    for j in range(m + 1):
+        dist[0][j] = j
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            cost = 0 if a[i - 1] == b[j - 1] else 1
+            dist[i][j] = min(
+                dist[i - 1][j] + 1,
+                dist[i][j - 1] + 1,
+                dist[i - 1][j - 1] + cost,
+            )
+
+    alignments = []
+
+    def walk(i, j, acc):
+        if len(alignments) >= cap:
+            return
+        if i == 0 and j == 0:
+            alignments.append(list(reversed(acc)))
+            return
+        if i > 0 and j > 0:
+            cost = 0 if a[i - 1] == b[j - 1] else 1
+            if dist[i][j] == dist[i - 1][j - 1] + cost:
+                op = "match" if cost == 0 else "sub"
+                walk(i - 1, j - 1, acc + [(op, a[i - 1], b[j - 1])])
+        if i > 0 and dist[i][j] == dist[i - 1][j] + 1:
+            walk(i - 1, j, acc + [("omit", a[i - 1], "")])
+        if j > 0 and dist[i][j] == dist[i][j - 1] + 1:
+            walk(i, j - 1, acc + [("ins", "", b[j - 1])])
+
+    walk(n, m, [])
+    return dist[n][m], alignments
+
+
+def weighted_ops(a, b, cap=MAX_ALIGNMENTS):
+    """Fractionally-weighted operations across all optimal alignments.
+
+    Each operation is weighted by 1/(number of alignments), so an ambiguous
+    repair contributes partial credit to each reading rather than forcing a
+    single guess. Returns (ops, cap_hit).
+    """
+    _, alignments = all_optimal_alignments(a, b, cap=cap)
+    if not alignments:
+        return [], False
+
+    cap_hit = len(alignments) >= cap
+    weight = 1.0 / len(alignments)
+
+    tally = {}
+    for alignment in alignments:
+        for op, typed, intended in alignment:
+            key = (op, typed, intended)
+            tally[key] = tally.get(key, 0.0) + weight
+
+    return [
+        WeightedOp(op=op, typed=typed, intended=intended, weight=value)
+        for (op, typed, intended), value in tally.items()
+    ], cap_hit

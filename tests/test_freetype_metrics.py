@@ -132,3 +132,45 @@ def test_read_events_parses_csv(tmp_path):
     assert second.range_length == 1
     assert second.resulting_text_length == 11
     assert second.inter_key_interval_ms == 120.5
+
+
+def test_all_optimal_alignments_matches_published_example():
+    # Wobbrock & Myers (2006), Figures 3-4: P="quickly", T="qucehkly".
+    # MSD = 3 with exactly 4 optimal alignments.
+    msd, alignments = fm.all_optimal_alignments("quickly", "qucehkly")
+    assert msd == 3
+    assert len(alignments) == 4
+
+
+def test_weighted_ops_reproduces_published_fractional_weights():
+    # Same example: 3 of the 4 alignments substitute for "i", one omits it.
+    # The paper reports 0.75 substitution / 0.25 omission for "i".
+    ops, cap_hit = fm.weighted_ops("quickly", "qucehkly")
+    assert cap_hit is False
+    sub_i = sum(o.weight for o in ops if o.op == "sub" and o.typed == "i")
+    omit_i = sum(o.weight for o in ops if o.op == "omit" and o.typed == "i")
+    assert round(sub_i, 6) == 0.75
+    assert round(omit_i, 6) == 0.25
+
+
+def test_weighted_ops_on_unambiguous_repair():
+    # bipe -> bike: one substitution p->k, two correct characters retained.
+    ops, cap_hit = fm.weighted_ops("ipe", "ike")
+    assert cap_hit is False
+    subs = [o for o in ops if o.op == "sub"]
+    assert len(subs) == 1
+    assert subs[0].typed == "p"
+    assert subs[0].intended == "k"
+    assert subs[0].weight == 1.0
+    assert round(sum(o.weight for o in ops if o.op == "match"), 6) == 2.0
+
+
+def test_weighted_ops_normalises_across_alignments():
+    _, alignments = fm.all_optimal_alignments("quickly", "qucehkly")
+    ops, _ = fm.weighted_ops("quickly", "qucehkly")
+    # Optimal alignments need not all be the same length: three of these four
+    # have 8 columns and one has 9. Total weight must therefore equal the mean
+    # column count, not any single alignment's length.
+    expected = sum(len(a) for a in alignments) / len(alignments)
+    assert round(expected, 6) == 8.25
+    assert round(sum(o.weight for o in ops), 6) == round(expected, 6)
