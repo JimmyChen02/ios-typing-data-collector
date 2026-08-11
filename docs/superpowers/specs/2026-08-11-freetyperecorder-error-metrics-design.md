@@ -65,8 +65,15 @@ cursor = range_start + len(replacement_text)
 Operate on a UTF-16 code-unit representation so indices match the logged NSRanges.
 Emoji or other non-BMP input would otherwise silently misalign every subsequent index.
 
-**Invariant:** replayed length must equal `resulting_text_length` on every row. A
-mismatch means the replay or the logger is wrong. Assert it; do not silently continue.
+**Invariant:** replayed length must equal `resulting_text_length` on every row — but
+only for ASCII buffers. `resulting_text_length` is Swift's `String.count` (grapheme
+clusters) while `range_start`/`range_length` are UTF-16 code units, and the two
+legitimately disagree once the buffer contains non-BMP input (emoji, etc.), so the
+check cannot be a blanket assertion. For an ASCII buffer, checking is exact and a
+mismatch is logged as a per-event warning. Once the buffer goes non-ASCII, the
+invariant is no longer checked and the module emits a single warning per session (not
+one per subsequent event) noting the divergence and the index where it first
+appeared.
 
 Output per event: buffer before, buffer after, cursor before, cursor after.
 

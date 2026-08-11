@@ -81,12 +81,15 @@ def replay(events):
     slicing is done on UTF-16-LE bytes. The resulting_text_length invariant is
     only checked for ASCII buffers, because that column is Swift's String.count
     (grapheme clusters) while the ranges are UTF-16 - the two disagree on
-    non-BMP input.
+    non-BMP input. Once the buffer goes non-ASCII, a single warning is emitted
+    (not one per subsequent event) since every later event would otherwise be
+    flagged for the same, already-known reason.
     """
     replayed = []
     warnings = []
     buffer_bytes = b""
     cursor = 0
+    non_ascii_warned = False
 
     for index, event in enumerate(events):
         before = _from_u16(buffer_bytes)
@@ -105,10 +108,11 @@ def replay(events):
                 f"event {index}: length mismatch - replayed {len(after)}, "
                 f"logged {event.resulting_text_length}"
             )
-        elif not after.isascii():
+        elif not after.isascii() and not non_ascii_warned:
             warnings.append(
                 f"event {index}: non-ASCII buffer, length invariant not checked"
             )
+            non_ascii_warned = True
 
         replayed.append(ReplayedEvent(
             event=event,
