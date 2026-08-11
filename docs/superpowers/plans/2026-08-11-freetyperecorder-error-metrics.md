@@ -317,11 +317,15 @@ def test_weighted_ops_on_unambiguous_repair():
     assert round(sum(o.weight for o in ops if o.op == "match"), 6) == 2.0
 
 
-def test_weighted_ops_weights_sum_to_alignment_length():
+def test_weighted_ops_normalises_across_alignments():
+    _, alignments = fm.all_optimal_alignments("quickly", "qucehkly")
     ops, _ = fm.weighted_ops("quickly", "qucehkly")
-    # Every alignment of these strings has the same number of columns (8),
-    # and total weight across all ops must equal that column count.
-    assert round(sum(o.weight for o in ops), 6) == 8.0
+    # Optimal alignments need not all be the same length: three of these four
+    # have 8 columns and one has 9. Total weight must therefore equal the mean
+    # column count, not any single alignment's length.
+    expected = sum(len(a) for a in alignments) / len(alignments)
+    assert round(expected, 6) == 8.25
+    assert round(sum(o.weight for o in ops), 6) == round(expected, 6)
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
