@@ -5,6 +5,12 @@ TypingResearch has two parts:
 - an iPhone app for running typing studies
 - a `scripts/` folder for cleaning exports, rendering visuals, and running post-study analyses
 
+A companion iPhone app, [**FreeTypeRecorder**](FreeTypeRecorder/README.md), runs
+free-typing posture sessions with screen, camera-silhouette, IMU, and keystroke
+recording, and uploads them to Google Drive. See
+[`FreeTypeRecorder/README.md`](FreeTypeRecorder/README.md) for setup and how to
+run a study.
+
 ## iOS App
 
 The app runs timed iPhone typing sessions and records:
