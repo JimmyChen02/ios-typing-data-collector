@@ -15,6 +15,7 @@ final class KeystrokeLogger {
     struct Event {
         let tMs: Double
         let eventType: KeystrokeEventType
+        let replacedText: String
         let replacementText: String
         let rangeStart: Int
         let rangeLength: Int
@@ -36,6 +37,7 @@ final class KeystrokeLogger {
 
     func logEvent(
         type: KeystrokeEventType,
+        replacedText: String,
         replacementText: String,
         rangeStart: Int,
         rangeLength: Int,
@@ -48,6 +50,7 @@ final class KeystrokeLogger {
         events.append(Event(
             tMs: now.timeIntervalSince(startDate) * 1000.0,
             eventType: type,
+            replacedText: replacedText,
             replacementText: replacementText,
             rangeStart: rangeStart,
             rangeLength: rangeLength,
@@ -63,10 +66,11 @@ final class KeystrokeLogger {
         defer { events.removeAll() }
         guard !events.isEmpty else { return nil }
 
-        var csv = "t_ms,event_type,replacement_text,range_start,range_length,resulting_text_length,inter_key_interval_ms\n"
+        var csv = "t_ms,event_type,replaced_text,replacement_text,range_start,range_length,resulting_text_length,inter_key_interval_ms\n"
         for event in events {
             csv += "\(String(format: "%.3f", event.tMs)),\(event.eventType.rawValue),"
-            csv += "\(Self.csvEscape(event.replacementText)),\(event.rangeStart),\(event.rangeLength),"
+            csv += "\(Self.csvEscape(event.replacedText)),\(Self.csvEscape(event.replacementText)),"
+            csv += "\(event.rangeStart),\(event.rangeLength),"
             csv += "\(event.resultingTextLength),\(String(format: "%.3f", event.interKeyIntervalMs))\n"
         }
 

@@ -60,10 +60,15 @@ struct LoggingTextView: UIViewRepresentable {
             }
 
             let currentText = (textView.text as NSString)
+            // Previously computed only inside the .replace branch below and
+            // then discarded; the log needs it for every event so deletes
+            // record which character went away and a replay is checkable.
+            let replacedText = currentText.substring(with: range)
             let resultingLength = currentText.replacingCharacters(in: range, with: replacementText).count
 
             KeystrokeLogger.shared.logEvent(
                 type: eventType,
+                replacedText: replacedText,
                 replacementText: replacementText,
                 rangeStart: range.location,
                 rangeLength: range.length,
@@ -74,10 +79,9 @@ struct LoggingTextView: UIViewRepresentable {
                 RecentKeysTracker.shared.record("⌫")
             case .replace:
                 // A keyboard substitution (autocorrect, QuickType pick, smart
-                // punctuation): show it as one [old→new] token. `currentText`
-                // still holds the pre-edit text here, so `range` is the old.
+                // punctuation): show it as one [old→new] token.
                 RecentKeysTracker.shared.recordReplacement(
-                    old: currentText.substring(with: range),
+                    old: replacedText,
                     new: replacementText
                 )
             case .insert, .paste:

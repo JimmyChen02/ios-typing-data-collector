@@ -90,6 +90,7 @@ targets:
       - path: FreeTypeRecorderTests
       - path: FreeTypeRecorder/Logic
       - path: FreeTypeRecorder/Models/HoldingHand.swift
+      - path: FreeTypeRecorder/Services/KeystrokeLogger.swift
     settings:
       base:
         DEVELOPMENT_TEAM: P2LUTF8N6F
