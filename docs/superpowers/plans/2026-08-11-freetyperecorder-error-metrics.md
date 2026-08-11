@@ -248,7 +248,7 @@ def replay(events):
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `$PY -m pytest tests/test_freetype_metrics.py -v`
-Expected: PASS, 4 passed
+Expected: PASS, 6 passed
 
 - [ ] **Step 5: Commit**
 
@@ -423,7 +423,7 @@ def weighted_ops(a, b, cap=MAX_ALIGNMENTS):
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `$PY -m pytest tests/test_freetype_metrics.py -v`
-Expected: PASS, 8 passed
+Expected: PASS, 10 passed
 
 - [ ] **Step 5: Commit**
 
@@ -625,7 +625,7 @@ def _replaces_trailing_word(item):
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `$PY -m pytest tests/test_freetype_metrics.py -v`
-Expected: PASS, 13 passed
+Expected: PASS, 15 passed
 
 - [ ] **Step 5: Commit**
 
@@ -911,7 +911,7 @@ def extract_episodes(replayed, labels):
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `$PY -m pytest tests/test_freetype_metrics.py -v`
-Expected: PASS, 19 passed
+Expected: PASS, 21 passed
 
 - [ ] **Step 5: Commit**
 
@@ -1048,7 +1048,7 @@ def mark_reverts(replayed, episodes):
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `$PY -m pytest tests/test_freetype_metrics.py -v`
-Expected: PASS, 21 passed
+Expected: PASS, 23 passed
 
 - [ ] **Step 5: Commit**
 
@@ -1271,7 +1271,7 @@ def accumulate(replayed, labels, episodes):
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `$PY -m pytest tests/test_freetype_metrics.py -v`
-Expected: PASS, 27 passed
+Expected: PASS, 29 passed
 
 - [ ] **Step 5: Commit**
 
@@ -1422,7 +1422,7 @@ def estimate_inf(final_text, vocab):
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `$PY -m pytest tests/test_freetype_metrics.py -v`
-Expected: PASS, 33 passed
+Expected: PASS, 35 passed
 
 - [ ] **Step 5: Commit**
 
@@ -1602,7 +1602,7 @@ def compute_metrics(counts, inf_lower_bound, episodes, total_keystrokes,
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `$PY -m pytest tests/test_freetype_metrics.py -v`
-Expected: PASS, 37 passed
+Expected: PASS, 39 passed
 
 - [ ] **Step 5: Commit**
 
@@ -1832,7 +1832,7 @@ if __name__ == "__main__":
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `$PY -m pytest tests/test_freetype_metrics.py -v`
-Expected: PASS, 40 passed
+Expected: PASS, 42 passed
 
 - [ ] **Step 5: Verify the CLI runs end to end**
 
@@ -1896,7 +1896,7 @@ Design: `docs/superpowers/specs/2026-08-11-freetyperecorder-error-metrics-design
 - [ ] **Step 2: Run the full test suite**
 
 Run: `$PY -m pytest tests/test_freetype_metrics.py -v`
-Expected: PASS, 40 passed
+Expected: PASS, 42 passed
 
 - [ ] **Step 3: Commit**
 
