@@ -74,13 +74,24 @@ struct LoggingTextView: UIViewRepresentable {
             let replacedText = currentText.substring(with: range)
             let resultingLength = currentText.replacingCharacters(in: range, with: replacementText).count
 
+            // Read both BEFORE returning true, while the pre-edit state is
+            // still current. The system never substitutes into a selection, so
+            // a non-zero selection means the user typed over their own
+            // highlight; marked text means an inline prediction was pending,
+            // which is what tells a space-accepted prediction apart from an
+            // autocorrect fired by the same space.
+            let selectedLengthBefore = textView.selectedRange.length
+            let markedTextBefore = textView.markedTextRange != nil
+
             KeystrokeLogger.shared.logEvent(
                 type: eventType,
                 replacedText: replacedText,
                 replacementText: replacementText,
                 rangeStart: range.location,
                 rangeLength: range.length,
-                resultingTextLength: resultingLength
+                resultingTextLength: resultingLength,
+                selectedLengthBefore: selectedLengthBefore,
+                markedTextBefore: markedTextBefore
             )
             switch eventType {
             case .delete:

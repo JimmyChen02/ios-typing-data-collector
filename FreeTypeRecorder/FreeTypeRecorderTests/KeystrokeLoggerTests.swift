@@ -82,6 +82,37 @@ final class KeystrokeLoggerTests: XCTestCase {
         XCTAssertTrue(csv.contains("\"a,b\""), "comma-bearing field must be quoted: \(csv)")
     }
 
+    func test_selectionAndMarkedTextAreRecorded() throws {
+        // These two columns are what let the offline labeller tell a manual
+        // overtype and an accepted inline prediction apart from autocorrect.
+        let csv = try writeCSV {
+            KeystrokeLogger.shared.logEvent(
+                type: .replace, replacedText: "cat", replacementText: "dog",
+                rangeStart: 0, rangeLength: 3, resultingTextLength: 3,
+                selectedLengthBefore: 3, markedTextBefore: true
+            )
+        }
+        let lines = csv.split(separator: "\n")
+        let header = fields(ofRow: lines[0])
+        let row = fields(ofRow: lines[1])
+        XCTAssertEqual(row[header.firstIndex(of: "selected_length_before")!], "3")
+        XCTAssertEqual(row[header.firstIndex(of: "marked_text_before")!], "1")
+    }
+
+    func test_noSelectionAndNoMarkedTextWriteZero() throws {
+        let csv = try writeCSV {
+            KeystrokeLogger.shared.logEvent(
+                type: .insert, replacedText: "", replacementText: "a",
+                rangeStart: 0, rangeLength: 0, resultingTextLength: 1
+            )
+        }
+        let lines = csv.split(separator: "\n")
+        let header = fields(ofRow: lines[0])
+        let row = fields(ofRow: lines[1])
+        XCTAssertEqual(row[header.firstIndex(of: "selected_length_before")!], "0")
+        XCTAssertEqual(row[header.firstIndex(of: "marked_text_before")!], "0")
+    }
+
     func test_noEventsWritesNoFile() {
         let url = tempURL()
         KeystrokeLogger.shared.start()

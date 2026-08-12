@@ -21,6 +21,14 @@ final class KeystrokeLogger {
         let rangeLength: Int
         let resultingTextLength: Int
         let interKeyIntervalMs: Double
+        /// Length of the selection when the change fired. Non-zero means the
+        /// user selected text and typed over it — the system never substitutes
+        /// into a selection, so this separates manual edits with certainty.
+        let selectedLengthBefore: Int
+        /// Whether an inline prediction was pending (marked text) when the
+        /// change fired. The mechanical tell for a prediction accepted with
+        /// space, which otherwise looks exactly like autocorrect.
+        let markedTextBefore: Bool
     }
 
     private var events: [Event] = []
@@ -41,7 +49,9 @@ final class KeystrokeLogger {
         replacementText: String,
         rangeStart: Int,
         rangeLength: Int,
-        resultingTextLength: Int
+        resultingTextLength: Int,
+        selectedLengthBefore: Int = 0,
+        markedTextBefore: Bool = false
     ) {
         guard let startDate else { return }
         let now = Date()
@@ -55,7 +65,9 @@ final class KeystrokeLogger {
             rangeStart: rangeStart,
             rangeLength: rangeLength,
             resultingTextLength: resultingTextLength,
-            interKeyIntervalMs: interKeyIntervalMs
+            interKeyIntervalMs: interKeyIntervalMs,
+            selectedLengthBefore: selectedLengthBefore,
+            markedTextBefore: markedTextBefore
         ))
     }
 
@@ -66,12 +78,13 @@ final class KeystrokeLogger {
         defer { events.removeAll() }
         guard !events.isEmpty else { return nil }
 
-        var csv = "t_ms,event_type,replaced_text,replacement_text,range_start,range_length,resulting_text_length,inter_key_interval_ms\n"
+        var csv = "t_ms,event_type,replaced_text,replacement_text,range_start,range_length,resulting_text_length,inter_key_interval_ms,selected_length_before,marked_text_before\n"
         for event in events {
             csv += "\(String(format: "%.3f", event.tMs)),\(event.eventType.rawValue),"
             csv += "\(Self.csvEscape(event.replacedText)),\(Self.csvEscape(event.replacementText)),"
             csv += "\(event.rangeStart),\(event.rangeLength),"
-            csv += "\(event.resultingTextLength),\(String(format: "%.3f", event.interKeyIntervalMs))\n"
+            csv += "\(event.resultingTextLength),\(String(format: "%.3f", event.interKeyIntervalMs)),"
+            csv += "\(event.selectedLengthBefore),\(event.markedTextBefore ? 1 : 0)\n"
         }
 
         do {
