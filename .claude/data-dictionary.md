@@ -83,6 +83,8 @@ The loggers start together, so the CSV streams use a common session-relative
 | `range_length` | int | UTF-16 length replaced |
 | `resulting_text_length` | int | Swift character count after the edit, not a UTF-16 length |
 | `inter_key_interval_ms` | float | Milliseconds since the previous edit; 0 for the first |
+| `selected_length_before` | int | Selection length when the change fired. Non-zero means the user highlighted their own text and typed over it — the system never substitutes into a selection |
+| `marked_text_before` | 0/1 | Whether marked text (a pending inline prediction) existed when the change fired |
 
 Rows form a complete edit script. Replay them from an empty string using UTF-16
 offsets and compare the result with `final_text.txt`. For each row, the text at
@@ -128,16 +130,31 @@ become stranded and its threshold can be refined offline.
 | `drag` | `touch_phase == "moved"`; collapse contiguous rows into one episode |
 | `keyboard_gesture` | No recent in-app touch and no text change; typically the space-bar trackpad gesture |
 
-**Keystroke `substitution_kind`**, for `event_type == "replace"`:
+**Keystroke `substitution_kind`** — implemented in
+`scripts/substitution_metrics.py`, which writes `keystrokes_labeled.csv`. It is
+**not** present in the `keystrokes.csv` that uploads to Drive; run the script on
+a downloaded session to add it.
 
-| Value | Starting rule |
-|---|---|
-| `sentence_caps` | One character on each side, same letter ignoring case |
-| `smart_punctuation` | Both sides contain punctuation only |
-| `autocorrect` | Replacement ends in a delimiter and replaced text is a near-neighbor |
-| `quicktype_pick` | Full-word replacement that is not a near-neighbor of the replaced prefix |
+Applies to `event_type` of both `replace` **and** `paste`. A suggestion tap often
+inserts the completion at a collapsed caret (`range_length == 0`, multi-character),
+which the shape classifier calls `paste` even though nothing was pasted.
 
-These are starting rules and should be validated and refined against real data.
+| Value | Rule | Certain |
+|---|---|---|
+| `manual_overtype` | `selected_length_before > 0` — the system never substitutes into a selection | yes |
+| `sentence_caps` | One character each side, same letter ignoring case | yes |
+| `smart_punct` | Both sides punctuation only | yes |
+| `quicktype_pick` | No keystroke within 200 ms before it; autocorrect and inline prediction both need one, so this can only be a bar tap | yes |
+| `inline_prediction` | `marked_text_before == 1`; else the new word extends the typed prefix (`tomo` → `tomorrow`) | mechanical, else inferred |
+| `autocorrect` | Followed a delimiter keystroke and the new word does *not* extend the old (`teh` → `the`) | inferred |
+| `unknown` | Fallthrough | — |
+
+The first four are certain. Only `autocorrect` vs `inline_prediction` is inferred,
+and only when `marked_text_before` is 0 — both are accepted by the same space
+keystroke, so they split on completion-versus-correction.
+
+The script warns when an `ac_off` session contains `autocorrect` rows, which means
+the Settings switch was not actually flipped.
 
 ## Platform limits
 
