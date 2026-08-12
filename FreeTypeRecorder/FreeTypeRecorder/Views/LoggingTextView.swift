@@ -43,6 +43,14 @@ struct LoggingTextView: UIViewRepresentable {
     final class Coordinator: NSObject, UITextViewDelegate {
         private let text: Binding<String>
 
+        /// When the last text edit was observed. A timestamp rather than a
+        /// one-shot flag: UIKit delivers no selection change for a same-length
+        /// edit, which would strand a latch and mislabel a later caret move.
+        private var lastTextChangeAt: Date?
+
+        private var prevSelStart = 0
+        private var prevSelLength = 0
+
         init(text: Binding<String>) {
             self.text = text
         }
@@ -60,10 +68,15 @@ struct LoggingTextView: UIViewRepresentable {
             }
 
             let currentText = (textView.text as NSString)
+            // Previously computed only inside the .replace branch below and
+            // then discarded; the log needs it for every event so deletes
+            // record which character went away and a replay is checkable.
+            let replacedText = currentText.substring(with: range)
             let resultingLength = currentText.replacingCharacters(in: range, with: replacementText).count
 
             KeystrokeLogger.shared.logEvent(
                 type: eventType,
+                replacedText: replacedText,
                 replacementText: replacementText,
                 rangeStart: range.location,
                 rangeLength: range.length,
@@ -74,15 +87,18 @@ struct LoggingTextView: UIViewRepresentable {
                 RecentKeysTracker.shared.record("⌫")
             case .replace:
                 // A keyboard substitution (autocorrect, QuickType pick, smart
-                // punctuation): show it as one [old→new] token. `currentText`
-                // still holds the pre-edit text here, so `range` is the old.
+                // punctuation): show it as one [old→new] token.
                 RecentKeysTracker.shared.recordReplacement(
-                    old: currentText.substring(with: range),
+                    old: replacedText,
                     new: replacementText
                 )
             case .insert, .paste:
                 RecentKeysTracker.shared.record(replacementText)
             }
+
+            // Consumed by the textViewDidChangeSelection that UIKit delivers
+            // once this edit is applied.
+            lastTextChangeAt = Date()
 
             // Let UIKit apply the edit itself — this is purely an observer.
             // Returning false and reassigning `text` ourselves would replace
@@ -94,6 +110,64 @@ struct LoggingTextView: UIViewRepresentable {
 
         func textViewDidChange(_ textView: UITextView) {
             text.wrappedValue = textView.text
+        }
+
+        func textViewDidChangeSelection(_ textView: UITextView) {
+            let range = textView.selectedRange
+            let msSinceLastTextChange = lastTextChangeAt.map { Date().timeIntervalSince($0) * 1000.0 }
+
+            var caretX: Double?
+            var caretY: Double?
+            var caretH: Double?
+            if let selection = textView.selectedTextRange {
+                let rect = textView.caretRect(for: selection.start)
+                // caretRect can return a null/infinite rect while the layout
+                // is in flux; an empty column beats a garbage coordinate. A
+                // caret is never legitimately zero-height, so reject
+                // CGRect.zero too rather than writing three fake 0.000s.
+                if rect.origin.x.isFinite, rect.origin.y.isFinite, rect.height.isFinite, rect.height > 0 {
+                    caretX = Double(rect.origin.x)
+                    caretY = Double(rect.origin.y)
+                    caretH = Double(rect.height)
+                }
+            }
+
+            var touchX: Double?
+            var touchY: Double?
+            var touchPhase: String?
+            var tapCount: Int?
+            var touchAgeMs: Double?
+            if let touch = LastTouchTracker.shared.latest {
+                // Phase/age need no coordinate space, so populate them even
+                // when there's no window to convert the point into.
+                touchPhase = touch.phase
+                tapCount = touch.tapCount
+                touchAgeMs = Date().timeIntervalSince(touch.date) * 1000.0
+                if let window = textView.window {
+                    let local = textView.convert(touch.point, from: window)
+                    touchX = Double(local.x)
+                    touchY = Double(local.y)
+                }
+            }
+
+            CursorLogger.shared.log(CursorSample(
+                selStart: range.location,
+                selLength: range.length,
+                prevSelStart: prevSelStart,
+                prevSelLength: prevSelLength,
+                caretX: caretX, caretY: caretY, caretH: caretH,
+                touchX: touchX, touchY: touchY,
+                touchPhase: touchPhase, tapCount: tapCount,
+                touchAgeMs: touchAgeMs,
+                msSinceLastTextChange: msSinceLastTextChange,
+                // NSString length, not String.count: selectedRange is a
+                // UTF-16 offset, so the length must be in the same units for
+                // the two to be comparable.
+                textLength: (textView.text as NSString).length
+            ))
+
+            prevSelStart = range.location
+            prevSelLength = range.length
         }
     }
 }
