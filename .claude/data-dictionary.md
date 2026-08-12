@@ -50,3 +50,99 @@ iOS app (`DataExporter`); **cleaning** columns are appended by
 
 Filename convention: `<name>_cleaned_t<thr>[_s<sigma>].csv` encodes the cleaning
 thresholds used (e.g. `_cleaned_t1.0_s2.5.csv`).
+
+---
+
+# Data Dictionary — FreeTypeRecorder Session Files
+
+A different app and schema from the TypingResearch export above. Free-typing
+sessions have no target word, so they have no correctness columns. One session
+directory (`Documents/Sessions/<hand>/<name>-<n>/`) contains:
+
+| File | Contents |
+|---|---|
+| `keystrokes.csv` | Every text-change event |
+| `cursor.csv` | Every caret or selection change |
+| `imu.csv` | Device motion |
+| `final_text.txt` | The text the participant ended with (UTF-8) |
+| `session_meta.json` | Participant, hand, device, and prompt; written at session start |
+| `face.mov`, `screen.mov`, `seg_images/` | Video and segmented frames |
+
+The loggers start together, so the CSV streams use a common session-relative
+`t_ms` origin and can be joined by nearest timestamp.
+
+## `keystrokes.csv`
+
+| Column | Type | Meaning |
+|---|---|---|
+| `t_ms` | float | Milliseconds since session start |
+| `event_type` | str | `insert`, `delete`, `replace`, or `paste` |
+| `replaced_text` | str | Text replaced by this edit; empty for a plain insert |
+| `replacement_text` | str | Text inserted by this edit; empty for a delete |
+| `range_start` | int | UTF-16 offset where the edit applied |
+| `range_length` | int | UTF-16 length replaced |
+| `resulting_text_length` | int | Swift character count after the edit, not a UTF-16 length |
+| `inter_key_interval_ms` | float | Milliseconds since the previous edit; 0 for the first |
+
+Rows form a complete edit script. Replay them from an empty string using UTF-16
+offsets and compare the result with `final_text.txt`. For each row, the text at
+`range_start`/`range_length` should equal `replaced_text`; a mismatch indicates
+desynchronization and the session should be excluded rather than analyzed.
+
+## `cursor.csv`
+
+| Column | Type | Meaning |
+|---|---|---|
+| `t_ms` | float | Milliseconds since session start; same origin as the other logs |
+| `sel_start` | int | New selection start, or caret position when `sel_length` is 0; UTF-16 |
+| `sel_length` | int | New selection length; values greater than 0 mean text is selected |
+| `prev_sel_start`, `prev_sel_length` | int | Previous selection, in UTF-16 units |
+| `delta_chars` | int | `sel_start - prev_sel_start`; negative means a backward move |
+| `caret_x`, `caret_y` | float | Snapped caret origin in text-view points; empty if unavailable |
+| `caret_h` | float | Caret height in points; empty if unavailable |
+| `touch_x`, `touch_y` | float | Most recent in-app touch in text-view points; empty if unavailable |
+| `touch_phase` | str | `began`, `moved`, or `ended`; empty when no touch has been observed |
+| `tap_count` | int | UIKit tap count for the latest touch; `2` directly identifies a double tap |
+| `touch_age_ms` | float | Milliseconds from the most recent in-app touch to this row |
+| `ms_since_last_text_change` | float | Milliseconds since the latest text edit; empty before the first edit |
+| `text_length` | int | Current UTF-16 text length |
+
+Empty geometry fields mean unavailable, never zero. `caret_x`/`caret_y` record
+where iOS snapped the caret; `touch_x`/`touch_y` record where the finger landed.
+Their difference is the caret tap-accuracy signal.
+
+`ms_since_last_text_change` is raw timing rather than a boolean latch. A
+same-length autocorrect may not trigger a selection callback, which would leave
+a latch stale and mislabel a later deliberate caret move. The timestamp cannot
+become stranded and its threshold can be refined offline.
+
+## Derived offline (not columns)
+
+**Cursor `cause`**, derived per row in this priority order:
+
+| Value | Starting rule |
+|---|---|
+| `typing` | `ms_since_last_text_change < 50`, or `text_length` differs from the previous cursor row |
+| `tap` | `touch_phase == "began"` and `touch_age_ms <= 100` |
+| `double_tap_selection` | `tap_count == 2` and `sel_length > 0`; directly observed whole-word selection candidate |
+| `drag` | `touch_phase == "moved"`; collapse contiguous rows into one episode |
+| `keyboard_gesture` | No recent in-app touch and no text change; typically the space-bar trackpad gesture |
+
+**Keystroke `substitution_kind`**, for `event_type == "replace"`:
+
+| Value | Starting rule |
+|---|---|
+| `sentence_caps` | One character on each side, same letter ignoring case |
+| `smart_punctuation` | Both sides contain punctuation only |
+| `autocorrect` | Replacement ends in a delimiter and replaced text is a near-neighbor |
+| `quicktype_pick` | Full-word replacement that is not a near-neighbor of the replaced prefix |
+
+These are starting rules and should be validated and refined against real data.
+
+## Platform limits
+
+- The offered QuickType candidates cannot be captured. iOS exposes no API for
+  them, and ReplayKit hides the system keyboard from `screen.mov`; only accepted
+  substitutions are observable.
+- Keyboard touches are invisible to the app. Only touches inside the app window
+  populate `touch_*`, which is also what makes space-bar gestures distinguishable.

@@ -12,6 +12,14 @@ final class LastTouchTrackerTests: XCTestCase {
         LastTouchTracker.shared.record(point: CGPoint(x: 10, y: 20), phase: .began)
         XCTAssertEqual(LastTouchTracker.shared.latest?.phase, "began")
         XCTAssertEqual(LastTouchTracker.shared.latest?.point, CGPoint(x: 10, y: 20))
+        XCTAssertEqual(LastTouchTracker.shared.latest?.tapCount, 1)
+    }
+
+    func test_recordsDoubleTapCount() {
+        LastTouchTracker.shared.record(
+            point: CGPoint(x: 10, y: 20), phase: .began, tapCount: 2
+        )
+        XCTAssertEqual(LastTouchTracker.shared.latest?.tapCount, 2)
     }
 
     func test_ignoresCancelledTouches() {

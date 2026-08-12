@@ -19,6 +19,7 @@ final class LastTouchTracker {
     struct Touch {
         let point: CGPoint
         let phase: String
+        let tapCount: Int
         let date: Date
     }
 
@@ -29,7 +30,7 @@ final class LastTouchTracker {
     /// Records a touch. Phases other than began/moved/ended are ignored —
     /// a cancelled touch caused no caret move, so it must not displace the
     /// real touch that did.
-    func record(point: CGPoint, phase: UITouch.Phase) {
+    func record(point: CGPoint, phase: UITouch.Phase, tapCount: Int = 1) {
         let name: String
         switch phase {
         case .began: name = "began"
@@ -37,7 +38,7 @@ final class LastTouchTracker {
         case .ended: name = "ended"
         default: return
         }
-        latest = Touch(point: point, phase: name, date: Date())
+        latest = Touch(point: point, phase: name, tapCount: tapCount, date: Date())
     }
 
     func reset() {

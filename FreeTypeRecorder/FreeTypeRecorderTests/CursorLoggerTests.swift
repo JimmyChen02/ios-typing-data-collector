@@ -13,7 +13,8 @@ final class CursorLoggerTests: XCTestCase {
             selStart: selStart, selLength: 0,
             prevSelStart: prevSelStart, prevSelLength: 0,
             caretX: 10, caretY: 8, caretH: 20,
-            touchX: nil, touchY: nil, touchPhase: nil, touchAgeMs: nil,
+            touchX: nil, touchY: nil, touchPhase: nil, tapCount: nil,
+            touchAgeMs: nil,
             msSinceLastTextChange: nil, textLength: 18
         )
     }

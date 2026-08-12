@@ -114,11 +114,15 @@ final class SessionRecorder {
             _ = IMURecorder.shared.stop(writingTo: directory.appendingPathComponent("imu.csv"))
             _ = KeystrokeLogger.shared.stop(writingTo: directory.appendingPathComponent("keystrokes.csv"))
             _ = CursorLogger.shared.stop(writingTo: directory.appendingPathComponent("cursor.csv"))
-            try? finalText.write(
-                to: directory.appendingPathComponent("final_text.txt"),
-                atomically: true,
-                encoding: .utf8
-            )
+            do {
+                try finalText.write(
+                    to: directory.appendingPathComponent("final_text.txt"),
+                    atomically: true,
+                    encoding: .utf8
+                )
+            } catch {
+                print("SessionRecorder: failed to write final_text.txt: \(error)")
+            }
         }
 
         faceWriter.stop { [weak self] in

@@ -19,6 +19,14 @@ exported by the iOS app. Mirrors the in-app cleaning/Gaussian logic so results m
    - `future-trial-loss.py <cleaned.csv>` — how early trials predict later ones.
    - `key_backoff_report.py <cleaned.csv>` — keys fitted vs borrowed vs geometry fallback.
 
+## FreeTypeRecorder cursor analysis
+
+`cursor_metrics.py <cursor.csv|session_dir> [...] --out cursor_summary.csv`
+
+Classifies logged caret/selection rows as typing, tap reposition, double-tap
+selection, drag, keyboard gesture, or other. Add `--events-out cursor_events.csv`
+with one input to save every original row plus its derived `cause`.
+
 ## Outlier criteria (clean_keystrokes.py)
 `spatial` (norm outside [-0.5,1.5]), `far_from_target` (>1.25 kw), `iki_low` (<50ms,
 double-register), `iki_high` (>3000ms, pause), `trial_start`, `delete_event`,

@@ -42,7 +42,11 @@ final class TouchOverlayWindow: UIWindow {
             // Every phase feeds the tracker so a caret move can be attributed
             // to the touch that caused it; only touch-downs get a dot, which
             // is what the screen recording needs.
-            LastTouchTracker.shared.record(point: location, phase: touch.phase)
+            LastTouchTracker.shared.record(
+                point: location,
+                phase: touch.phase,
+                tapCount: touch.tapCount
+            )
             if touch.phase == .began {
                 dotView.addDot(at: location)
             }

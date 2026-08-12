@@ -135,11 +135,13 @@ struct LoggingTextView: UIViewRepresentable {
             var touchX: Double?
             var touchY: Double?
             var touchPhase: String?
+            var tapCount: Int?
             var touchAgeMs: Double?
             if let touch = LastTouchTracker.shared.latest {
                 // Phase/age need no coordinate space, so populate them even
                 // when there's no window to convert the point into.
                 touchPhase = touch.phase
+                tapCount = touch.tapCount
                 touchAgeMs = Date().timeIntervalSince(touch.date) * 1000.0
                 if let window = textView.window {
                     let local = textView.convert(touch.point, from: window)
@@ -155,7 +157,8 @@ struct LoggingTextView: UIViewRepresentable {
                 prevSelLength: prevSelLength,
                 caretX: caretX, caretY: caretY, caretH: caretH,
                 touchX: touchX, touchY: touchY,
-                touchPhase: touchPhase, touchAgeMs: touchAgeMs,
+                touchPhase: touchPhase, tapCount: tapCount,
+                touchAgeMs: touchAgeMs,
                 msSinceLastTextChange: msSinceLastTextChange,
                 // NSString length, not String.count: selectedRange is a
                 // UTF-16 offset, so the length must be in the same units for

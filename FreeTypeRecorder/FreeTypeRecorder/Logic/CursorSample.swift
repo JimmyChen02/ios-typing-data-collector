@@ -17,6 +17,7 @@ struct CursorSample: Equatable {
     let touchX: Double?
     let touchY: Double?
     let touchPhase: String?
+    let tapCount: Int?
     let touchAgeMs: Double?
     /// ms since the most recent text edit, or nil if no edit has happened yet.
     /// Raw rather than a derived "was this typing?" flag: a timestamp cannot go
@@ -30,7 +31,7 @@ struct CursorSample: Equatable {
     /// Signed caret displacement; negative means the caret moved backward.
     var deltaChars: Int { selStart - prevSelStart }
 
-    static let csvHeader = "t_ms,sel_start,sel_length,prev_sel_start,prev_sel_length,delta_chars,caret_x,caret_y,caret_h,touch_x,touch_y,touch_phase,touch_age_ms,ms_since_last_text_change,text_length"
+    static let csvHeader = "t_ms,sel_start,sel_length,prev_sel_start,prev_sel_length,delta_chars,caret_x,caret_y,caret_h,touch_x,touch_y,touch_phase,tap_count,touch_age_ms,ms_since_last_text_change,text_length"
 
     /// One CSV row. Unavailable geometry is written as an empty field rather
     /// than 0, so analysis can tell "no touch was in flight" from "a touch at
@@ -45,6 +46,7 @@ struct CursorSample: Equatable {
             Self.format(caretX), Self.format(caretY), Self.format(caretH),
             Self.format(touchX), Self.format(touchY),
             touchPhase ?? "",
+            tapCount.map(String.init) ?? "",
             Self.format(touchAgeMs),
             Self.format(msSinceLastTextChange),
             "\(textLength)"
