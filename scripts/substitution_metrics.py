@@ -609,6 +609,32 @@ SOURCE_HEADINGS = {
     "unknown": "unknown",
 }
 
+# One-line definitions printed next to each summary label.
+SOURCE_DEFS = {
+    "autocorrect": "iOS changed the word itself when a space/delimiter was typed",
+    "suggestion bar taps": "user tapped a word in the bar above the keyboard",
+    "inline predictions (space-accepted)": "grey ghost text accepted by typing space",
+    "manual overtypes": "user selected text and typed/pasted over it",
+    "smart typography": "straight quote/dash auto-swapped for curly",
+    "unknown": "no rule matched",
+}
+EFFECT_DEFS = {
+    "capitalization": "case change only (i → I)",
+    "punctuation": "punctuation swapped (' → ’)",
+    "contraction": "apostrophe added (its → it's)",
+    "completion": "typed prefix extended (act → actually)",
+    "spacing": "space added/removed",
+    "spelling": "letters corrected (coler → cooler)",
+    "other": "anything else",
+}
+OUTCOME_DEFS = {
+    "kept": "user never touched it again",
+    "reverted_to_original": "user deleted it and retyped exactly what they had",
+    "reverted_other": "user deleted it and put something else (or nothing)",
+    "edited_after": "user changed it but did not remove it",
+    "(not resolved)": "session log had a gap; not certifiable",
+}
+
 
 def write_summary_md(summary, rows, calibration, path):
     """Per-session summary as vertical markdown: one block per mechanism,
@@ -635,19 +661,26 @@ def write_summary_md(summary, rows, calibration, path):
     lines.append("## substitutions by mechanism")
     for source, heading in SOURCE_HEADINGS.items():
         group = [row for row in subs if row["substitution_source"] == source]
-        lines.append(f"- {heading}: {len(group)}")
+        lines.append(f"- {heading}: {len(group)} — *{SOURCE_DEFS[heading]}*")
         if not group:
             continue
-        for axis, label in (("substitution_effect", ""), ("substitution_outcome", "outcome: ")):
+        for axis, label, defs in (
+            ("substitution_effect", "", EFFECT_DEFS),
+            ("substitution_outcome", "outcome: ", OUTCOME_DEFS),
+        ):
             counts = {}
             for row in group:
                 value = row[axis] or "(not resolved)"
                 counts[value] = counts.get(value, 0) + 1
             for value in sorted(counts, key=lambda v: (-counts[v], v)):
-                lines.append(f"  - {label}{value}: {counts[value]}")
+                definition = defs.get(value, "")
+                suffix = f" — *{definition}*" if definition else ""
+                lines.append(f"  - {label}{value}: {counts[value]}{suffix}")
         grey = sum(1 for row in group if row["substitution_source_confidence"] == "grey_zone")
         if grey:
-            lines.append(f"  - grey-zone rows: {grey}")
+            lines.append(
+                f"  - grey-zone rows: {grey} — *timing ambiguous, review before trusting*"
+            )
     lines.append("")
     lines.append("## calibration")
     lines.append(

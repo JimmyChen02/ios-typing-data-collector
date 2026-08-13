@@ -7,18 +7,18 @@
   - substitutions: 9
 
 ## substitutions by mechanism
-- autocorrect: 6
-  - contraction: 3
-  - capitalization: 2
-  - spelling: 1
-  - outcome: kept: 6
-- suggestion bar taps: 3
-  - completion: 3
-  - outcome: kept: 3
-- inline predictions (space-accepted): 0
-- manual overtypes: 0
-- smart typography: 0
-- unknown: 0
+- autocorrect: 6 — *iOS changed the word itself when a space/delimiter was typed*
+  - contraction: 3 — *apostrophe added (its → it's)*
+  - capitalization: 2 — *case change only (i → I)*
+  - spelling: 1 — *letters corrected (coler → cooler)*
+  - outcome: kept: 6 — *user never touched it again*
+- suggestion bar taps: 3 — *user tapped a word in the bar above the keyboard*
+  - completion: 3 — *typed prefix extended (act → actually)*
+  - outcome: kept: 3 — *user never touched it again*
+- inline predictions (space-accepted): 0 — *grey ghost text accepted by typing space*
+- manual overtypes: 0 — *user selected text and typed/pasted over it*
+- smart typography: 0 — *straight quote/dash auto-swapped for curly*
+- unknown: 0 — *no rule matched*
 
 ## calibration
 - gap threshold: 8.751 ms (anchored_high; anchors 1 low / 5 high)
