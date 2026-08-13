@@ -26,6 +26,7 @@ the reasoning behind the rules in .claude/decisions/0003-substitution-taxonomy.m
 
 import argparse
 import csv
+import math
 import os
 import string
 import sys
@@ -59,7 +60,13 @@ SUMMARY_FIELDS = (
     + [f"source_{source}" for source in SOURCES]
     + [f"effect_{effect}" for effect in EFFECTS]
     + [f"outcome_{outcome}" for outcome in OUTCOMES]
-    + ["grey_zone_rows"]
+    + [
+        "grey_zone_rows",
+        "gap_threshold_ms",
+        "gap_calibration",
+        "gap_low_anchors",
+        "gap_high_anchors",
+    ]
 )
 
 LABEL_COLUMNS = [
@@ -82,11 +89,28 @@ TRIGGER_WINDOW_MS = 200.0
 # change (autocorrect / accepted inline prediction), ~13 ms when the system
 # auto-appends the space itself after a suggestion-bar tap. Across all 19
 # corpus substitutions the two groups are 4.3-6.6 ms and 11.8-15.0 ms with an
-# empty band between - see the 2026-08-13 touch-capture audit. Measured on one
-# device and one iOS version with n=3 confirmed bar taps, so gaps inside the
-# grey zone are flagged for manual review rather than trusted.
+# empty band between - see the 2026-08-13 touch-capture audit.
+#
+# The absolute values are device- and iOS-version-specific, so the split is
+# re-derived per session from anchor rows whose timing group is known from
+# certain, non-timing evidence (see _calibrate_gap_split). These constants are
+# the fallback for sessions too small to calibrate, and the mechanistic
+# floor: the two modes differ by ~2x, so 1.4 is a safety margin inside that.
 DELIMITER_GAP_SPLIT_MS = 9.0
 GAP_GREY_ZONE_MS = (7.0, 12.0)
+ANCHOR_LOW_EFFECTS = {"spelling", "spacing"}
+ANCHOR_HIGH_EFFECTS = {"capitalization", "contraction", "punctuation"}
+# A spelling correction is a low anchor only when the keystroke before it was
+# in rhythm: a thumb cannot leave the key grid and reach the suggestion bar in
+# under ~300 ms (corpus bar taps: 573-922 ms), so IKI < 250 ms *excludes* a
+# bar-tap fix with certainty. One-sided filter - ambiguous rows are dropped
+# from anchors, never guessed. (IKI is unsafe as a classifier - genuine
+# autocorrects exist at 386 and 717 ms - but sound as an exclusion.)
+ANCHOR_LOW_MAX_IKI_MS = 250.0
+MIN_ANCHORS_PER_SIDE = 2
+MIN_SEPARATION_RATIO = 1.4
+MIN_OTSU_POINTS = 8
+MIN_OTSU_CLUSTER = 3
 
 TRIGGER_CHARS = {" ", ".", ",", "!", "?", ";", ":", "\n"}
 
@@ -154,14 +178,22 @@ def _extends(old, new):
 
 
 def classify_rows(keystrokes_path):
-    """Return keystroke rows, each with the four substitution labels.
+    """Return (keystroke rows, gap calibration); rows carry the four
+    substitution labels.
 
-    Rows that are not substitutions get empty labels rather than made-up
-    ones - only `replace` and `paste` are ambiguous.
+    Two passes: the first computes each substitution's certain facts (effect,
+    gap) and collects the calibration anchors; the threshold is derived from
+    the whole session before any completion is classified by it. Rows that
+    are not substitutions get empty labels rather than made-up ones - only
+    `replace` and `paste` are ambiguous.
     """
     with open(keystrokes_path, newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
 
+    pending = []
+    anchors_low = []
+    anchors_high = []
+    unanchored_gaps = []
     for index, row in enumerate(rows):
         for column in LABEL_COLUMNS:
             row[column] = ""
@@ -171,19 +203,39 @@ def classify_rows(keystrokes_path):
         old = row.get("replaced_text") or ""
         new = row.get("replacement_text") or ""
         gap_ms = _delimiter_gap_ms(rows, index)
-        source, confidence = _classify_source(
-            row, old, new, gap_ms, _marked_hint(rows, index)
-        )
         effect = _classify_effect(old, new)
-
-        row["substitution_source"] = source
-        row["substitution_source_confidence"] = confidence
         row["substitution_effect"] = effect
         row["next_delimiter_gap_ms"] = "" if gap_ms is None else f"{gap_ms:.3f}"
+        pending.append((index, row, old, new, gap_ms, effect))
+
+        overtype = (_number(row, "selected_length_before", int) or 0) > 0
+        if gap_ms is None or overtype:
+            continue
+        if _extends(old, new):
+            unanchored_gaps.append(gap_ms)
+        elif effect in ANCHOR_HIGH_EFFECTS:
+            anchors_high.append(gap_ms)
+        elif effect in ANCHOR_LOW_EFFECTS:
+            iki = _number(row, "inter_key_interval_ms")
+            if iki is not None and iki < ANCHOR_LOW_MAX_IKI_MS:
+                anchors_low.append(gap_ms)
+            else:
+                unanchored_gaps.append(gap_ms)
+
+    calibration = _calibrate_gap_split(
+        anchors_low, anchors_high, anchors_low + anchors_high + unanchored_gaps
+    )
+
+    for index, row, old, new, gap_ms, effect in pending:
+        source, confidence = _classify_source(
+            row, old, new, gap_ms, _marked_hint(rows, index), calibration
+        )
+        row["substitution_source"] = source
+        row["substitution_source_confidence"] = confidence
         row["substitution_kind"] = _legacy_kind(source, effect)
 
     _classify_outcomes(rows, keystrokes_path)
-    return rows
+    return rows, calibration
 
 
 def _next_insert(rows, index):
@@ -230,7 +282,96 @@ def _marked_hint(rows, index):
     return False
 
 
-def _classify_source(row, old, new, gap_ms, marked_hint):
+def _calibration(mode, threshold, grey_lo, grey_hi, anchors_low, anchors_high):
+    return {
+        "mode": mode,
+        "threshold": threshold,
+        "grey_lo": grey_lo,
+        "grey_hi": grey_hi,
+        "low_anchors": len(anchors_low),
+        "high_anchors": len(anchors_high),
+    }
+
+
+def _calibrate_gap_split(anchors_low, anchors_high, all_gaps):
+    """Derive this session's low/high gap split, deterministically.
+
+    Cascade, strongest evidence first (see the 2026-08-14 gap-calibration
+    plan): two-sided anchors -> one-sided anchors with the mechanistic ~2x
+    mode-separation margin -> Otsu clustering with a bimodality guard ->
+    global constants. Anchors overlapping (two-sided ratio < 1.4) contradict
+    the latency story and fall to the constants *flagged*, never silently.
+    """
+    if (
+        len(anchors_low) >= MIN_ANCHORS_PER_SIDE
+        and len(anchors_high) >= MIN_ANCHORS_PER_SIDE
+    ):
+        lo, hi = max(anchors_low), min(anchors_high)
+        if lo > 0 and hi / lo >= MIN_SEPARATION_RATIO:
+            return _calibration(
+                "anchored", math.sqrt(lo * hi), lo, hi, anchors_low, anchors_high
+            )
+        return _calibration(
+            "global_conflict",
+            DELIMITER_GAP_SPLIT_MS,
+            GAP_GREY_ZONE_MS[0],
+            GAP_GREY_ZONE_MS[1],
+            anchors_low,
+            anchors_high,
+        )
+    if len(anchors_high) >= MIN_ANCHORS_PER_SIDE:
+        hi = min(anchors_high)
+        return _calibration(
+            "anchored_high", hi / MIN_SEPARATION_RATIO, hi / MIN_SEPARATION_RATIO,
+            hi, anchors_low, anchors_high,
+        )
+    if len(anchors_low) >= MIN_ANCHORS_PER_SIDE:
+        lo = max(anchors_low)
+        return _calibration(
+            "anchored_low", lo * MIN_SEPARATION_RATIO, lo, lo * MIN_SEPARATION_RATIO,
+            anchors_low, anchors_high,
+        )
+    split = _otsu_split(all_gaps)
+    if split is not None:
+        lo, hi = split
+        return _calibration(
+            "otsu", math.sqrt(lo * hi), lo, hi, anchors_low, anchors_high
+        )
+    return _calibration(
+        "global",
+        DELIMITER_GAP_SPLIT_MS,
+        GAP_GREY_ZONE_MS[0],
+        GAP_GREY_ZONE_MS[1],
+        anchors_low,
+        anchors_high,
+    )
+
+
+def _otsu_split(gaps):
+    """Exact 1-D two-cluster split on log-gaps, or None when not credibly
+    bimodal. Deterministic: every split point on the sorted list is scored by
+    between-class variance; the first maximum wins."""
+    if len(gaps) < MIN_OTSU_POINTS:
+        return None
+    values = sorted(gaps)
+    if values[0] <= 0:
+        return None
+    logs = [math.log(value) for value in values]
+    best_k = None
+    best_score = -1.0
+    for k in range(MIN_OTSU_CLUSTER, len(logs) - MIN_OTSU_CLUSTER + 1):
+        left_mean = sum(logs[:k]) / k
+        right_mean = sum(logs[k:]) / (len(logs) - k)
+        score = k * (len(logs) - k) * (left_mean - right_mean) ** 2
+        if score > best_score:
+            best_k, best_score = k, score
+    lo, hi = values[best_k - 1], values[best_k]
+    if hi / lo < MIN_SEPARATION_RATIO:
+        return None
+    return lo, hi
+
+
+def _classify_source(row, old, new, gap_ms, marked_hint, calibration):
     # Certain: the system never substitutes into a selection, so a non-zero
     # selection means the user highlighted their own text and typed over it.
     if (_number(row, "selected_length_before", int) or 0) > 0:
@@ -249,8 +390,8 @@ def _classify_source(row, old, new, gap_ms, marked_hint):
     if _extends(old, new):
         if gap_ms is None:
             return "inline_prediction", "inferred"
-        in_band = GAP_GREY_ZONE_MS[0] <= gap_ms <= GAP_GREY_ZONE_MS[1]
-        if gap_ms >= DELIMITER_GAP_SPLIT_MS:
+        in_band = calibration["grey_lo"] <= gap_ms <= calibration["grey_hi"]
+        if gap_ms >= calibration["threshold"]:
             return "suggestion_bar", "grey_zone" if in_band else "inferred"
         if marked_hint:
             return "inline_prediction", "grey_zone"
@@ -436,10 +577,14 @@ def _warn_diverged(rows, keystrokes_path, index):
 
 def summarize(keystrokes_input):
     keystrokes_path = resolve_keystrokes_input(keystrokes_input)
-    rows = classify_rows(keystrokes_path)
+    rows, calibration = classify_rows(keystrokes_path)
     summary = {field: 0 for field in SUMMARY_FIELDS if field != "session_dir"}
     summary["session_dir"] = session_label(keystrokes_path)
     summary["keystroke_rows"] = len(rows)
+    summary["gap_threshold_ms"] = f"{calibration['threshold']:.3f}"
+    summary["gap_calibration"] = calibration["mode"]
+    summary["gap_low_anchors"] = calibration["low_anchors"]
+    summary["gap_high_anchors"] = calibration["high_anchors"]
 
     for row in rows:
         source = row["substitution_source"]

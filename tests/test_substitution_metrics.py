@@ -28,7 +28,8 @@ def write_keystrokes_csv(tmp_path, rows, name="Alex,1,left,ac_on"):
 
 
 def classified(session):
-    return sm.classify_rows(session / "keystrokes.csv")
+    rows, _ = sm.classify_rows(session / "keystrokes.csv")
+    return rows
 
 
 def kinds(session):
@@ -371,3 +372,114 @@ def test_labeled_output_keeps_original_columns_and_adds_labels(tmp_path):
     for column in HEADER + sm.LABEL_COLUMNS:
         assert column in rows[0]
     assert rows[1]["substitution_kind"] == "autocorrect"
+
+
+# --- per-session gap calibration -------------------------------------------
+
+def sub_pair(t, old, new, gap, iki=100):
+    """A substitution row followed by its trailing delimiter at `gap` ms."""
+    return [
+        (t, "replace", old, new, 0, len(old), len(new), iki, 0, 0),
+        (t + gap, "insert", "", " ", len(new), 0, len(new) + 1, gap, 0, 0),
+    ]
+
+
+def calibration_of(session):
+    _, calibration = sm.classify_rows(session / "keystrokes.csv")
+    return calibration
+
+
+def test_two_sided_anchors_calibrate_the_threshold(tmp_path):
+    rows = []
+    rows += sub_pair(1000, "teh", "the", 4.0)        # low anchor (spelling, iki 100)
+    rows += sub_pair(2000, "wrnt", "went", 5.0)      # low anchor
+    rows += sub_pair(3000, "i", "I", 12.0)           # high anchor (capitalization)
+    rows += sub_pair(4000, "its", "it's", 14.0)      # high anchor (contraction)
+    rows += sub_pair(5000, "tomo", "tomorrow", 13.0) # completion: above threshold
+    rows += sub_pair(6000, "rea", "reading", 4.5)    # completion: below threshold
+    session = write_keystrokes_csv(tmp_path, rows)
+    calibration = calibration_of(session)
+    assert calibration["mode"] == "anchored"
+    assert calibration["grey_lo"] == 5.0 and calibration["grey_hi"] == 12.0
+    assert abs(calibration["threshold"] - (5.0 * 12.0) ** 0.5) < 1e-9
+    labelled = classified(session)
+    subs = [r for r in labelled if r["substitution_source"]]
+    assert subs[4]["substitution_source"] == "suggestion_bar"
+    assert subs[4]["substitution_source_confidence"] == "inferred"  # 13 > grey_hi 12
+    assert subs[5]["substitution_source"] == "autocorrect_engine"
+
+
+def test_bar_tap_spelling_fix_is_not_a_low_anchor(tmp_path):
+    # Same string shape as an autocorrect, but the 600 ms preceding interval
+    # means the thumb had time to reach the bar - excluded from anchors.
+    rows = []
+    rows += sub_pair(1000, "teh", "the", 13.0, iki=600)
+    rows += sub_pair(2000, "i", "I", 12.0)
+    rows += sub_pair(3000, "its", "it's", 14.0)
+    session = write_keystrokes_csv(tmp_path, rows)
+    calibration = calibration_of(session)
+    assert calibration["low_anchors"] == 0
+    assert calibration["mode"] == "anchored_high"
+
+
+def test_single_cluster_session_does_not_split_itself(tmp_path):
+    # All-low session (careful typist, no bar taps): a naive band-splitter
+    # would cut the one cluster in half. Anchored-low keeps everything low.
+    rows = []
+    rows += sub_pair(1000, "teh", "the", 5.0)
+    rows += sub_pair(2000, "wrnt", "went", 5.5)
+    rows += sub_pair(3000, "tomo", "tomorrow", 6.0)   # completion inside cluster
+    rows += sub_pair(4000, "rea", "reading", 13.0)    # genuine bar tap still splits out
+    session = write_keystrokes_csv(tmp_path, rows)
+    calibration = calibration_of(session)
+    assert calibration["mode"] == "anchored_low"
+    assert calibration["threshold"] == 5.5 * sm.MIN_SEPARATION_RATIO
+    labelled = classified(session)
+    subs = [r for r in labelled if r["substitution_source"]]
+    assert subs[2]["substitution_source"] == "autocorrect_engine"
+    assert subs[3]["substitution_source"] == "suggestion_bar"
+
+
+def test_conflicting_anchors_fall_back_flagged(tmp_path):
+    rows = []
+    rows += sub_pair(1000, "teh", "the", 12.0)   # low anchors sitting high
+    rows += sub_pair(2000, "wrnt", "went", 13.0)
+    rows += sub_pair(3000, "i", "I", 5.0)        # high anchors sitting low
+    rows += sub_pair(4000, "its", "it's", 6.0)
+    session = write_keystrokes_csv(tmp_path, rows)
+    calibration = calibration_of(session)
+    assert calibration["mode"] == "global_conflict"
+    assert calibration["threshold"] == sm.DELIMITER_GAP_SPLIT_MS
+
+
+def test_otsu_splits_anchorless_bimodal_session(tmp_path):
+    gaps = [4.0, 4.5, 5.0, 5.5, 6.0, 12.0, 13.0, 14.0, 15.0]
+    rows = []
+    for n, gap in enumerate(gaps):
+        rows += sub_pair(1000 * (n + 1), "tomo", "tomorrow", gap)  # all completions
+    session = write_keystrokes_csv(tmp_path, rows)
+    calibration = calibration_of(session)
+    assert calibration["mode"] == "otsu"
+    assert calibration["grey_lo"] == 6.0 and calibration["grey_hi"] == 12.0
+
+
+def test_otsu_rejects_unimodal_session(tmp_path):
+    gaps = [4.0, 4.3, 4.6, 4.9, 5.2, 5.5, 5.8, 6.1]
+    rows = []
+    for n, gap in enumerate(gaps):
+        rows += sub_pair(1000 * (n + 1), "tomo", "tomorrow", gap)
+    session = write_keystrokes_csv(tmp_path, rows)
+    calibration = calibration_of(session)
+    assert calibration["mode"] == "global"
+
+
+def test_summary_records_calibration(tmp_path):
+    session = write_keystrokes_csv(tmp_path, [
+        (0, "insert", "", "teh", 0, 0, 3, 0, 0, 0),
+        (900, "replace", "teh", "the", 0, 3, 3, 900, 0, 0),
+        (920, "insert", "", " ", 3, 0, 4, 20, 0, 0),
+    ])
+    summary, _ = sm.summarize(session)
+    assert summary["gap_calibration"] == "global"
+    assert summary["gap_threshold_ms"] == "9.000"
+    assert summary["gap_low_anchors"] == 0
