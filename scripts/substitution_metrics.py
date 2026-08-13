@@ -597,7 +597,72 @@ def summarize(keystrokes_input):
             summary[f"outcome_{row['substitution_outcome']}"] += 1
         if row["substitution_source_confidence"] == "grey_zone":
             summary["grey_zone_rows"] += 1
-    return summary, rows
+    return summary, rows, calibration
+
+
+SOURCE_HEADINGS = {
+    "autocorrect_engine": "autocorrect",
+    "suggestion_bar": "suggestion bar taps",
+    "inline_prediction": "inline predictions (space-accepted)",
+    "manual_overtype": "manual overtypes",
+    "smart_typography": "smart typography",
+    "unknown": "unknown",
+}
+
+
+def write_summary_md(summary, rows, calibration, path):
+    """Per-session summary as vertical markdown: one block per mechanism,
+    its purposes (effects) and fates (outcomes) as indented lines, then the
+    session's raw behaviour counts and calibration."""
+    subs = [row for row in rows if row["substitution_source"]]
+    deletes = [row for row in rows if row.get("event_type") == "delete"]
+    selection_deletes = [
+        row for row in deletes
+        if (_number(row, "selected_length_before", int) or 0) > 0
+        or (_number(row, "range_length", int) or 0) > 1
+    ]
+    inserts = sum(1 for row in rows if row.get("event_type") == "insert")
+
+    lines = [f"# {summary['session_dir']} — substitution summary", ""]
+    lines.append(f"- keystroke rows: {len(rows)}")
+    lines.append(f"  - inserts: {inserts}")
+    lines.append(f"  - backspaces/deletes: {len(deletes)}")
+    lines.append(
+        f"    - whole-selection deletes (select word + delete): {len(selection_deletes)}"
+    )
+    lines.append(f"  - substitutions: {len(subs)}")
+    lines.append("")
+    lines.append("## substitutions by mechanism")
+    for source, heading in SOURCE_HEADINGS.items():
+        group = [row for row in subs if row["substitution_source"] == source]
+        lines.append(f"- {heading}: {len(group)}")
+        if not group:
+            continue
+        for axis, label in (("substitution_effect", ""), ("substitution_outcome", "outcome: ")):
+            counts = {}
+            for row in group:
+                value = row[axis] or "(not resolved)"
+                counts[value] = counts.get(value, 0) + 1
+            for value in sorted(counts, key=lambda v: (-counts[v], v)):
+                lines.append(f"  - {label}{value}: {counts[value]}")
+        grey = sum(1 for row in group if row["substitution_source_confidence"] == "grey_zone")
+        if grey:
+            lines.append(f"  - grey-zone rows: {grey}")
+    lines.append("")
+    lines.append("## calibration")
+    lines.append(
+        f"- gap threshold: {calibration['threshold']:.3f} ms "
+        f"({calibration['mode']}; anchors {calibration['low_anchors']} low / "
+        f"{calibration['high_anchors']} high)"
+    )
+    lines.append("")
+
+    parent = os.path.dirname(os.path.abspath(path))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines))
+    return path
 
 
 def write_processed(rows, path):
@@ -635,19 +700,20 @@ def main(argv=None):
     written = []
     summary_paths = []
     for keystrokes_input in args.keystrokes_inputs:
-        summary, rows = summarize(keystrokes_input)
+        summary, rows, calibration = summarize(keystrokes_input)
         summaries.append(summary)
         processed_path = args.labeled_out or os.path.join(
             args.out_dir, f"{summary['session_dir']}_processed.csv"
         )
         written.append(write_processed(rows, processed_path))
-        if not args.out:
-            summary_path = os.path.join(
-                args.out_dir, f"{summary['session_dir']}_summary.csv"
-            )
-            _write_csv(summary_path, SUMMARY_FIELDS, [summary])
-            summary_paths.append(summary_path)
+        summary_path = os.path.join(
+            args.out_dir, f"{summary['session_dir']}_summary.md"
+        )
+        summary_paths.append(
+            write_summary_md(summary, rows, calibration, summary_path)
+        )
 
+    # Machine-readable combined table for cross-session stats, on request.
     if args.out:
         _write_csv(args.out, SUMMARY_FIELDS, summaries)
         summary_paths.append(args.out)

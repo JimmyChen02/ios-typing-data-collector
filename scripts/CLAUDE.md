@@ -54,9 +54,11 @@ python3 scripts/substitution_metrics.py sessions_raw/*_keystrokes.csv
 
 produces, in `processed-keystrokes/`:
 - `<session>_processed.csv` — every original column plus the label columns
-- `<session>_summary.csv` — counts per source/effect/outcome plus
-  `grey_zone_rows` and the session's gap calibration (`gap_threshold_ms`,
-  `gap_calibration` mode, anchor counts; ADR 0004)
+- `<session>_summary.md` — vertical markdown: raw behaviour counts (inserts,
+  backspaces, whole-selection deletes), then one block per mechanism with its
+  purposes (effects) and fates (outcomes) indented, then the session's gap
+  calibration (ADR 0004). `--out FILE.csv` adds one combined machine-readable
+  CSV row per session for cross-session stats.
 
 Every output is named after its session, so processing a new trial never
 overwrites an earlier one; re-running the **same** session regenerates its two

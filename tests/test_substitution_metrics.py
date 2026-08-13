@@ -302,7 +302,7 @@ def test_summary_counts_each_axis(tmp_path):
         (900, "replace", "teh", "the", 3, 3, 6, 300, 0, 0),
         (920, "insert", "", " ", 6, 0, 7, 20, 0, 0),
     ])
-    summary, _ = sm.summarize(session)
+    summary, _, _ = sm.summarize(session)
     assert summary["keystroke_rows"] == 5
     assert summary["substitution_rows"] == 2
     assert summary["source_manual_overtype"] == 1
@@ -340,21 +340,23 @@ def test_each_session_gets_its_own_summary_file(tmp_path):
     ])
     out_dir = tmp_path / "out"
     sm.main([str(session), "--out-dir", str(out_dir)])
-    summary_file = out_dir / "Alex,1,left,ac_on_summary.csv"
+    summary_file = out_dir / "Alex,1,left,ac_on_summary.md"
     assert (out_dir / "Alex,1,left,ac_on_processed.csv").is_file()
     assert summary_file.is_file()
-    with summary_file.open(newline="", encoding="utf-8") as handle:
-        rows = list(csv.DictReader(handle))
-    assert len(rows) == 1
-    assert rows[0]["source_autocorrect_engine"] == "1"
+    text = summary_file.read_text(encoding="utf-8")
+    assert "# Alex,1,left,ac_on — substitution summary" in text
+    assert "- autocorrect: 1" in text
+    assert "  - spelling: 1" in text
+    assert "  - outcome: kept: 1" in text
+    assert "## calibration" in text
 
 
 def test_session_dir_accepted_as_well_as_file(tmp_path):
     session = write_keystrokes_csv(tmp_path, [
         (0, "insert", "", "a", 0, 0, 1, 0, 0, 0),
     ])
-    from_dir, _ = sm.summarize(session)
-    from_file, _ = sm.summarize(session / "keystrokes.csv")
+    from_dir, _, _ = sm.summarize(session)
+    from_file, _, _ = sm.summarize(session / "keystrokes.csv")
     assert from_dir == from_file
 
 
@@ -366,7 +368,10 @@ def test_labeled_output_keeps_original_columns_and_adds_labels(tmp_path):
     ])
     out = tmp_path / "summary.csv"
     labeled = tmp_path / "labeled.csv"
-    sm.main([str(session), "--out", str(out), "--labeled-out", str(labeled)])
+    sm.main([
+        str(session), "--out-dir", str(tmp_path / "out"),
+        "--out", str(out), "--labeled-out", str(labeled),
+    ])
     with labeled.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
     for column in HEADER + sm.LABEL_COLUMNS:
@@ -479,7 +484,7 @@ def test_summary_records_calibration(tmp_path):
         (900, "replace", "teh", "the", 0, 3, 3, 900, 0, 0),
         (920, "insert", "", " ", 3, 0, 4, 20, 0, 0),
     ])
-    summary, _ = sm.summarize(session)
+    summary, _, _ = sm.summarize(session)
     assert summary["gap_calibration"] == "global"
     assert summary["gap_threshold_ms"] == "9.000"
     assert summary["gap_low_anchors"] == 0
