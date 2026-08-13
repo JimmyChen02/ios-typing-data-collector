@@ -31,6 +31,7 @@ keystroke, then backs it all up to Google Drive automatically.
 
 ## More docs
 
+- Test protocol + running the analysis on exported CSVs: [../TESTING.md](../TESTING.md)
 - Screen-recording / App Group setup: [docs/SCREEN_BROADCAST_SETUP.md](docs/SCREEN_BROADCAST_SETUP.md)
 - Automatic Drive upload (researcher, one-time): [docs/AUTOMATIC_DRIVE_UPLOAD.md](docs/AUTOMATIC_DRIVE_UPLOAD.md)
 - Google Drive backup details: [docs/GOOGLE_DRIVE_BACKUP.md](docs/GOOGLE_DRIVE_BACKUP.md)
