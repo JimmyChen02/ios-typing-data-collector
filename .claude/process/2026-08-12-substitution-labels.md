@@ -179,3 +179,16 @@ row behaving as designed; the plan's expected-diff list had missed it.
 Still open: the labelled ghost-text/bar-tap trial (uncalibrated low-gap
 branch), and the FreeTypeRecorder capture gap class from error 2 — silent
 system edits are invisible to `shouldChangeTextIn`.
+
+---
+
+## 2026-08-14 — Per-session gap calibration (ADR 0004)
+
+Fixed 9 ms split replaced by per-session calibration from anchor rows
+(low: in-rhythm spelling fixes IKI<250ms; high: caps/contraction/punct),
+cascade anchored → one-sided ×1.4 margin → Otsu w/ bimodality guard → global,
+mode + threshold + anchor counts recorded in each summary. Caught during
+design review: "all spelling corrections are low anchors" was wrong — a
+bar-tap spelling fix is shape-identical but high; the IKI<250ms exclusion
+makes anchors provable. Regression: test1/test2 labels byte-identical
+(test1 anchored 8.400ms, test2 anchored_high 8.751ms). 42 tests.

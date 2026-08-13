@@ -55,7 +55,8 @@ python3 scripts/substitution_metrics.py sessions_raw/*_keystrokes.csv
 produces, in `processed-keystrokes/`:
 - `<session>_processed.csv` — every original column plus the label columns
 - `<session>_summary.csv` — counts per source/effect/outcome plus
-  `grey_zone_rows`
+  `grey_zone_rows` and the session's gap calibration (`gap_threshold_ms`,
+  `gap_calibration` mode, anchor counts; ADR 0004)
 
 Every output is named after its session, so processing a new trial never
 overwrites an earlier one; re-running the **same** session regenerates its two

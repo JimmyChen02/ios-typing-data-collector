@@ -168,9 +168,16 @@ derived alias):
 The trailing gap is iOS's own latency between committing a replacement and
 committing the following delimiter: ~13 ms when the system auto-appends the
 space after a bar tap, ~5 ms when a typed delimiter triggered the change.
-Machine timing, not human — but calibrated on one device, one iOS version, n=3
-confirmed bar taps, hence the grey zone. It applies **only** to completions;
-corrections sit in the high group too and would mislabel.
+Machine timing, not human. It applies **only** to completions; corrections
+sit in the high group too and would mislabel.
+
+The 9 ms / 7–12 ms values are fallback constants: the split is re-derived
+**per session** from anchor rows whose timing group is known without timing
+(low: in-rhythm spelling fixes, IKI < 250 ms; high: capitalization/
+contraction/punctuation corrections) — see ADR 0004. The session summary
+records `gap_threshold_ms`, `gap_calibration` (`anchored` / `anchored_high` /
+`anchored_low` / `otsu` / `global` / `global_conflict`), and
+`gap_low_anchors` / `gap_high_anchors`.
 
 `substitution_effect`, first match wins (multi-effect rows take the earlier
 label): `capitalization` (same ignoring case), `punctuation` (both sides
