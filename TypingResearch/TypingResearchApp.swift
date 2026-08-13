@@ -23,7 +23,7 @@ struct RootView: View {
     var sessionManager: SessionManager
 
     var body: some View {
-        if sessionManager.isSessionActive || sessionManager.isSessionComplete {
+        if sessionManager.isAwaitingSessionStart || sessionManager.isSessionActive || sessionManager.isSessionComplete {
             SessionView(sessionManager: sessionManager)
         } else {
             ParticipantSetupView(sessionManager: sessionManager)

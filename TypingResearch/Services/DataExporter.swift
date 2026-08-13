@@ -3,6 +3,12 @@ import SwiftData
 
 final class DataExporter {
 
+    struct ResearchPackageValidationReport {
+        let isComplete: Bool
+        let requiredArtifacts: [String]
+        let missingArtifacts: [String]
+    }
+
     // MARK: - Raw Keystroke CSV
 
     func exportKeystrokesCSV(
@@ -33,6 +39,160 @@ final class DataExporter {
         let name = filename(participant: participant,
                             suffix: "keystrokes_cleaned", ext: "csv")
         return writeToTempFile(content: csv, filename: name)
+    }
+
+    // MARK: - Behavior Annotation CSV
+
+    func exportBehaviorAnnotationsCSV(
+        session: Session,
+        events: [InputEventData],
+        participant: Participant?
+    ) -> URL? {
+        let annotations = EditBehaviorAnnotator.annotate(events: events)
+        var rows: [String] = [[
+            "participant_first", "participant_last", "session_id",
+            "event_index", "trial_index", "event_type", "edit_source", "edit_kind",
+            "category", "intent_preserved", "cursor_moved",
+            "used_autocorrect", "used_suggestion",
+            "wrongfully_typed_token", "llm_edited_token",
+            "original_text", "emitted_text", "selected_suggestion",
+            "text_before", "text_after"
+        ].joined(separator: ",")]
+
+        for ann in annotations {
+            guard ann.eventIndex >= 0, ann.eventIndex < events.count else { continue }
+            let e = events[ann.eventIndex]
+            rows.append([
+                csvEscape(participant?.firstName ?? ""),
+                csvEscape(participant?.lastName ?? ""),
+                csvEscape(session.id.uuidString),
+                String(ann.eventIndex),
+                String(e.trialIndex + 1),
+                csvEscape(e.eventType.rawValue),
+                csvEscape(e.editSource),
+                csvEscape(e.editKind),
+                csvEscape(ann.category),
+                ann.intentPreserved ? "1" : "0",
+                ann.cursorMoved ? "1" : "0",
+                ann.usedAutocorrect ? "1" : "0",
+                ann.usedSuggestion ? "1" : "0",
+                csvEscape(ann.wrongfullyTypedToken),
+                csvEscape(ann.llmEditedToken),
+                csvEscape(e.originalText),
+                csvEscape(e.emittedText),
+                csvEscape(e.selectedSuggestion),
+                csvEscape(e.textBefore),
+                csvEscape(e.textAfter)
+            ].joined(separator: ","))
+        }
+        let name = filename(participant: participant, suffix: "edit_behavior_annotations", ext: "csv")
+        return writeToTempFile(content: rows.joined(separator: "\n"), filename: name)
+    }
+
+    // MARK: - Full research package (manual share-to-Drive)
+
+    func exportResearchPackageZip(
+        session: Session,
+        events: [InputEventData],
+        participant: Participant?,
+        handSamples: [HandSample]
+    ) -> URL? {
+        exportResearchPackageZipWithValidation(
+            session: session,
+            events: events,
+            participant: participant,
+            handSamples: handSamples
+        ).url
+    }
+
+    func exportResearchPackageZipWithValidation(
+        session: Session,
+        events: [InputEventData],
+        participant: Participant?,
+        handSamples: [HandSample]
+    ) -> (url: URL?, report: ResearchPackageValidationReport) {
+        let fm = FileManager.default
+        let first = participant?.firstName ?? "unknown"
+        let last = participant?.lastName ?? "unknown"
+        let stamp = Int(Date().timeIntervalSince1970)
+        let stagingName = "research_export_\(first)_\(last)_\(stamp)"
+        let staging = fm.temporaryDirectory.appendingPathComponent(stagingName, isDirectory: true)
+        try? fm.removeItem(at: staging)
+        do {
+            try fm.createDirectory(at: staging, withIntermediateDirectories: true)
+        } catch {
+            print("DataExporter: could not create research-export staging dir: \(error)")
+            return (
+                nil,
+                ResearchPackageValidationReport(
+                    isComplete: false,
+                    requiredArtifacts: [],
+                    missingArtifacts: ["staging_directory_creation_failed"]
+                )
+            )
+        }
+
+        let rawCSV = makeCSV(events: events, session: session, participant: participant, cleaned: false)
+        let cleanedCSV = makeCSV(events: events, session: session, participant: participant, cleaned: true)
+        let annotations = EditBehaviorAnnotator.annotate(events: events)
+        let behaviorCSV = makeBehaviorCSV(
+            annotations: annotations,
+            events: events,
+            participant: participant,
+            session: session
+        )
+
+        _ = writeContent(rawCSV, to: staging.appendingPathComponent("keystrokes_raw.csv"))
+        _ = writeContent(cleanedCSV, to: staging.appendingPathComponent("keystrokes_cleaned.csv"))
+        _ = writeContent(behaviorCSV, to: staging.appendingPathComponent("edit_behavior_annotations.csv"))
+        _ = writeResearchJSON(
+            events: events,
+            annotations: annotations,
+            participant: participant,
+            session: session,
+            to: staging.appendingPathComponent("research_events.json")
+        )
+
+        // Include hand manifest + images + IMU if available.
+        if !handSamples.isEmpty,
+           let manifest = exportHandManifestCSV(samples: handSamples, participant: participant) {
+            try? fm.copyItem(at: manifest, to: staging.appendingPathComponent(manifest.lastPathComponent))
+            let imagesDest = staging.appendingPathComponent("hand_images", isDirectory: true)
+            try? fm.createDirectory(at: imagesDest, withIntermediateDirectories: true)
+            for imageURL in HandImageStore.shared.allImageURLs() {
+                try? fm.copyItem(at: imageURL, to: imagesDest.appendingPathComponent(imageURL.lastPathComponent))
+            }
+        }
+
+        let imuSrc = FileManager.default
+            .urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("imu", isDirectory: true)
+        if fm.fileExists(atPath: imuSrc.path) {
+            let imuDest = staging.appendingPathComponent("imu", isDirectory: true)
+            try? fm.createDirectory(at: imuDest, withIntermediateDirectories: true)
+            if let files = try? fm.contentsOfDirectory(at: imuSrc, includingPropertiesForKeys: nil) {
+                for f in files where f.pathExtension == "csv" {
+                    try? fm.copyItem(at: f, to: imuDest.appendingPathComponent(f.lastPathComponent))
+                }
+            }
+        }
+
+        let requiredArtifacts = [
+            "keystrokes_raw.csv",
+            "keystrokes_cleaned.csv",
+            "edit_behavior_annotations.csv",
+            "research_events.json"
+        ]
+        let missingArtifacts = requiredArtifacts.filter { artifact in
+            !fm.fileExists(atPath: staging.appendingPathComponent(artifact).path)
+        }
+        let report = ResearchPackageValidationReport(
+            isComplete: missingArtifacts.isEmpty,
+            requiredArtifacts: requiredArtifacts,
+            missingArtifacts: missingArtifacts
+        )
+        let url = zipDirectory(staging, zipName: "\(stagingName).zip")
+        return (url, report)
     }
 
     // MARK: - CSV Construction
@@ -284,6 +444,143 @@ final class DataExporter {
         } catch {
             print("DataExporter error: \(error)")
             return nil
+        }
+    }
+
+    private func writeContent(_ content: String, to url: URL) -> Bool {
+        do {
+            try content.write(to: url, atomically: true, encoding: .utf8)
+            return true
+        } catch {
+            print("DataExporter: write failed for \(url.lastPathComponent): \(error)")
+            return false
+        }
+    }
+
+    private func makeBehaviorCSV(
+        annotations: [EditBehaviorAnnotation],
+        events: [InputEventData],
+        participant: Participant?,
+        session: Session
+    ) -> String {
+        var rows: [String] = [[
+            "participant_first", "participant_last", "session_id",
+            "event_index", "trial_index", "event_type", "edit_source", "edit_kind",
+            "category", "intent_preserved", "cursor_moved",
+            "used_autocorrect", "used_suggestion",
+            "wrongfully_typed_token", "llm_edited_token",
+            "original_text", "emitted_text", "selected_suggestion",
+            "text_before", "text_after"
+        ].joined(separator: ",")]
+        for ann in annotations {
+            guard ann.eventIndex >= 0, ann.eventIndex < events.count else { continue }
+            let e = events[ann.eventIndex]
+            rows.append([
+                csvEscape(participant?.firstName ?? ""),
+                csvEscape(participant?.lastName ?? ""),
+                csvEscape(session.id.uuidString),
+                String(ann.eventIndex),
+                String(e.trialIndex + 1),
+                csvEscape(e.eventType.rawValue),
+                csvEscape(e.editSource),
+                csvEscape(e.editKind),
+                csvEscape(ann.category),
+                ann.intentPreserved ? "1" : "0",
+                ann.cursorMoved ? "1" : "0",
+                ann.usedAutocorrect ? "1" : "0",
+                ann.usedSuggestion ? "1" : "0",
+                csvEscape(ann.wrongfullyTypedToken),
+                csvEscape(ann.llmEditedToken),
+                csvEscape(e.originalText),
+                csvEscape(e.emittedText),
+                csvEscape(e.selectedSuggestion),
+                csvEscape(e.textBefore),
+                csvEscape(e.textAfter)
+            ].joined(separator: ","))
+        }
+        return rows.joined(separator: "\n")
+    }
+
+    private func writeResearchJSON(
+        events: [InputEventData],
+        annotations: [EditBehaviorAnnotation],
+        participant: Participant?,
+        session: Session,
+        to url: URL
+    ) -> Bool {
+        struct ExportRecord: Codable {
+            let eventIndex: Int
+            let trialIndex: Int
+            let timestampISO: String
+            let eventType: String
+            let editSource: String
+            let editKind: String
+            let keyLabel: String
+            let textBefore: String
+            let textAfter: String
+            let originalText: String
+            let emittedText: String
+            let selectedSuggestion: String
+            let suggestionsOffered: String
+            let touchGestureJSON: String
+            let annotationCategory: String
+            let intentPreserved: Bool
+            let cursorMoved: Bool
+            let usedAutocorrect: Bool
+            let usedSuggestion: Bool
+            let wrongfullyTypedToken: String
+            let llmEditedToken: String
+        }
+        struct Payload: Codable {
+            let sessionId: String
+            let participantFirst: String
+            let participantLast: String
+            let generatedAtISO: String
+            let records: [ExportRecord]
+        }
+
+        let iso = ISO8601DateFormatter()
+        let annByIndex = Dictionary(uniqueKeysWithValues: annotations.map { ($0.eventIndex, $0) })
+        let records: [ExportRecord] = events.enumerated().map { idx, e in
+            let ann = annByIndex[idx]
+            return ExportRecord(
+                eventIndex: idx,
+                trialIndex: e.trialIndex + 1,
+                timestampISO: iso.string(from: e.timestamp),
+                eventType: e.eventType.rawValue,
+                editSource: e.editSource,
+                editKind: e.editKind,
+                keyLabel: e.keyLabel,
+                textBefore: e.textBefore,
+                textAfter: e.textAfter,
+                originalText: e.originalText,
+                emittedText: e.emittedText,
+                selectedSuggestion: e.selectedSuggestion,
+                suggestionsOffered: e.suggestionsOffered,
+                touchGestureJSON: e.touchGestureJSON,
+                annotationCategory: ann?.category ?? "",
+                intentPreserved: ann?.intentPreserved ?? false,
+                cursorMoved: ann?.cursorMoved ?? false,
+                usedAutocorrect: ann?.usedAutocorrect ?? false,
+                usedSuggestion: ann?.usedSuggestion ?? false,
+                wrongfullyTypedToken: ann?.wrongfullyTypedToken ?? "",
+                llmEditedToken: ann?.llmEditedToken ?? ""
+            )
+        }
+        let payload = Payload(
+            sessionId: session.id.uuidString,
+            participantFirst: participant?.firstName ?? "",
+            participantLast: participant?.lastName ?? "",
+            generatedAtISO: iso.string(from: Date()),
+            records: records
+        )
+        do {
+            let data = try JSONEncoder().encode(payload)
+            try data.write(to: url, options: .atomic)
+            return true
+        } catch {
+            print("DataExporter: failed to write research json: \(error)")
+            return false
         }
     }
 }

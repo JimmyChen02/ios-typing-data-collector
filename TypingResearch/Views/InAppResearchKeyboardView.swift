@@ -22,11 +22,9 @@ struct InAppKeyboardEdit {
 }
 
 struct InAppResearchKeyboardView: UIViewRepresentable {
-    /// Key rows + QuickType bar for the current device/orientation.
-    /// Does not include the home-indicator strip — callers should extend the
-    /// keyboard background by `SystemKeyboardMetrics.bottomSafeAreaInset()`.
+    /// Key rows + QuickType bar + home-indicator strip (globe / mic icons).
     static var preferredHeight: CGFloat {
-        SystemKeyboardMetrics.contentHeight()
+        SystemKeyboardMetrics.totalDockedHeight()
     }
 
     let text: String
@@ -56,6 +54,8 @@ private enum InAppKeyboardAction: Equatable {
     case delete
     case space
     case returnKey
+    case globe
+    case microphone
     case layout(KeyboardLayoutMode)
     case candidate(String)
 }
@@ -101,6 +101,7 @@ final class InAppResearchKeyboard: UIView {
     private var touchGestures: [ObjectIdentifier: TouchGesture] = [:]
     private var deleteTimer: Timer?
     private var didRepeatDelete = false
+    private var deleteRepeatCount = 0
     private var lastShiftTap: TimeInterval = 0
 
     /// iOS long-press Space → trackpad cursor movement.
@@ -220,6 +221,8 @@ final class InAppResearchKeyboard: UIView {
 
         if hit?.action == .delete {
             didRepeatDelete = false
+            deleteRepeatCount = 0
+            trackpadLastPoint = touch.location(in: self)
             deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.42, repeats: false) {
                 [weak self] _ in self?.beginDeleteRepeat()
             }
@@ -245,8 +248,7 @@ final class InAppResearchKeyboard: UIView {
         if isSpaceTrackpadActive || (activeAction == .space && !isSpaceTrackpadActive) {
             if !isSpaceTrackpadActive, let start = trackpadLastPoint {
                 let travel = hypot(point.x - start.x, point.y - start.y)
-                // Finger slid while holding Space — enter trackpad early (iOS-like).
-                if travel > 8 {
+                if travel > 6 {
                     activateSpaceTrackpad(at: point)
                 }
             }
@@ -281,6 +283,7 @@ final class InAppResearchKeyboard: UIView {
         guard let activeTouch, touches.contains(activeTouch) else { return }
         deleteTimer?.invalidate()
         deleteTimer = nil
+        deleteRepeatCount = 0
 
         let usedTrackpad = isSpaceTrackpadActive
         let gesture = finishGesture(for: activeTouch, cancelled: false)
@@ -310,6 +313,7 @@ final class InAppResearchKeyboard: UIView {
         guard let activeTouch, touches.contains(activeTouch) else { return }
         deleteTimer?.invalidate()
         deleteTimer = nil
+        deleteRepeatCount = 0
         _ = finishGesture(for: activeTouch, cancelled: true)
         cancelSpaceTrackpad(commitSpace: false)
         clearPrimaryTouch()
@@ -352,10 +356,32 @@ final class InAppResearchKeyboard: UIView {
     private func repeatDelete() {
         guard activeAction == .delete, activeTouch != nil else { return }
         didRepeatDelete = true
+        deleteRepeatCount += 1
         let gesture = currentGesture(for: activeTouch)
-        perform(.delete, gesture: gesture, touch: activeTouch)
+        if deleteRepeatCount >= 10, deleteRepeatCount.isMultiple(of: 3),
+           let deletedWord = deleteWordBeforeCaret() {
+            let frame = selectedFrame(for: .delete)
+            let tapInfo = makeTapInfo(gesture: gesture, action: .delete, frame: frame)
+            emit([
+                InAppKeyboardEdit(
+                    kind: .delete,
+                    originalText: deletedWord,
+                    emittedText: "",
+                    source: .key,
+                    gesture: gesture,
+                    selectedKeyFrame: frame,
+                    tapInfo: tapInfo,
+                    suggestionsOffered: candidateFrames.map(\.text),
+                    selectedSuggestion: nil
+                )
+            ])
+            refreshCandidates()
+        } else {
+            perform(.delete, gesture: gesture, touch: activeTouch)
+        }
         haptic.impactOccurred(intensity: 0.22)
-        deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.085, repeats: false) {
+        let interval: TimeInterval = deleteRepeatCount < 8 ? 0.085 : 0.06
+        deleteTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) {
             [weak self] _ in self?.repeatDelete()
         }
     }
@@ -411,6 +437,12 @@ final class InAppResearchKeyboard: UIView {
 
         case .space:
             var edits: [InAppKeyboardEdit] = []
+            if applyDoubleSpacePeriodIfNeeded(gesture: gesture, frame: frame, tapInfo: tapInfo, offered: offered, into: &edits) {
+                emit(edits)
+                shiftState = .lowercase
+                refreshCandidates()
+                return
+            }
             // iOS: never autocomplete on space. Only apply the already-emphasized
             // spelling correction (if any). Completions require an explicit tap.
             if let word = currentWord,
@@ -570,6 +602,9 @@ final class InAppResearchKeyboard: UIView {
             shiftState = .lowercase
             rebuildLayout()
             setNeedsDisplay()
+        case .globe, .microphone:
+            // Visual parity with stock iOS only — no keyboard switch / dictation.
+            haptic.impactOccurred(intensity: 0.25)
         }
     }
 
@@ -604,18 +639,16 @@ final class InAppResearchKeyboard: UIView {
         let caret = max(0, min(localCaretUTF16, ns.length))
         localText = ns.replacingCharacters(in: NSRange(location: caret, length: 0), with: text)
         localCaretUTF16 = caret + (text as NSString).length
-        publishCaret()
     }
 
     private func deleteBeforeCaret() -> String? {
         let ns = localText as NSString
         let caret = max(0, min(localCaretUTF16, ns.length))
         guard caret > 0 else { return nil }
-        let range = NSRange(location: caret - 1, length: 1)
+        let range = ns.rangeOfComposedCharacterSequence(at: caret - 1)
         let deleted = ns.substring(with: range)
         localText = ns.replacingCharacters(in: range, with: "")
-        localCaretUTF16 = caret - 1
-        publishCaret()
+        localCaretUTF16 = range.location
         return deleted
     }
 
@@ -637,7 +670,70 @@ final class InAppResearchKeyboard: UIView {
             with: replacement
         )
         localCaretUTF16 = loc + (replacement as NSString).length
-        publishCaret()
+    }
+
+    private func applyDoubleSpacePeriodIfNeeded(
+        gesture: TouchGesture?,
+        frame: CGRect?,
+        tapInfo: TapInfo,
+        offered: [String],
+        into edits: inout [InAppKeyboardEdit]
+    ) -> Bool {
+        let ns = localText as NSString
+        let caret = max(0, min(localCaretUTF16, ns.length))
+        guard caret >= 1, ns.character(at: caret - 1) == 32 /* space */ else { return false }
+        guard caret >= 2 else { return false }
+        let prev = ns.character(at: caret - 2)
+        // Don't fire after whitespace/newline punctuation chains.
+        guard prev != 10, prev != 32, prev != 9 else { return false }
+
+        localText = ns.replacingCharacters(
+            in: NSRange(location: caret - 1, length: 1),
+            with: ". "
+        )
+        localCaretUTF16 = caret + 1
+        edits.append(
+            InAppKeyboardEdit(
+                kind: .replace,
+                originalText: " ",
+                emittedText: ". ",
+                source: .key,
+                gesture: gesture,
+                selectedKeyFrame: frame,
+                tapInfo: tapInfo,
+                suggestionsOffered: offered,
+                selectedSuggestion: nil
+            )
+        )
+        return true
+    }
+
+    private func deleteWordBeforeCaret() -> String? {
+        let ns = localText as NSString
+        var caret = max(0, min(localCaretUTF16, ns.length))
+        guard caret > 0 else { return nil }
+
+        // First delete trailing whitespace.
+        while caret > 0 {
+            let ch = ns.character(at: caret - 1)
+            if ch == 32 || ch == 9 || ch == 10 {
+                caret -= 1
+            } else {
+                break
+            }
+        }
+        var start = caret
+        while start > 0 {
+            let ch = ns.character(at: start - 1)
+            if ch == 32 || ch == 9 || ch == 10 { break }
+            start -= 1
+        }
+        guard start < localCaretUTF16 else { return nil }
+        let range = NSRange(location: start, length: localCaretUTF16 - start)
+        let deleted = ns.substring(with: range)
+        localText = ns.replacingCharacters(in: range, with: "")
+        localCaretUTF16 = start
+        return deleted
     }
 
     // MARK: - Space trackpad
@@ -646,7 +742,7 @@ final class InAppResearchKeyboard: UIView {
         cancelSpaceTrackpad(commitSpace: false)
         trackpadLastPoint = point
         trackpadAccum = .zero
-        spaceTrackpadTimer = Timer.scheduledTimer(withTimeInterval: 0.45, repeats: false) {
+        spaceTrackpadTimer = Timer.scheduledTimer(withTimeInterval: 0.32, repeats: false) {
             [weak self] _ in
             guard let self, let touch = self.activeTouch else { return }
             self.activateSpaceTrackpad(at: touch.location(in: self))
@@ -683,25 +779,17 @@ final class InAppResearchKeyboard: UIView {
         trackpadAccum.x += dx
         trackpadAccum.y += dy
 
-        let stepX: CGFloat = 7
-        let stepY: CGFloat = 14
+        let stepX: CGFloat = 3.2
+        let stepY: CGFloat = 10
         var changed = false
-        let ns = localText as NSString
-        let maxLen = ns.length
 
         while trackpadAccum.x <= -stepX {
             trackpadAccum.x += stepX
-            if localCaretUTF16 > 0 {
-                localCaretUTF16 -= 1
-                changed = true
-            }
+            if moveCaretByGrapheme(-1) { changed = true }
         }
         while trackpadAccum.x >= stepX {
             trackpadAccum.x -= stepX
-            if localCaretUTF16 < maxLen {
-                localCaretUTF16 += 1
-                changed = true
-            }
+            if moveCaretByGrapheme(1) { changed = true }
         }
         while trackpadAccum.y <= -stepY {
             trackpadAccum.y += stepY
@@ -723,6 +811,22 @@ final class InAppResearchKeyboard: UIView {
         if changed {
             publishCaret()
             refreshCandidates()
+        }
+    }
+
+    private func moveCaretByGrapheme(_ direction: Int) -> Bool {
+        let ns = localText as NSString
+        let caret = max(0, min(localCaretUTF16, ns.length))
+        if direction < 0 {
+            guard caret > 0 else { return false }
+            let range = ns.rangeOfComposedCharacterSequence(at: caret - 1)
+            localCaretUTF16 = range.location
+            return true
+        } else {
+            guard caret < ns.length else { return false }
+            let range = ns.rangeOfComposedCharacterSequence(at: caret)
+            localCaretUTF16 = NSMaxRange(range)
+            return true
         }
     }
 
@@ -971,9 +1075,9 @@ final class InAppResearchKeyboard: UIView {
                     + Array("zxcvbnm").map { (String($0), .text(String($0)), 1, false) }
                     + [("delete", .delete, 1.5, true)],
                 [
-                    ("123", .layout(.numbers), 1.55, true),
-                    ("space", .space, 5.1, false),
-                    ("return", .returnKey, 1.85, true)
+                    ("123", .layout(.numbers), 1.5, true),
+                    ("space", .space, 6.0, false),
+                    ("return", .returnKey, 1.5, true)
                 ]
             ]
         case .numbers:
@@ -984,9 +1088,9 @@ final class InAppResearchKeyboard: UIView {
                     + Array(".,?!'").map { (String($0), .text(String($0)), 1, false) }
                     + [("delete", .delete, 1.5, true)],
                 [
-                    ("ABC", .layout(.letters), 1.55, true),
-                    ("space", .space, 5.1, false),
-                    ("return", .returnKey, 1.85, true)
+                    ("ABC", .layout(.letters), 1.5, true),
+                    ("space", .space, 6.0, false),
+                    ("return", .returnKey, 1.5, true)
                 ]
             ]
         case .symbols:
@@ -997,9 +1101,9 @@ final class InAppResearchKeyboard: UIView {
                     + Array(".,?!'").map { (String($0), .text(String($0)), 1, false) }
                     + [("delete", .delete, 1.5, true)],
                 [
-                    ("ABC", .layout(.letters), 1.55, true),
-                    ("space", .space, 5.1, false),
-                    ("return", .returnKey, 1.85, true)
+                    ("ABC", .layout(.letters), 1.5, true),
+                    ("space", .space, 6.0, false),
+                    ("return", .returnKey, 1.5, true)
                 ]
             ]
         }
@@ -1027,7 +1131,39 @@ final class InAppResearchKeyboard: UIView {
             }
         }
 
+        appendHomeIndicatorIcons()
         rebuildCandidateFrames()
+    }
+
+    /// Stock iPhone keyboard puts globe (left) and mic (right) in the
+    /// home-indicator strip — icon only, no key chrome.
+    private func appendHomeIndicatorIcons() {
+        let inset = SystemKeyboardMetrics.bottomSafeAreaInset()
+        guard inset > 8, let lastRowMaxY = renderedKeys.map(\.frame.maxY).max() else { return }
+        let hit: CGFloat = 44
+        let y = lastRowMaxY + max(0, (inset - hit) / 2)
+        let height = max(hit, inset - 2)
+        renderedKeys.append(
+            InAppRenderedKey(
+                label: "globe",
+                action: .globe,
+                frame: CGRect(x: layoutSpec.sideInset, y: y, width: hit, height: height),
+                isSpecial: true
+            )
+        )
+        renderedKeys.append(
+            InAppRenderedKey(
+                label: "mic",
+                action: .microphone,
+                frame: CGRect(
+                    x: bounds.width - layoutSpec.sideInset - hit,
+                    y: y,
+                    width: hit,
+                    height: height
+                ),
+                isSpecial: true
+            )
+        )
     }
 
     /// iOS QuickType layout:
@@ -1100,6 +1236,8 @@ final class InAppResearchKeyboard: UIView {
         case .delete: return "key:delete"
         case .space: return "key:space"
         case .returnKey: return "key:return"
+        case .globe: return "key:globe"
+        case .microphone: return "key:mic"
         case .layout(let layout): return "layout:\(layout.rawValue)"
         case .candidate(let text): return "candidate:\(text)"
         }
@@ -1111,6 +1249,8 @@ final class InAppResearchKeyboard: UIView {
         case .delete: return "delete"
         case .space: return "space"
         case .returnKey: return "return"
+        case .globe: return "globe"
+        case .microphone: return "mic"
         case .candidate(let text): return unquotedCandidate(text)
         case .shift: return "shift"
         case .layout(let layout): return layout.rawValue
@@ -1134,7 +1274,7 @@ final class InAppResearchKeyboard: UIView {
     private var specialFill: UIColor {
         traitCollection.userInterfaceStyle == .dark
             ? UIColor(red: 0.27, green: 0.27, blue: 0.28, alpha: 1)
-            : UIColor(red: 0.675, green: 0.70, blue: 0.74, alpha: 1)
+            : UIColor(red: 0.69, green: 0.71, blue: 0.73, alpha: 1)
     }
 
     private func drawCandidateBar(_ context: CGContext) {
@@ -1177,36 +1317,67 @@ final class InAppResearchKeyboard: UIView {
     }
 
     private func draw(_ key: InAppRenderedKey, context: CGContext) {
-        let engagedShift = key.action == .shift && shiftState != .lowercase
-        let base = (key.isSpecial && !engagedShift) || key.action == .space
-            ? specialFill
-            : letterFill
-        var fill = activeAction == key.action ? base.withAlphaComponent(0.58) : base
-        // Dim keys while Space trackpad is steering the caret (iOS-like).
-        if isSpaceTrackpadActive, key.action != .space {
-            fill = fill.withAlphaComponent(0.35)
-        } else if isSpaceTrackpadActive, key.action == .space {
-            fill = letterFill
-        }
-        fill.setFill()
-        let path = UIBezierPath(roundedRect: key.frame, cornerRadius: 5.5)
-        path.fill()
-        if traitCollection.userInterfaceStyle != .dark {
-            UIColor.black.withAlphaComponent(0.16).setStroke()
-            path.lineWidth = 0.4
-            path.stroke()
+        let isHomeIcon = key.action == .globe || key.action == .microphone
+        if !isHomeIcon {
+            let engagedShift = key.action == .shift && shiftState != .lowercase
+            let base = (key.isSpecial && !engagedShift) || key.action == .space
+                ? specialFill
+                : letterFill
+            var fill = activeAction == key.action ? base.withAlphaComponent(0.58) : base
+            // Dim keys while Space trackpad is steering the caret (iOS-like).
+            if isSpaceTrackpadActive, key.action != .space {
+                fill = fill.withAlphaComponent(0.35)
+            } else if isSpaceTrackpadActive, key.action == .space {
+                fill = letterFill
+            }
+            fill.setFill()
+            let path = UIBezierPath(roundedRect: key.frame, cornerRadius: 5.5)
+            context.saveGState()
+            context.setShadow(offset: CGSize(width: 0, height: 1), blur: 0, color: UIColor.black.withAlphaComponent(0.35).cgColor)
+            path.fill()
+            context.restoreGState()
+            if traitCollection.userInterfaceStyle != .dark {
+                UIColor.black.withAlphaComponent(0.16).setStroke()
+                path.lineWidth = 0.4
+                path.stroke()
+            }
         }
 
         if let symbol = symbol(for: key.action) {
-            let pointSize: CGFloat = isLandscape ? 17 : 18.5
-            let config = UIImage.SymbolConfiguration(pointSize: pointSize, weight: .regular)
+            let pointSize: CGFloat
+            let weight: UIImage.SymbolWeight
+            if isHomeIcon {
+                pointSize = isLandscape ? 18 : 21
+                weight = key.action == .globe ? .ultraLight : .regular
+            } else {
+                pointSize = isLandscape ? 17 : 18.5
+                weight = .regular
+            }
+            let config = UIImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
+            let tint: UIColor = isHomeIcon
+                ? (activeAction == key.action ? .label : UIColor.label.withAlphaComponent(0.92))
+                : .label
             if let image = UIImage(systemName: symbol, withConfiguration: config)?
-                .withTintColor(.label, renderingMode: .alwaysOriginal) {
+                .withTintColor(tint, renderingMode: .alwaysOriginal) {
                 image.draw(at: CGPoint(
                     x: key.frame.midX - image.size.width / 2,
                     y: key.frame.midY - image.size.height / 2
                 ))
             }
+        } else if key.action == .space {
+            let en = "EN"
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: UIFont.systemFont(ofSize: isLandscape ? 9 : 10, weight: .medium),
+                .foregroundColor: UIColor.secondaryLabel
+            ]
+            let size = en.size(withAttributes: attrs)
+            en.draw(
+                at: CGPoint(
+                    x: key.frame.maxX - size.width - 8,
+                    y: key.frame.maxY - size.height - 5
+                ),
+                withAttributes: attrs
+            )
         } else {
             let label = displayLabel(for: key)
             let size: CGFloat
@@ -1259,6 +1430,10 @@ final class InAppResearchKeyboard: UIView {
             case .uppercase: return "shift.fill"
             case .capsLock: return "capslock.fill"
             }
+        case .globe:
+            return "globe"
+        case .microphone:
+            return "mic"
         default: return nil
         }
     }
@@ -1279,6 +1454,7 @@ final class InAppResearchKeyboard: UIView {
             withAttributes: attributes
         )
     }
+
 }
 
 extension InAppResearchKeyboard: UIInputViewAudioFeedback {

@@ -3,10 +3,56 @@ import SwiftData
 
 // MARK: - Enums
 
-enum DominantHand: String, Codable, Sendable {
+enum DominantHand: String, Codable, CaseIterable, Sendable {
     case right
     case left
     case ambidextrous
+
+    var displayName: String {
+        switch self {
+        case .right: return "Right"
+        case .left: return "Left"
+        case .ambidextrous: return "Ambidextrous"
+        }
+    }
+}
+
+enum ParticipantSex: String, Codable, CaseIterable, Sendable {
+    case female
+    case male
+    case nonBinary = "non_binary"
+    case preferNotToSay = "prefer_not_to_say"
+
+    var displayName: String {
+        switch self {
+        case .female: return "Female"
+        case .male: return "Male"
+        case .nonBinary: return "Non-binary"
+        case .preferNotToSay: return "Prefer not to say"
+        }
+    }
+}
+
+enum TypingPosturePreference: String, Codable, CaseIterable, Sendable {
+    case rightHand = "right_hand"
+    case leftHand = "left_hand"
+    case bothHands = "both_hands"
+    case mixed
+    case oneHand = "one_hand" // legacy stored value
+
+    static var formCases: [TypingPosturePreference] {
+        [.rightHand, .leftHand, .bothHands, .mixed]
+    }
+
+    var displayName: String {
+        switch self {
+        case .rightHand: return "Right hand"
+        case .leftHand: return "Left hand"
+        case .bothHands: return "Both hands"
+        case .mixed: return "Mixed / depends"
+        case .oneHand: return "One hand only"
+        }
+    }
 }
 
 enum InputEventType: String, Codable, Sendable {
@@ -25,6 +71,11 @@ final class Participant {
     var lastName: String
     var age: Int?
     var dominantHand: DominantHand
+    var sex: ParticipantSex
+    var email: String
+    var consentDataShare: Bool
+    var consentVideoShare: Bool
+    var typingPosturePreference: TypingPosturePreference
     var createdAt: Date
     var deviceModel: String
     var systemVersion: String
@@ -37,6 +88,11 @@ final class Participant {
         lastName: String,
         age: Int? = nil,
         dominantHand: DominantHand = .right,
+        sex: ParticipantSex = .preferNotToSay,
+        email: String = "",
+        consentDataShare: Bool = false,
+        consentVideoShare: Bool = false,
+        typingPosturePreference: TypingPosturePreference = .mixed,
         deviceModel: String,
         systemVersion: String,
         screenWidthPt: Double,
@@ -48,6 +104,11 @@ final class Participant {
         self.lastName = lastName
         self.age = age
         self.dominantHand = dominantHand
+        self.sex = sex
+        self.email = email
+        self.consentDataShare = consentDataShare
+        self.consentVideoShare = consentVideoShare
+        self.typingPosturePreference = typingPosturePreference
         self.createdAt = Date()
         self.deviceModel = deviceModel
         self.systemVersion = systemVersion
@@ -70,10 +131,14 @@ final class Session {
     var meanAccuracy: Double
     var meanCharsPerSecond: Double
     var totalBackspaces: Int
+    var phaseLabel: String
+    var assignedPosture: String
 
     init(
         participantId: UUID,
-        totalTrials: Int = 15
+        totalTrials: Int = 15,
+        phaseLabel: String = "",
+        assignedPosture: String = ""
     ) {
         self.id = UUID()
         self.participantId = participantId
@@ -84,6 +149,8 @@ final class Session {
         self.meanAccuracy = 0.0
         self.meanCharsPerSecond = 0.0
         self.totalBackspaces = 0
+        self.phaseLabel = phaseLabel
+        self.assignedPosture = assignedPosture
     }
 }
 

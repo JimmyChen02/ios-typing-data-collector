@@ -13,13 +13,6 @@ struct TrialView: View {
     // D2c — posture camera-preview overlay toggle.
     @State private var showCameraOverlay: Bool = false
 
-    private let textWindowBeforeCursor = 140
-    private let textWindowAfterCursor = 260
-
-    private var keyboardHeight: CGFloat {
-        keyboardSize.contentHeight
-    }
-
     private var kbBgColor: Color {
         colorScheme == .dark
             ? Color(red: 0.176, green: 0.176, blue: 0.184)
@@ -33,7 +26,7 @@ struct TrialView: View {
 
             Spacer().frame(height: 24)
 
-            targetTextView
+            freeTypingView
                 .padding(.horizontal, 16)
 
             if showsTapDiagnostics {
@@ -48,26 +41,35 @@ struct TrialView: View {
             InAppResearchKeyboardView(text: typedText, caretUTF16: $caretUTF16) { edits in
                 handleKeyboardEdits(edits)
             }
-            .frame(height: keyboardHeight)
+            .frame(height: keyboardSize.totalDockedHeight)
         }
         .padding(.top, 16)
+        .ignoresSafeArea(edges: .bottom)
         .background(alignment: .bottom) {
             kbBgColor
                 .frame(height: keyboardSize.totalDockedHeight)
                 .ignoresSafeArea(edges: .bottom)
         }
         .overlay(alignment: .bottomTrailing) {
-            if sessionManager.isPostureTrainingRun {
-                VStack(alignment: .trailing, spacing: 10) {
-                    if showCameraOverlay {
-                        CameraPreviewOverlay(sessionManager: sessionManager)
-                            .transition(.opacity)
-                    }
-                    PostureCameraToggleButton(isPresented: $showCameraOverlay)
+            VStack(alignment: .trailing, spacing: 10) {
+                if showCameraOverlay {
+                    CameraPreviewOverlay(sessionManager: sessionManager)
+                        .transition(.opacity)
                 }
-                .padding(.trailing, 12)
-                .padding(.bottom, keyboardHeight + 64)
+                HStack(spacing: 8) {
+                    Label("Camera on", systemImage: "camera.fill")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(Color.green.opacity(0.85)))
+                    if sessionManager.studyRole == .researcher {
+                        PostureCameraToggleButton(isPresented: $showCameraOverlay)
+                    }
+                }
             }
+            .padding(.trailing, 12)
+            .padding(.bottom, keyboardSize.totalDockedHeight + 64)
         }
         .onAppear {
             SystemKeyboardMetrics.ensureMeasured()
@@ -99,24 +101,7 @@ struct TrialView: View {
 
     private func handleKeyboardEdits(_ edits: [InAppKeyboardEdit]) {
         for edit in edits {
-            let metadata = metadata(for: edit)
-            switch edit.kind {
-            case .insert:
-                for character in edit.emittedText {
-                    recordInsert(String(character), tapInfo: edit.tapInfo, metadata: metadata)
-                }
-            case .delete:
-                for _ in edit.originalText {
-                    recordDelete(tapInfo: edit.tapInfo, metadata: metadata)
-                }
-            case .replace:
-                for _ in edit.originalText {
-                    recordDelete(tapInfo: edit.tapInfo, metadata: metadata)
-                }
-                for character in edit.emittedText {
-                    recordInsert(String(character), tapInfo: edit.tapInfo, metadata: metadata)
-                }
-            }
+            applyEditAtCaret(edit, metadata: metadata(for: edit))
         }
     }
 
@@ -142,46 +127,56 @@ struct TrialView: View {
         )
     }
 
-    private func recordInsert(
-        _ text: String,
-        tapInfo: TapInfo,
-        metadata: KeyboardEventMetadata
-    ) {
+    private func applyEditAtCaret(_ edit: InAppKeyboardEdit, metadata: KeyboardEventMetadata) {
+        let ns = typedText as NSString
+        let caret = max(0, min(caretUTF16, ns.length))
         let textBefore = typedText
-        let textAfter = textBefore + text
-        let rawEvent = sessionManager.captureRawKeyboardEvent(
-            textBefore: textBefore,
-            textAfter: textAfter,
-            replacementString: text,
-            rangeStart: textBefore.count,
-            rangeLength: 0,
-            eventType: .insert,
-            tapInfo: tapInfo,
-            editSource: metadata.source,
-            editKind: metadata.kind,
-            originalText: metadata.originalText,
-            emittedText: metadata.emittedText,
-            touchGestureJSON: metadata.touchGestureJSON,
-            suggestionsOffered: metadata.suggestionsOffered,
-            selectedSuggestion: metadata.selectedSuggestion
-        )
-        sessionManager.captureEvent(rawEvent)
-        typedText = textAfter
-        caretUTF16 = (textAfter as NSString).length
-    }
+        let textAfter: String
+        let rangeStart: Int
+        let rangeLength: Int
+        let eventType: InputEventType
+        let replacement: String
 
-    private func recordDelete(tapInfo: TapInfo, metadata: KeyboardEventMetadata) {
-        guard let deletedCharacter = typedText.last else { return }
-        let textBefore = typedText
-        let textAfter = String(textBefore.dropLast())
+        switch edit.kind {
+        case .insert:
+            rangeStart = caret
+            rangeLength = 0
+            replacement = edit.emittedText
+            textAfter = ns.replacingCharacters(in: NSRange(location: caret, length: 0), with: edit.emittedText)
+            caretUTF16 = caret + (edit.emittedText as NSString).length
+            eventType = .insert
+        case .delete:
+            let delLen = (edit.originalText as NSString).length
+            guard caret >= delLen, delLen > 0 else { return }
+            let loc = caret - delLen
+            rangeStart = loc
+            rangeLength = delLen
+            replacement = ""
+            textAfter = ns.replacingCharacters(in: NSRange(location: loc, length: delLen), with: "")
+            caretUTF16 = loc
+            eventType = .delete
+        case .replace:
+            let origLen = (edit.originalText as NSString).length
+            let loc = max(0, caret - min(origLen, caret))
+            rangeStart = loc
+            rangeLength = caret - loc
+            replacement = edit.emittedText
+            textAfter = ns.replacingCharacters(
+                in: NSRange(location: loc, length: caret - loc),
+                with: edit.emittedText
+            )
+            caretUTF16 = loc + (edit.emittedText as NSString).length
+            eventType = .replace
+        }
+
         let rawEvent = sessionManager.captureRawKeyboardEvent(
             textBefore: textBefore,
             textAfter: textAfter,
-            replacementString: "",
-            rangeStart: textAfter.count,
-            rangeLength: String(deletedCharacter).count,
-            eventType: .delete,
-            tapInfo: tapInfo,
+            replacementString: replacement,
+            rangeStart: rangeStart,
+            rangeLength: rangeLength,
+            eventType: eventType,
+            tapInfo: edit.tapInfo,
             editSource: metadata.source,
             editKind: metadata.kind,
             originalText: metadata.originalText,
@@ -192,7 +187,6 @@ struct TrialView: View {
         )
         sessionManager.captureEvent(rawEvent)
         typedText = textAfter
-        caretUTF16 = (textAfter as NSString).length
     }
 
     // MARK: - Top Bar
@@ -204,9 +198,15 @@ struct TrialView: View {
                     .font(.title2).fontWeight(.bold)
                     .foregroundColor(sessionManager.remainingSeconds < 30 ? .red : .primary)
                     .monospacedDigit()
-                let sessionNum = sessionManager.completedStudySessions + 1
-                Text("Session \(sessionNum) of \(sessionManager.totalStudySessions) · Classic")
+                let modeLabel = sessionManager.currentSessionMode == .gaussian ? "Adaptive" : "Classic"
+                Text("\(sessionManager.currentStudyPhase.rawValue) · Session \(sessionManager.currentPhaseSessionNumber) of \(sessionManager.currentPhaseTotalSessions) · \(modeLabel)")
                     .font(.caption).foregroundColor(.secondary)
+                Text("Posture: \(sessionManager.currentAssignedPosture.displayName)")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                Text("Topic: \(sessionManager.currentSessionTopic.rawValue)")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
             }
             Spacer()
             Button {
@@ -258,54 +258,22 @@ struct TrialView: View {
         .frame(height: 4)
     }
 
-    // MARK: - Target Text View
+    // MARK: - Free Typing View
 
-    private var targetTextView: some View {
-        Group {
-            if let trial = sessionManager.currentTrial {
-                let targetChars = Array(trial.targetText)
-                let typedChars  = Array(typedText)
-                let cursorIndex = typedChars.count
-                let lowerBound = max(0, cursorIndex - textWindowBeforeCursor)
-                let upperBound = min(targetChars.count, cursorIndex + textWindowAfterCursor)
-                let visibleRange = lowerBound..<upperBound
-                let scrollTarget = min(cursorIndex, max(0, targetChars.count - 1))
-
-                ScrollViewReader { proxy in
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 0) {
-                            ForEach(Array(visibleRange), id: \.self) { index in
-                                let char = targetChars[index]
-                                let isWrongSpace = char == " " && index < cursorIndex && typedChars[index] != char
-                                Text(isWrongSpace ? "·" : String(char))
-                                    .font(.system(size: 22, weight: .medium, design: .monospaced))
-                                    .foregroundColor(charColor(index: index, typedCount: cursorIndex, targetChar: char, typedChars: typedChars))
-                                    .underline(index == cursorIndex)
-                                    .background(index == cursorIndex ? Color.orange.opacity(0.25) : Color.clear)
-                                    .id(index)
-                            }
-                        }
-                        .padding(.horizontal, 4)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .onChange(of: typedText) { _, _ in
-                        if cursorIndex < 24 || cursorIndex % 3 == 0 {
-                            proxy.scrollTo(scrollTarget, anchor: .center)
-                        }
-                    }
-                }
-                .padding(.vertical, 12)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Color(.systemGray6)))
-            }
+    private var freeTypingView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Free typing")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            AnnotatedTypingCanvas(
+                text: $typedText,
+                caretUTF16: $caretUTF16,
+                revertible: nil,
+                placeholder: "Start typing freely about the selected topic..."
+            ) { _ in }
+            .frame(minHeight: 180, maxHeight: 260)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color(.systemGray6)))
         }
-    }
-
-    private func charColor(index: Int, typedCount: Int, targetChar: Character, typedChars: [Character]) -> Color {
-        if index < typedCount {
-            return typedChars[index] == targetChar ? .green : .red
-        }
-        if index == typedCount { return .primary }
-        return .primary.opacity(0.35)
     }
 
     // MARK: - Tap Coordinate Bar

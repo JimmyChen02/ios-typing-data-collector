@@ -1,0 +1,56 @@
+{
+  "posture": [
+    {
+      "id": "imu_window_25",
+      "description": "IMU sequence with 25-sample window (causal).",
+      "command_template": "python3 scripts/train_hand_classifier.py {manifest} --images-root {images_root} --out {out_dir}/imu_window_25 --imu-seq --imu-window 25 --imu-causal --mode handynet --window-size 30 --epochs 2 --md-out {out_dir}/imu_window_25.md"
+    },
+    {
+      "id": "imu_window_50",
+      "description": "IMU sequence with 50-sample window (causal baseline).",
+      "command_template": "python3 scripts/train_hand_classifier.py {manifest} --images-root {images_root} --out {out_dir}/imu_window_50 --imu-seq --imu-window 50 --imu-causal --mode handynet --window-size 30 --epochs 2 --md-out {out_dir}/imu_window_50.md"
+    },
+    {
+      "id": "imu_window_75",
+      "description": "IMU sequence with 75-sample window (causal).",
+      "command_template": "python3 scripts/train_hand_classifier.py {manifest} --images-root {images_root} --out {out_dir}/imu_window_75 --imu-seq --imu-window 75 --imu-causal --mode handynet --window-size 30 --epochs 2 --md-out {out_dir}/imu_window_75.md"
+    },
+    {
+      "id": "imu_window_100",
+      "description": "IMU sequence with 100-sample window (causal).",
+      "command_template": "python3 scripts/train_hand_classifier.py {manifest} --images-root {images_root} --out {out_dir}/imu_window_100 --imu-seq --imu-window 100 --imu-causal --mode handynet --window-size 30 --epochs 2 --md-out {out_dir}/imu_window_100.md"
+    },
+    {
+      "id": "imu_centered_50",
+      "description": "IMU sequence with centered 50-sample window (offline upper-bound).",
+      "command_template": "python3 scripts/train_hand_classifier.py {manifest} --images-root {images_root} --out {out_dir}/imu_centered_50 --imu-seq --imu-window 50 --mode handynet --window-size 30 --epochs 2 --md-out {out_dir}/imu_centered_50.md"
+    },
+    {
+      "id": "imu_fusion_48d",
+      "description": "Image + 48-d IMU summary fusion baseline.",
+      "command_template": "python3 scripts/train_hand_classifier.py {manifest} --images-root {images_root} --out {out_dir}/imu_fusion_48d --use-imu --mode both --window-size 30 --epochs 2 --md-out {out_dir}/imu_fusion_48d.md"
+    }
+  ],
+  "adaptation": [
+    {
+      "id": "trial_loss_grid_50",
+      "description": "Ground-truth trial loss with default 50x50 key grid.",
+      "command_template": "python3 scripts/ground_truth_trial_loss.py {cleaned_csv} --grid-size 50 --output-prefix {out_dir}/trial_loss_grid50"
+    },
+    {
+      "id": "trial_loss_grid_75",
+      "description": "Ground-truth trial loss with finer 75x75 key grid.",
+      "command_template": "python3 scripts/ground_truth_trial_loss.py {cleaned_csv} --grid-size 75 --output-prefix {out_dir}/trial_loss_grid75"
+    },
+    {
+      "id": "threshold_sensitivity",
+      "description": "Distance-threshold sensitivity report on cleaned taps.",
+      "command_template": "python3 scripts/threshold_analysis.py {cleaned_csv} > {out_dir}/threshold_sensitivity.txt"
+    },
+    {
+      "id": "boundary_video",
+      "description": "Per-session boundary evolution video for adaptation checks.",
+      "command_template": "python3 scripts/key_session_boundary_video.py {cleaned_csv} --output-dir {out_dir}/boundary_video --fps 2"
+    }
+  ]
+}

@@ -21,6 +21,8 @@
 		IRK00000000000000000001 /* InAppResearchKeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = IRK00000000000000000002 /* InAppResearchKeyboardView.swift */; };
 		IRK00000000000000000003 /* KeyboardPlaygroundView.swift in Sources */ = {isa = PBXBuildFile; fileRef = IRK00000000000000000004 /* KeyboardPlaygroundView.swift */; };
 		IRK00000000000000000005 /* AnnotatedTypingCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = IRK00000000000000000006 /* AnnotatedTypingCanvas.swift */; };
+		PF000000000000000000001 /* PostureFigures.swift in Sources */ = {isa = PBXBuildFile; fileRef = PF000000000000000000002 /* PostureFigures.swift */; };
+		RA000000000000000000001 /* ResearcherAnalysisPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = RA000000000000000000002 /* ResearcherAnalysisPanel.swift */; };
 		AA000000000000000000007 /* LoggingTextField.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000007 /* LoggingTextField.swift */; };
 		AA000000000000000000008 /* DataExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000008 /* DataExporter.swift */; };
 		AA000000000000000000009 /* Utilities.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000000000000000000009 /* Utilities.swift */; };
@@ -77,6 +79,8 @@
 		IRK00000000000000000002 /* InAppResearchKeyboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InAppResearchKeyboardView.swift; sourceTree = "<group>"; };
 		IRK00000000000000000004 /* KeyboardPlaygroundView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardPlaygroundView.swift; sourceTree = "<group>"; };
 		IRK00000000000000000006 /* AnnotatedTypingCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotatedTypingCanvas.swift; sourceTree = "<group>"; };
+		PF000000000000000000002 /* PostureFigures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostureFigures.swift; sourceTree = "<group>"; };
+		RA000000000000000000002 /* ResearcherAnalysisPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearcherAnalysisPanel.swift; sourceTree = "<group>"; };
 		BB000000000000000000007 /* LoggingTextField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoggingTextField.swift; sourceTree = "<group>"; };
 		BB000000000000000000008 /* DataExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataExporter.swift; sourceTree = "<group>"; };
 		BB000000000000000000009 /* Utilities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Utilities.swift; sourceTree = "<group>"; };
@@ -196,6 +200,8 @@
 				IRK00000000000000000002 /* InAppResearchKeyboardView.swift */,
 				IRK00000000000000000004 /* KeyboardPlaygroundView.swift */,
 				IRK00000000000000000006 /* AnnotatedTypingCanvas.swift */,
+				PF000000000000000000002 /* PostureFigures.swift */,
+				RA000000000000000000002 /* ResearcherAnalysisPanel.swift */,
 				BB000000000000000000007 /* LoggingTextField.swift */,
 				JJ000000000000000000011 /* CustomKeyboardView.swift */,
 				BB000000000000000000016 /* GaussianKeyboardView.swift */,
@@ -357,6 +363,8 @@
 				IRK00000000000000000001 /* InAppResearchKeyboardView.swift in Sources */,
 				IRK00000000000000000003 /* KeyboardPlaygroundView.swift in Sources */,
 				IRK00000000000000000005 /* AnnotatedTypingCanvas.swift in Sources */,
+				PF000000000000000000001 /* PostureFigures.swift in Sources */,
+				RA000000000000000000001 /* ResearcherAnalysisPanel.swift in Sources */,
 				AA000000000000000000007 /* LoggingTextField.swift in Sources */,
 				AA000000000000000000008 /* DataExporter.swift in Sources */,
 				AA000000000000000000012 /* KeystrokeCleaner.swift in Sources */,

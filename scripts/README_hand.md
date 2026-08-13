@@ -372,6 +372,19 @@ See `Model-Training-Test/README.md` for the step-by-step training guide
 (window semantics, Core ML export) and `Model-Training-Test/model.md` for
 the results log.
 
+## Reproducible ablation presets
+
+For batchable posture and adaptation sweeps, use:
+
+```sh
+python3 scripts/ablation_presets.py list
+python3 scripts/ablation_presets.py posture --manifest <manifest.csv> --images-root <root> --out-dir results/ablations/posture
+python3 scripts/ablation_presets.py adaptation --cleaned-csv <cleaned.csv> --out-dir results/ablations/adaptation
+```
+
+Add `--execute` to actually run commands. Without `--execute`, commands are
+printed for review.
+
 ## Future work
 
 - **IMU fusion** — `MotionRecorder` is wired but OFF by default; enabling it

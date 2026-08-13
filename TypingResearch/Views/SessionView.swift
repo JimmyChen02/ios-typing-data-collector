@@ -10,6 +10,8 @@ struct SessionView: View {
                 SummaryView(sessionManager: sessionManager)
             } else if sessionManager.isSessionComplete {
                 BetweenSessionView(sessionManager: sessionManager)
+            } else if sessionManager.isAwaitingSessionStart {
+                SessionBriefingView(sessionManager: sessionManager)
             } else if sessionManager.isTrialActive {
                 TrialView(
                     sessionManager: sessionManager,
@@ -41,44 +43,27 @@ struct SummaryView: View {
     @State private var showResetConfirm: Bool = false
     @State private var generatingPDF: PDFKind? = nil
     @State private var zippingHandData: Bool = false
+    @State private var zippingResearchPackage: Bool = false
     @State private var showPostureSelect: Bool = false
-    @State private var plotLayout: TapDotPlotView.LayoutMode = .alpha
-    @State private var gaussianPreviewImage: UIImage? = nil
-    @State private var isRenderingGaussianPreview = false
+    @State private var exportValidationMessage: String? = nil
 
     private enum PDFKind { case raw, cleaned }
-
-    private var gaussianBoundaryEvents: [InputEventData] {
-        GaussianBoundaryTimeline.finalGroundTruthEvents(from: sessionManager.allEvents)
-    }
-
-    private var hasClassicBoundaryData: Bool {
-        !gaussianBoundaryEvents.isEmpty
-    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 24) {
-                    if sessionManager.isPostureTrainingRun {
-                        postureContinueSection
+                    if sessionManager.studyRole == .researcher {
+                        if sessionManager.isPostureTrainingRun {
+                            postureContinueSection
+                            Divider()
+                        }
+                        ResearcherAnalysisPanel(sessionManager: sessionManager)
                         Divider()
+                        exportButtons
+                    } else {
+                        participantCompleteSection
                     }
-                    if sessionManager.studyDesign == .classicAndAdaptive {
-                        studyComparison
-                        Divider()
-                    }
-                    sessionBreakdown
-                    Divider()
-                    cleaningSection
-                    Divider()
-                    if hasClassicBoundaryData {
-                        gaussianBoundarySection
-                        Divider()
-                    }
-                    tapPlotSection
-                    Divider()
-                    exportButtons
                 }
                 .padding()
             }
@@ -109,6 +94,20 @@ struct SummaryView: View {
                 )
             }
         }
+    }
+
+    private var participantCompleteSection: some View {
+        VStack(spacing: 16) {
+            Text("Thanks for completing this phase.")
+                .font(.title2)
+                .fontWeight(.bold)
+            HStack(spacing: 24) {
+                miniStat(label: "WPM", value: String(format: "%.1f", mean(sessionManager.studySessionSummaries.map(\.meanWPM))))
+                miniStat(label: "Accuracy", value: String(format: "%.1f%%", mean(sessionManager.studySessionSummaries.map(\.meanAccuracy)) * 100))
+            }
+        }
+        .padding()
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color(.systemGray6)))
     }
 
     // MARK: - Posture Training Run — collect next posture
@@ -160,137 +159,8 @@ struct SummaryView: View {
         }
     }
 
-    // MARK: - Study Comparison
-
-    private var classicSummaries: [StudySessionSummary] {
-        sessionManager.studySessionSummaries.filter { $0.mode == "classic" }
-    }
-    private var gaussianSummaries: [StudySessionSummary] {
-        sessionManager.studySessionSummaries.filter { $0.mode == "gaussian" }
-    }
     private func mean(_ vals: [Double]) -> Double {
         vals.isEmpty ? 0 : vals.reduce(0, +) / Double(vals.count)
-    }
-
-    private var studyComparison: some View {
-        let cAcc  = mean(classicSummaries.map(\.meanAccuracy))
-        let gAcc  = mean(gaussianSummaries.map(\.meanAccuracy))
-        let cWPM  = mean(classicSummaries.map(\.meanWPM))
-        let gWPM  = mean(gaussianSummaries.map(\.meanWPM))
-        let cBksp = mean(classicSummaries.map { Double($0.totalBackspaces) })
-        let gBksp = mean(gaussianSummaries.map { Double($0.totalBackspaces) })
-
-        return VStack(spacing: 16) {
-            Text("Classic vs Adaptive")
-                .font(.title2).fontWeight(.bold)
-
-            // Column headers
-            HStack {
-                Text("").frame(maxWidth: .infinity, alignment: .leading)
-                Text("Classic")
-                    .font(.subheadline).fontWeight(.semibold)
-                    .foregroundColor(.orange)
-                    .frame(maxWidth: .infinity)
-                Text("Adaptive")
-                    .font(.subheadline).fontWeight(.semibold)
-                    .foregroundColor(.teal)
-                    .frame(maxWidth: .infinity)
-                Text("Δ")
-                    .font(.subheadline).fontWeight(.semibold)
-                    .foregroundColor(.secondary)
-                    .frame(width: 64)
-            }
-
-            compRow(label: "Accuracy",
-                    cVal: String(format: "%.1f%%", cAcc * 100),
-                    gVal: String(format: "%.1f%%", gAcc * 100),
-                    delta: gAcc - cAcc,
-                    deltaFmt: { String(format: "%+.1f%%", $0 * 100) },
-                    higherBetter: true)
-
-            compRow(label: "WPM",
-                    cVal: String(format: "%.1f", cWPM),
-                    gVal: String(format: "%.1f", gWPM),
-                    delta: gWPM - cWPM,
-                    deltaFmt: { String(format: "%+.1f", $0) },
-                    higherBetter: true)
-
-            compRow(label: "Backspaces",
-                    cVal: String(format: "%.1f", cBksp),
-                    gVal: String(format: "%.1f", gBksp),
-                    delta: gBksp - cBksp,
-                    deltaFmt: { String(format: "%+.1f", $0) },
-                    higherBetter: false)
-        }
-        .padding()
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color(.systemGray6)))
-    }
-
-    private func compRow(
-        label: String,
-        cVal: String,
-        gVal: String,
-        delta: Double,
-        deltaFmt: (Double) -> String,
-        higherBetter: Bool
-    ) -> some View {
-        let improved = higherBetter ? delta > 0 : delta < 0
-        let deltaColor: Color = abs(delta) < 0.001 ? .secondary : (improved ? .green : .red)
-        return HStack {
-            Text(label)
-                .font(.subheadline)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Text(cVal)
-                .font(.subheadline).fontWeight(.medium)
-                .frame(maxWidth: .infinity)
-            Text(gVal)
-                .font(.subheadline).fontWeight(.medium)
-                .frame(maxWidth: .infinity)
-            Text(deltaFmt(delta))
-                .font(.subheadline).fontWeight(.semibold)
-                .foregroundColor(deltaColor)
-                .frame(width: 64)
-        }
-    }
-
-    // MARK: - Per-Session Breakdown
-
-    private var sessionBreakdown: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Session by Session")
-                .font(.headline)
-
-            // Rows are numbered by position, not sessionIndex: posture
-            // training runs append one summary per run, each with
-            // sessionIndex 0, so positional numbering keeps labels unique.
-            ForEach(Array(sessionManager.studySessionSummaries.enumerated()), id: \.element.id) { position, s in
-                let isGaussian = s.mode == "gaussian"
-                HStack(spacing: 12) {
-                    // Session label
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(s.posture != nil ? "R\(position + 1)" : "S\(position + 1)")
-                            .font(.caption).fontWeight(.bold)
-                            .foregroundColor(isGaussian ? .teal : .orange)
-                        Text(s.posture ?? (isGaussian ? "Adaptive" : "Classic"))
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
-                    }
-                    .frame(width: 52, alignment: .leading)
-
-                    Spacer()
-
-                    miniStat(label: "Acc", value: String(format: "%.1f%%", s.meanAccuracy * 100))
-                    miniStat(label: "WPM", value: String(format: "%.1f", s.meanWPM))
-                    miniStat(label: "Bksp", value: "\(s.totalBackspaces)")
-                }
-                .padding(.vertical, 8)
-                .padding(.horizontal, 12)
-                .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(isGaussian ? Color.teal.opacity(0.08) : Color.orange.opacity(0.08))
-                )
-            }
-        }
     }
 
     private func miniStat(label: String, value: String) -> some View {
@@ -301,186 +171,39 @@ struct SummaryView: View {
         .frame(minWidth: 48)
     }
 
-    // MARK: - Cleaning Section
-
-    private var cleaningSection: some View {
-        let summaries = sessionManager.studySessionSummaries
-        let totalInserts    = summaries.map(\.totalInserts).reduce(0, +)
-        let uniqueFlagged   = summaries.map(\.uniqueFlaggedInserts).reduce(0, +)
-        let cleanCount      = totalInserts - uniqueFlagged
-
-        // Aggregate flag counts across all sessions
-        var combined: [String: Int] = [:]
-        for s in summaries {
-            for (flag, count) in s.flagCounts {
-                combined[flag, default: 0] += count
-            }
-        }
-
-        // Display order and labels
-        let flagOrder: [(key: String, label: String)] = [
-            ("spatial",         "Outside key bounds"),
-            ("far_from_target", "Far from expected key"),
-            ("iki_low",         "Too fast  (< 50 ms)"),
-            ("iki_high",        "Too slow  (> 3 s)"),
-            ("trial_start",     "First keystroke of trial"),
-        ]
-
-        return VStack(alignment: .leading, spacing: 12) {
-            Text("Data Cleaning")
-                .font(.headline)
-
-            // Top-line numbers
-            HStack(spacing: 0) {
-                cleanPill(value: "\(totalInserts)", label: "Total inserts", color: .primary)
-                Spacer()
-                cleanPill(value: "\(uniqueFlagged)",
-                          label: "Flagged (\(pct(uniqueFlagged, of: totalInserts)))",
-                          color: .red)
-                Spacer()
-                cleanPill(value: "\(cleanCount)",
-                          label: "Clean (\(pct(cleanCount, of: totalInserts)))",
-                          color: .green)
-            }
-            .padding(.vertical, 4)
-
-            Divider()
-
-            // Per-flag breakdown
-            VStack(spacing: 6) {
-                flagHeaderRow()
-                ForEach(flagOrder, id: \.key) { item in
-                    let count = combined[item.key] ?? 0
-                    flagRow(label: item.label, count: count, total: totalInserts)
-                }
-            }
-            .font(.system(size: 13))
-
-            Text("A tap can carry multiple flags. Rates are per insert event.")
-                .font(.caption2)
-                .foregroundColor(.secondary)
-        }
-        .padding()
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color(.systemGray6)))
-    }
-
-    private func pct(_ n: Int, of total: Int) -> String {
-        guard total > 0 else { return "—" }
-        return String(format: "%.1f%%", Double(n) / Double(total) * 100)
-    }
-
-    private func cleanPill(value: String, label: String, color: Color) -> some View {
-        VStack(spacing: 2) {
-            Text(value).font(.title3).fontWeight(.bold).foregroundColor(color)
-            Text(label).font(.system(size: 10)).foregroundColor(.secondary).multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    @ViewBuilder
-    private func flagHeaderRow() -> some View {
-        HStack {
-            Text("Flag").fontWeight(.semibold).frame(maxWidth: .infinity, alignment: .leading)
-            Text("Count").fontWeight(.semibold).frame(width: 48, alignment: .trailing)
-            Text("Rate").fontWeight(.semibold).frame(width: 52, alignment: .trailing)
-        }
-        .foregroundColor(.secondary)
-        .font(.system(size: 11))
-    }
-
-    private func flagRow(label: String, count: Int, total: Int) -> some View {
-        let rate = total > 0 ? Double(count) / Double(total) : 0
-        let barW = min(CGFloat(rate) * 200, 200)
-        return HStack(spacing: 0) {
-            Text(label).frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
-            ZStack(alignment: .trailing) {
-                Capsule().fill(Color(.systemGray4)).frame(width: 80, height: 5)
-                Capsule().fill(rate > 0.1 ? Color.red : Color.orange)
-                    .frame(width: barW * 0.4, height: 5)
-            }
-            .frame(width: 80)
-            Text("\(count)").frame(width: 48, alignment: .trailing).foregroundColor(.secondary)
-            Text(pct(count, of: total)).frame(width: 52, alignment: .trailing)
-                .foregroundColor(rate > 0.1 ? .red : .primary)
-        }
-    }
-
-    // MARK: - Tap Plot Section
-
-    private var gaussianBoundarySection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Gaussian boundaries")
-                .font(.headline)
-            Text("Final cumulative boundary fit from all classic sessions only.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            GeometryReader { geo in
-                let width = max(280, geo.size.width)
-                let height = max(220, width * 0.62)
-
-                ZStack {
-                    RoundedRectangle(cornerRadius: 14)
-                        .fill(Color(.systemGray6))
-
-                    if let gaussianPreviewImage {
-                        Image(uiImage: gaussianPreviewImage)
-                            .resizable()
-                            .interpolation(.high)
-                            .scaledToFit()
-                            .clipShape(RoundedRectangle(cornerRadius: 14))
-                            .padding(8)
-                    } else if isRenderingGaussianPreview {
-                        VStack(spacing: 10) {
-                            ProgressView()
-                            Text("Rendering Gaussian boundary...")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    } else {
-                        Text("No Gaussian boundary preview available.")
-                            .foregroundColor(.secondary)
-                    }
-                }
-                .task(id: "\(Int(width.rounded()))-\(gaussianBoundaryEvents.count)") {
-                    await renderGaussianBoundaryPreview(width: width, height: height)
-                }
-            }
-            .frame(height: 230)
-
-            Text("\(gaussianBoundaryEvents.count) clean classic taps")
-                .font(.caption2)
-                .foregroundColor(.secondary)
-        }
-    }
-
-    private var tapPlotSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Tap Distribution")
-                    .font(.headline)
-                Spacer()
-                Picker("Layout", selection: $plotLayout) {
-                    ForEach(TapDotPlotView.LayoutMode.allCases) { mode in
-                        Text(mode.rawValue).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 120)
-            }
-
-            TapDotPlotView(
-                events: sessionManager.allEvents,
-                colorMode: .byKey,
-                layoutMode: plotLayout
-            )
-        }
-    }
 
     // MARK: - Export Buttons
 
     private var exportButtons: some View {
         VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Research package")
+                    .font(.headline)
+                Text("Manual share bundle for Drive: raw + cleaned + behavior annotations + LM edited/unedited traces + touch gestures + hand/IMU files.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Button(action: exportResearchPackage) {
+                    HStack {
+                        if zippingResearchPackage {
+                            ProgressView().padding(.trailing, 4)
+                            Text("Packaging…")
+                        } else {
+                            Image(systemName: "tray.and.arrow.up")
+                            Text("Research Package Zip (Share to Drive)")
+                        }
+                    }
+                    .frame(maxWidth: .infinity).padding()
+                    .background(Color.blue)
+                    .foregroundColor(.white).cornerRadius(10)
+                }
+                .disabled(zippingResearchPackage)
+                if let exportValidationMessage {
+                    Text(exportValidationMessage)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+
             exportGroup(
                 title: "Raw data",
                 caption: "Every recorded keystroke.",
@@ -624,38 +347,34 @@ struct SummaryView: View {
         }
     }
 
-    private func renderGaussianBoundaryPreview(width: CGFloat, height: CGFloat) async {
-        let events = gaussianBoundaryEvents
-        guard !events.isEmpty else {
-            await MainActor.run {
-                gaussianPreviewImage = nil
-                isRenderingGaussianPreview = false
-            }
-            return
-        }
-
-        await MainActor.run {
-            isRenderingGaussianPreview = true
-        }
-
-        let model = await Task.detached(priority: .userInitiated) {
-            GaussianKeyModel.fit(events: events, keys: GaussianBoundaryTimeline.allKeys)
-        }.value
-
-        let image = await MainActor.run {
-            let exporter = GaussianKeyboardExporter()
-            return exporter.previewImage(
-                model: model,
-                overlayEvents: events,
-                size: CGSize(width: width, height: height)
+    private func exportResearchPackage() {
+        guard let session = sessionManager.currentSession else { return }
+        guard !zippingResearchPackage else { return }
+        zippingResearchPackage = true
+        exportValidationMessage = nil
+        let events = sessionManager.allEvents
+        let participant = sessionManager.participant
+        let handSamples = sessionManager.pendingHandSamples
+        Task.detached(priority: .userInitiated) {
+            let exporter = DataExporter()
+            let result = exporter.exportResearchPackageZipWithValidation(
+                session: session,
+                events: events,
+                participant: participant,
+                handSamples: handSamples
             )
-        }
-
-        await MainActor.run {
-            gaussianPreviewImage = image
-            isRenderingGaussianPreview = false
+            await MainActor.run {
+                zippingResearchPackage = false
+                if result.report.isComplete {
+                    exportValidationMessage = "Artifact validation passed."
+                } else {
+                    exportValidationMessage = "Missing artifacts: \(result.report.missingArtifacts.joined(separator: ", "))"
+                }
+                if let url = result.url { shareItem = ShareItem(url: url) }
+            }
         }
     }
+
 }
 
 // MARK: - BetweenSessionView
@@ -663,126 +382,130 @@ struct SummaryView: View {
 struct BetweenSessionView: View {
     var sessionManager: SessionManager
 
-    @State private var showHandCapture: Bool = false
-
-    private var completedCount: Int { sessionManager.completedStudySessions }
-    private var totalCount: Int { sessionManager.totalStudySessions }
     private var isClassicOnly: Bool { sessionManager.studyDesign == .classicOnly }
-    private var switchingToAdaptive: Bool { !isClassicOnly && completedCount == totalCount / 2 }
+    private var switchingToAdaptive: Bool { sessionManager.isAwaitingPhaseBAnalysis }
     private var nextMode: SessionMode { sessionManager.currentSessionMode }
 
     var body: some View {
-        VStack(spacing: 24) {
-            // Buttons at top so they're out of thumb-reach from the keyboard area
-            VStack(spacing: 12) {
-                Button(action: { showHandCapture = true }) {
-                    Text("Continue to Session \(completedCount + 1)")
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(nextMode == .gaussian ? Color.teal : Color.orange)
-                        .cornerRadius(14)
+        ScrollView {
+            VStack(spacing: 24) {
+                if sessionManager.studyRole == .researcher {
+                    researcherActions
+                } else {
+                    participantContinue
                 }
-                .padding(.horizontal, 32)
 
-                Button(action: { sessionManager.endStudyEarly() }) {
-                    Text("End Study & Export Data")
-                        .fontWeight(.semibold)
-                        .foregroundColor(.red)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color(.systemGray6))
-                        .cornerRadius(14)
+                Divider()
+
+                VStack(spacing: 8) {
+                    let phaseDone = max(0, sessionManager.currentPhaseSessionNumber - 1)
+                    let phaseTotal = max(1, sessionManager.currentPhaseTotalSessions)
+                    Text("\(sessionManager.currentStudyPhase.rawValue): Session \(phaseDone) of \(phaseTotal) Complete")
+                        .font(.title2).fontWeight(.bold)
                 }
-                .padding(.horizontal, 32)
+
+                if let session = sessionManager.currentSession {
+                    let meanWPM = sessionManager.completedTrials.isEmpty ? 0.0
+                        : sessionManager.completedTrials.map(\.wpm).reduce(0, +)
+                          / Double(sessionManager.completedTrials.count)
+
+                    HStack(spacing: 24) {
+                        statPill(title: "WPM",
+                                 value: String(format: "%.0f", meanWPM),
+                                 color: .orange)
+                        statPill(title: "Accuracy",
+                                 value: String(format: "%.1f%%", session.meanAccuracy * 100),
+                                 color: .green)
+                    }
+                }
+
+                if sessionManager.studyRole == .researcher {
+                    researcherExtras
+                    Divider()
+                    ResearcherAnalysisPanel(sessionManager: sessionManager)
+                }
             }
             .padding(.top, 16)
-            .sheet(isPresented: $showHandCapture) {
-                if let participant = sessionManager.participant {
-                    HandCaptureView(
-                        participant: participant,
-                        sessionId: sessionManager.currentSession?.id,
-                        studyId: sessionManager.studyId,
-                        studySessionIndex: sessionManager.completedStudySessions - 1
-                    ) { samples in
-                        if let samples {
-                            for sample in samples {
-                                sessionManager.recordHandSample(sample)
-                            }
-                        }
-                        showHandCapture = false
-                        sessionManager.continueToNextSession()
-                    }
-                }
-            }
+            .padding(.bottom, 32)
+        }
+    }
 
-            Divider()
-
-            // Session progress
-            VStack(spacing: 8) {
-                Text("Session \(completedCount) of \(totalCount) Complete")
-                    .font(.title2).fontWeight(.bold)
-
-                // Progress dots
-                HStack(spacing: 8) {
-                    ForEach(0..<totalCount, id: \.self) { i in
-                        let isClassic = isClassicOnly || i < totalCount / 2
-                        let isDone = i < completedCount
-                        Circle()
-                            .fill(isDone
-                                  ? (isClassic ? Color.orange : Color.teal)
-                                  : Color(.systemGray4))
-                            .frame(width: 12, height: 12)
-                    }
-                }
-            }
-
-            // Session stats
-            if let session = sessionManager.currentSession {
-                let meanWPM = sessionManager.completedTrials.isEmpty ? 0.0
-                    : sessionManager.completedTrials.map(\.wpm).reduce(0, +)
-                      / Double(sessionManager.completedTrials.count)
-
-                HStack(spacing: 24) {
-                    statPill(title: "Mean WPM",
-                             value: String(format: "%.0f", meanWPM),
-                             color: .orange)
-                    statPill(title: "Accuracy",
-                             value: String(format: "%.1f%%", session.meanAccuracy * 100),
-                             color: .green)
-                    statPill(title: "Backspaces",
-                             value: "\(session.totalBackspaces)",
-                             color: .secondary)
-                }
-            }
-
-            // Mode transition notice
-            if switchingToAdaptive {
-                VStack(spacing: 6) {
-                    Text("Switching to Adaptive Keyboard")
-                        .font(.headline)
-                        .foregroundColor(.teal)
-                    Text("The Gaussian model trained on your classic sessions will now guide tap classification.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 32)
-                }
+    private var participantContinue: some View {
+        Button(action: { sessionManager.continueToNextSession() }) {
+            Text("Continue to Session \(sessionManager.currentPhaseSessionNumber) of \(sessionManager.currentPhaseTotalSessions)")
+                .fontWeight(.semibold)
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
                 .padding()
-                .background(RoundedRectangle(cornerRadius: 12).fill(Color.teal.opacity(0.1)))
-                .padding(.horizontal)
+                .background(nextMode == .gaussian ? Color.teal : Color.orange)
+                .cornerRadius(14)
+        }
+        .padding(.horizontal, 32)
+    }
+
+    private var researcherActions: some View {
+        VStack(spacing: 12) {
+            if sessionManager.isAwaitingPhaseBAnalysis {
+                Button(action: { sessionManager.runPhaseAAnalysisAndPreparePhaseB() }) {
+                    HStack {
+                        if sessionManager.isAnalyzingPhaseTransition {
+                            ProgressView().padding(.trailing, 6)
+                        }
+                        Text("Analyze Phase A & Prepare Phase B")
+                            .fontWeight(.semibold)
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.indigo)
+                    .cornerRadius(14)
+                }
+                .disabled(sessionManager.isAnalyzingPhaseTransition)
+                .padding(.horizontal, 32)
             } else {
-                let modeLabel = nextMode == .gaussian ? "Adaptive (Gaussian)" : "Classic"
-                let label = isClassicOnly
-                    ? "Next: Session \(completedCount + 1)"
-                    : "Next: Session \(completedCount + 1) · \(modeLabel)"
-                Text(label)
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
+                participantContinue
             }
 
-            Spacer()
+            Button(action: { sessionManager.endStudyEarly() }) {
+                Text("End Study & Export Data")
+                    .fontWeight(.semibold)
+                    .foregroundColor(.red)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color(.systemGray6))
+                    .cornerRadius(14)
+            }
+            .padding(.horizontal, 32)
+        }
+    }
+
+    @ViewBuilder
+    private var researcherExtras: some View {
+        if switchingToAdaptive {
+            VStack(spacing: 6) {
+                Text("Analyzing your data")
+                    .font(.headline)
+                    .foregroundColor(.indigo)
+                Text("We build a frozen Phase B Gaussian snapshot from your Phase A sessions, then continue with adaptive sessions.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+            }
+            .padding()
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.indigo.opacity(0.1)))
+            .padding(.horizontal)
+        } else {
+            let modeLabel = nextMode == .gaussian ? "Adaptive (Gaussian)" : "Classic"
+            let postureLabel = sessionManager.currentAssignedPosture.displayName
+            let phaseNum = sessionManager.currentPhaseSessionNumber
+            let phaseTotal = sessionManager.currentPhaseTotalSessions
+            let label = isClassicOnly
+                ? "Next: Session \(phaseNum) of \(phaseTotal) · \(postureLabel)"
+                : "Next: \(sessionManager.currentStudyPhase.rawValue) · Session \(phaseNum) of \(phaseTotal) · \(modeLabel) · \(postureLabel)"
+            Text(label)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
         }
     }
 
@@ -799,6 +522,151 @@ struct BetweenSessionView: View {
         .padding(.vertical, 10)
         .padding(.horizontal, 12)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color(.systemGray6)))
+    }
+}
+
+// MARK: - SessionBriefingView
+
+struct SessionBriefingView: View {
+    var sessionManager: SessionManager
+    @State private var step: BriefingStep = .intro
+    @State private var selectedTopic: StudyTopic?
+    @State private var showTopicError = false
+
+    private enum BriefingStep {
+        case intro
+        case topic
+    }
+
+    private var holdInstruction: String {
+        switch sessionManager.currentAssignedPosture {
+        case .left:
+            return "Please hold the phone using your left hand, and type with your left hand."
+        case .right:
+            return "Please hold the phone using your right hand, and type with your right hand."
+        case .both:
+            return "Please hold the phone using both hands, and type with both thumbs."
+        case .unknown:
+            return "Please hold the phone naturally and type as you usually would."
+        }
+    }
+
+    private var phaseName: String {
+        sessionManager.currentStudyPhase == .phaseB ? "Phase 2" : "Phase 1"
+    }
+
+    private var sessionNumber: Int {
+        sessionManager.currentPhaseSessionNumber
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if step == .intro {
+                introStep
+            } else {
+                topicStep
+            }
+        }
+        .background(Color.black.ignoresSafeArea())
+        .alert("Choose a topic", isPresented: $showTopicError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Select a topic from the list, then tap Start session \(sessionNumber).")
+        }
+    }
+
+    private var introStep: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("\(phaseName)")
+                .font(.largeTitle.bold())
+                .foregroundColor(.white)
+            Text("You are required to write for one minute per session on a topic that you will choose from the list on the next screen.")
+                .foregroundColor(.white.opacity(0.92))
+            Text("This is Session \(sessionNumber) of \(sessionManager.currentPhaseTotalSessions).")
+                .foregroundColor(.white.opacity(0.8))
+            Text(holdInstruction)
+                .fontWeight(.semibold)
+                .foregroundColor(.white)
+            Text("The front camera will stay on while you type, so we can record how you hold the phone.")
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.8))
+
+            Spacer(minLength: 8)
+
+            Button {
+                step = .topic
+            } label: {
+                Text("Next")
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.blue)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+            }
+        }
+        .padding(20)
+    }
+
+    private var topicStep: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Session \(sessionNumber) of \(sessionManager.currentPhaseTotalSessions)")
+                .font(.title2.bold())
+                .foregroundColor(.white)
+            Text("Choose a topic to write about for one minute.")
+                .foregroundColor(.white.opacity(0.85))
+            Text(holdInstruction)
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.9))
+
+            ScrollView {
+                VStack(spacing: 8) {
+                    ForEach(StudyTopic.allCases) { topic in
+                        Button {
+                            selectedTopic = topic
+                        } label: {
+                            HStack(alignment: .top) {
+                                Text(topic.rawValue)
+                                    .foregroundColor(.white)
+                                    .multilineTextAlignment(.leading)
+                                Spacer()
+                                if selectedTopic == topic {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundColor(.blue)
+                                }
+                            }
+                            .padding(12)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(selectedTopic == topic
+                                          ? Color.blue.opacity(0.45)
+                                          : Color.white.opacity(0.08))
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.bottom, 8)
+            }
+
+            Button {
+                guard let selectedTopic else {
+                    showTopicError = true
+                    return
+                }
+                sessionManager.setNextSessionTopic(selectedTopic)
+                sessionManager.beginPreparedSession()
+            } label: {
+                Text("Start session \(sessionNumber)")
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.blue)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+            }
+        }
+        .padding(20)
     }
 }
 

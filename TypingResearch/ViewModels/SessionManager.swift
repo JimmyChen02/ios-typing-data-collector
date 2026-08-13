@@ -18,6 +18,57 @@ enum StudyDesign: Sendable {
     case classicOnly         // all sessions use the classic keyboard
 }
 
+enum StudyRole: Sendable {
+    case participant
+    case researcher
+}
+
+enum StudyPhase: String, Sendable {
+    case phaseA = "Phase A"
+    case phaseB = "Phase B"
+}
+
+struct ScheduledStudySession: Sendable {
+    let phase: StudyPhase
+    let posture: HoldingHand
+    let mode: SessionMode
+}
+
+enum StudyTopic: String, CaseIterable, Identifiable, Sendable {
+    var id: String { rawValue }
+
+    case weekdayMorning = "A typical weekday morning"
+    case favoriteMeal = "Your favorite meal and how you make it"
+    case memorableTrip = "A trip you remember well"
+    case phoneHabits = "How you use your phone during the day"
+    case hobby = "A hobby you enjoy and why"
+    case commute = "Your commute or how you get around"
+    case showRecommend = "A movie or show you would recommend"
+    case howYouRelax = "What you do to relax after a long day"
+    case importantPerson = "A friend or family member who matters to you"
+    case favoriteSeason = "Your favorite season and why"
+    case skillToLearn = "A skill you want to learn"
+    case recentLunch = "What you ate recently and whether you liked it"
+    case cityPlace = "A place in your city you like to go"
+    case stayingActive = "How you stay active"
+    case bookOrPodcast = "A book, podcast, or video you liked"
+    case weekendRoutine = "Your usual weekend routine"
+    case weather = "Weather you like and weather you hate"
+    case jobOrClass = "A job, class, or project you have worked on"
+    case music = "Music you listen to and when you play it"
+    case recentProblem = "A small problem you solved recently"
+    case animals = "Pets or animals you like"
+    case groceries = "How you shop for groceries"
+    case goodDay = "What makes a good day for you"
+    case stayingInTouch = "How you stay in touch with people"
+    case childhoodMemory = "A childhood memory you still think about"
+    case foodFromHome = "Food you miss from home or from growing up"
+    case nextMonth = "Plans you have for the next month"
+    case madeYouLaugh = "Something that made you laugh recently"
+    case techAtWork = "How you use technology at work or school"
+    case advicePastSelf = "Advice you would give your past self"
+}
+
 // MARK: - TapInfo
 
 struct TapInfo: Sendable {
@@ -75,6 +126,212 @@ struct InputEventData: Sendable {
     var keyScreenY: Double { 0 }
 }
 
+struct EditBehaviorAnnotation: Sendable {
+    let eventIndex: Int
+    let category: String
+    let intentPreserved: Bool
+    let cursorMoved: Bool
+    let usedAutocorrect: Bool
+    let usedSuggestion: Bool
+    let wrongfullyTypedToken: String
+    let llmEditedToken: String
+}
+
+enum EditBehaviorAnnotator {
+    static func annotate(events: [InputEventData]) -> [EditBehaviorAnnotation] {
+        guard !events.isEmpty else { return [] }
+        var rows: [EditBehaviorAnnotation] = []
+        rows.reserveCapacity(events.count)
+
+        for (idx, e) in events.enumerated() {
+            let usedAutocorrect = e.editSource == "autocorrection"
+            let usedSuggestion = e.editSource == "candidate" && !e.selectedSuggestion.isEmpty
+            let cursorMoved = eventLikelyMovedCursor(e)
+            let intentPreserved = inferIntentPreserved(event: e, index: idx, events: events)
+            let wrongToken = inferWrongToken(event: e)
+            let editedToken = inferEditedToken(event: e)
+
+            let category: String = {
+                if e.editSource == "correctionReversion" {
+                    return "llm_autocorrect_reverted"
+                }
+                if usedAutocorrect {
+                    return "llm_autocorrect_applied"
+                }
+                if usedSuggestion {
+                    return "llm_suggestion_applied"
+                }
+                if e.eventType == .delete {
+                    return intentPreserved
+                        ? "backspace_same_intent_correction"
+                        : "backspace_intent_change_or_cleanup"
+                }
+                if cursorMoved {
+                    return intentPreserved
+                        ? "cursor_move_same_intent_edit"
+                        : "cursor_move_intent_change_edit"
+                }
+                if e.eventType == .replace {
+                    return intentPreserved
+                        ? "replace_same_intent_edit"
+                        : "replace_intent_change_edit"
+                }
+                return "normal_typing"
+            }()
+
+            rows.append(
+                EditBehaviorAnnotation(
+                    eventIndex: idx,
+                    category: category,
+                    intentPreserved: intentPreserved,
+                    cursorMoved: cursorMoved,
+                    usedAutocorrect: usedAutocorrect,
+                    usedSuggestion: usedSuggestion,
+                    wrongfullyTypedToken: wrongToken,
+                    llmEditedToken: editedToken
+                )
+            )
+        }
+        return rows
+    }
+
+    private static func eventLikelyMovedCursor(_ e: InputEventData) -> Bool {
+        switch e.eventType {
+        case .insert, .replace:
+            return e.rangeStart < e.textBefore.count
+        case .delete:
+            return e.rangeStart < max(0, e.textBefore.count - 1)
+        case .paste:
+            return e.rangeStart < e.textBefore.count
+        }
+    }
+
+    private static func inferIntentPreserved(
+        event e: InputEventData,
+        index: Int,
+        events: [InputEventData]
+    ) -> Bool {
+        if e.editSource == "autocorrection" || e.editSource == "correctionReversion" {
+            return true
+        }
+        if e.eventType == .delete {
+            let deleted = !e.originalText.isEmpty ? e.originalText : e.correctedChar
+            if deleted.count == 1,
+               let next = nextEdit(after: index, events: events),
+               next.eventType != .delete,
+               next.emittedText.count == 1,
+               deleted.rangeOfCharacter(from: .letters) != nil,
+               next.emittedText.rangeOfCharacter(from: .letters) != nil {
+                return true
+            }
+            return false
+        }
+        let a = normalizedToken(e.originalText)
+        let b = normalizedToken(e.emittedText)
+        if a.isEmpty || b.isEmpty { return true }
+        let distance = levenshtein(a, b)
+        let limit = max(1, min(2, max(a.count, b.count) / 3))
+        return distance <= limit
+    }
+
+    private static func inferWrongToken(event e: InputEventData) -> String {
+        if !e.originalText.isEmpty { return e.originalText }
+        if e.editSource == "autocorrection" || e.editSource == "candidate" {
+            return tokenBeforeCursor(in: e.textBefore, rangeStart: e.rangeStart)
+        }
+        return ""
+    }
+
+    private static func inferEditedToken(event e: InputEventData) -> String {
+        if !e.emittedText.isEmpty { return e.emittedText }
+        if e.editSource == "autocorrection" || e.editSource == "candidate" {
+            return tokenBeforeCursor(in: e.textAfter, rangeStart: e.rangeStart)
+        }
+        return ""
+    }
+
+    private static func nextEdit(after index: Int, events: [InputEventData]) -> InputEventData? {
+        guard index + 1 < events.count else { return nil }
+        return events[(index + 1)...].first { !$0.emittedText.isEmpty || $0.eventType == .delete }
+    }
+
+    private static func tokenBeforeCursor(in text: String, rangeStart: Int) -> String {
+        let ns = text as NSString
+        let cursor = max(0, min(rangeStart, ns.length))
+        guard cursor > 0 else { return "" }
+        var start = cursor
+        while start > 0 {
+            let ch = ns.character(at: start - 1)
+            if ch == 32 || ch == 10 || ch == 9 { break }
+            start -= 1
+        }
+        let token = ns.substring(with: NSRange(location: start, length: cursor - start))
+        return token.trimmingCharacters(in: .punctuationCharacters)
+    }
+
+    private static func normalizedToken(_ token: String) -> String {
+        token.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+    }
+
+    private static func levenshtein(_ a: String, _ b: String) -> Int {
+        let sa = Array(a)
+        let sb = Array(b)
+        if sa.isEmpty { return sb.count }
+        if sb.isEmpty { return sa.count }
+        var dp = Array(0...sb.count)
+        for i in 1...sa.count {
+            var prev = dp[0]
+            dp[0] = i
+            for j in 1...sb.count {
+                let temp = dp[j]
+                if sa[i - 1] == sb[j - 1] {
+                    dp[j] = prev
+                } else {
+                    dp[j] = min(prev + 1, dp[j] + 1, dp[j - 1] + 1)
+                }
+                prev = temp
+            }
+        }
+        return dp[sb.count]
+    }
+
+    static func categoryTitle(_ category: String) -> String {
+        switch category {
+        case "llm_autocorrect_applied": return "LM autocorrect"
+        case "llm_suggestion_applied": return "Suggestion tap"
+        case "llm_autocorrect_reverted": return "Tapped word to undo autocorrect"
+        case "backspace_same_intent_correction": return "Backspace fix (same word)"
+        case "backspace_intent_change_or_cleanup": return "Backspace that changed the word"
+        case "cursor_move_same_intent_edit": return "Typed after moving caret (same word)"
+        case "cursor_move_intent_change_edit": return "Typed after moving caret (changed meaning)"
+        case "replace_same_intent_edit": return "Replace (same word)"
+        case "replace_intent_change_edit": return "Replace (changed meaning)"
+        case "normal_typing": return "Normal typing"
+        default: return category.replacingOccurrences(of: "_", with: " ")
+        }
+    }
+
+    static func cursorEditKind(for event: InputEventData) -> String? {
+        if event.editSource == "correctionReversion" {
+            return "Tapped the underlined word"
+        }
+        let beforeLen = (event.textBefore as NSString).length
+        if event.eventType == .delete {
+            let delLen = max((event.originalText as NSString).length, 1)
+            if event.rangeStart + delLen >= beforeLen {
+                return "Backspace at the end"
+            }
+            return "Backspace after moving the caret"
+        }
+        if event.eventType == .insert || event.eventType == .replace {
+            if event.editSource == "key", event.rangeStart < beforeLen {
+                return "Typed after moving the caret (tap or Space-trackpad)"
+            }
+        }
+        return nil
+    }
+}
+
 struct RawInputEvent: Sendable {
     let timestamp: Date
     let eventType: InputEventType
@@ -102,6 +359,7 @@ struct StudySessionSummary: Identifiable {
     let id = UUID()
     let sessionIndex: Int   // 0-based within its run
     let mode: String        // "classic" or "gaussian"
+    let phase: String       // "Phase A" / "Phase B"
     let posture: String?    // holding-posture label for posture training runs, else nil
     let meanAccuracy: Double
     let meanWPM: Double
@@ -233,6 +491,7 @@ final class SessionManager {
     var isSessionActive: Bool = false
     var isTrialActive: Bool = false
     var isSessionComplete: Bool = false
+    var isAwaitingSessionStart: Bool = false
     var completedTrials: [Trial] = []
 
     // MARK: - Posture training run (D2) — opt-in, off by default
@@ -250,18 +509,62 @@ final class SessionManager {
 
     // Study-level state: total sessions chosen by researcher, split evenly classic/gaussian.
     var studyId: UUID = UUID()
-    var totalStudySessions: Int = 4
+    var totalStudySessions: Int = 24
     var completedStudySessions: Int = 0
     var isStudyComplete: Bool = false
     var studySessionSummaries: [StudySessionSummary] = []
     var studyDesign: StudyDesign = .classicAndAdaptive
+    var studyRole: StudyRole = .participant
+    var sessionsPerHandPerPhase: Int = 4
+    var scheduledSessions: [ScheduledStudySession] = []
+    var isAnalyzingPhaseTransition: Bool = false
+    var hasCompletedPhaseAAnalysis: Bool = false
+    var phaseBModelSnapshotDate: Date?
+    var randomizationSeed: Int = Int(Date().timeIntervalSince1970)
+    var currentSessionTopic: StudyTopic = .weekdayMorning
+    var selectedTopicForNextSession: StudyTopic = .weekdayMorning
+    var isFreeTypingStudy: Bool = true
 
     var currentSessionMode: SessionMode {
-        switch studyDesign {
-        case .classicOnly: return .classic
-        case .classicAndAdaptive:
-            return completedStudySessions < totalStudySessions / 2 ? .classic : .gaussian
-        }
+        guard completedStudySessions < scheduledSessions.count else { return .classic }
+        return scheduledSessions[completedStudySessions].mode
+    }
+
+    var currentStudyPhase: StudyPhase {
+        guard completedStudySessions < scheduledSessions.count else { return .phaseB }
+        return scheduledSessions[completedStudySessions].phase
+    }
+
+    var currentAssignedPosture: HoldingHand {
+        guard completedStudySessions < scheduledSessions.count else { return .both }
+        return scheduledSessions[completedStudySessions].posture
+    }
+
+    var phaseASessionCount: Int {
+        scheduledSessions.filter { $0.phase == .phaseA }.count
+    }
+
+    var phaseBSessionCount: Int {
+        scheduledSessions.filter { $0.phase == .phaseB }.count
+    }
+
+    var currentPhaseSessionNumber: Int {
+        let targetPhase = currentStudyPhase
+        let completedInPhase = scheduledSessions
+            .prefix(completedStudySessions)
+            .filter { $0.phase == targetPhase }
+            .count
+        return completedInPhase + 1
+    }
+
+    var currentPhaseTotalSessions: Int {
+        currentStudyPhase == .phaseA ? phaseASessionCount : phaseBSessionCount
+    }
+
+    var isAwaitingPhaseBAnalysis: Bool {
+        !hasCompletedPhaseAAnalysis &&
+        completedStudySessions == phaseASessionCount &&
+        completedStudySessions < totalStudySessions
     }
 
     // Device-adaptive keyboard chrome — updated from SystemKeyboardMetrics /
@@ -303,6 +606,34 @@ final class SessionManager {
         self.modelContext = modelContext
     }
 
+    private func makeSchedule(
+        design: StudyDesign,
+        sessionsPerHand: Int,
+        seed: Int
+    ) -> [ScheduledStudySession] {
+        let postures: [HoldingHand] = [.left, .right, .both]
+        var rng = SeededGenerator(seed: UInt64(bitPattern: Int64(seed)))
+
+        func shuffledPhase(phase: StudyPhase, mode: SessionMode) -> [ScheduledStudySession] {
+            var chunk: [ScheduledStudySession] = []
+            for posture in postures {
+                for _ in 0..<sessionsPerHand {
+                    chunk.append(ScheduledStudySession(phase: phase, posture: posture, mode: mode))
+                }
+            }
+            chunk.shuffle(using: &rng)
+            return chunk
+        }
+
+        switch design {
+        case .classicOnly:
+            return shuffledPhase(phase: .phaseA, mode: .classic)
+        case .classicAndAdaptive:
+            return shuffledPhase(phase: .phaseA, mode: .classic)
+                + shuffledPhase(phase: .phaseB, mode: .gaussian)
+        }
+    }
+
     // MARK: - Session Lifecycle
 
     func startSession(participant: Participant,
@@ -313,11 +644,17 @@ final class SessionManager {
         self.remainingSeconds = durationSeconds
         self.elapsedSeconds = 0
         self.sessionMode = mode
+        self.currentSessionTopic = selectedTopicForNextSession
 
         // Cycle through corpus sets so each session uses a different text set.
         WordGenerator.selectCorpus(forSessionIndex: completedStudySessions)
 
-        let session = Session(participantId: participant.id)
+        let assignedPosture = currentAssignedPosture == .both ? "Both hands" : currentAssignedPosture.displayName
+        let session = Session(
+            participantId: participant.id,
+            phaseLabel: currentStudyPhase.rawValue,
+            assignedPosture: assignedPosture
+        )
         self.currentSession = session
         MotionRecorder.shared.start(sessionId: session.id, studySessionIndex: completedStudySessions)
         modelContext?.insert(session)
@@ -332,20 +669,73 @@ final class SessionManager {
         startNextTrial()
     }
 
-    func startStudy(participant: Participant, totalSessions: Int, design: StudyDesign = .classicAndAdaptive) {
-        totalStudySessions = totalSessions
+    func startStudy(
+        participant: Participant,
+        totalSessions: Int? = nil,
+        design: StudyDesign = .classicAndAdaptive,
+        role: StudyRole = .participant,
+        sessionsPerHandPerPhase: Int = 4,
+        randomizationSeed: Int = Int(Date().timeIntervalSince1970),
+        initialTopic: StudyTopic = .weekdayMorning
+    ) {
+        studyRole = role
+        self.sessionsPerHandPerPhase = max(1, sessionsPerHandPerPhase)
+        self.randomizationSeed = randomizationSeed
         studyDesign = design
+        scheduledSessions = makeSchedule(
+            design: design,
+            sessionsPerHand: self.sessionsPerHandPerPhase,
+            seed: randomizationSeed
+        )
+        if let totalSessions {
+            totalStudySessions = totalSessions
+            scheduledSessions = Array(scheduledSessions.prefix(totalSessions))
+        } else {
+            totalStudySessions = scheduledSessions.count
+        }
         completedStudySessions = 0
         isStudyComplete = false
+        isAnalyzingPhaseTransition = false
+        hasCompletedPhaseAAnalysis = false
+        phaseBModelSnapshotDate = nil
         studyId = UUID()
         allEvents = []
         pendingHandSamples = []
-        startSession(participant: participant, durationSeconds: 60, mode: currentSessionMode)
+        selectedTopicForNextSession = initialTopic
+        currentSessionTopic = initialTopic
+        self.participant = participant
+        isSessionActive = false
+        isSessionComplete = false
+        isAwaitingSessionStart = true
     }
 
     func continueToNextSession() {
+        guard participant != nil else { return }
+        if isAwaitingPhaseBAnalysis { return }
+        isSessionComplete = false
+        isAwaitingSessionStart = true
+    }
+
+    func beginPreparedSession() {
         guard let p = participant else { return }
+        isAwaitingSessionStart = false
         startSession(participant: p, durationSeconds: 60, mode: currentSessionMode)
+    }
+
+    func setNextSessionTopic(_ topic: StudyTopic) {
+        selectedTopicForNextSession = topic
+    }
+
+    func runPhaseAAnalysisAndPreparePhaseB() {
+        guard isAwaitingPhaseBAnalysis else { return }
+        isAnalyzingPhaseTransition = true
+        // Persist an explicit snapshot marker right after Phase A to freeze
+        // the adaptation state used for Phase B evaluation.
+        if GaussianModelStore.shared.savePhaseBSnapshot() {
+            phaseBModelSnapshotDate = Date()
+        }
+        hasCompletedPhaseAAnalysis = true
+        isAnalyzingPhaseTransition = false
     }
 
     func endStudyEarly() {
@@ -388,7 +778,7 @@ final class SessionManager {
         }
         guard let session = currentSession else { return }
 
-        let targetText = WordGenerator.randomSentences(count: Self.initialSentenceCount)
+        let targetText = isFreeTypingStudy ? "" : WordGenerator.randomSentences(count: Self.initialSentenceCount)
         let trial = Trial(
             sessionId: session.id,
             trialIndex: currentTrialIndex,
@@ -423,7 +813,7 @@ final class SessionManager {
         liveTypedText = raw.textAfter
 
         // Keep target text well ahead of where the user is typing
-        if let trial = currentTrial {
+        if !isFreeTypingStudy, let trial = currentTrial {
             let remaining = currentTargetTextLength - raw.textAfter.count
             if remaining < 200 {
                 let extensionText = " " + WordGenerator.randomSentences(count: 8)
@@ -461,23 +851,21 @@ final class SessionManager {
     // touches keystroke logging, timers, or event flow, preserving normal
     // session data integrity.
 
-    /// Starts continuous labeled photo+IMU capture for the typing screen.
-    /// No-op when isPostureTrainingRun == false, or when no active
-    /// participant/session/modelContext is available. MotionRecorder is
-    /// NOT started here — it already starts in startSession(); this only
-    /// starts the front-camera HandBurstCapture stream.
+    /// Starts continuous labeled front-camera capture for the typing screen.
+    /// Runs on every study session (left / right / both), not only the
+    /// optional researcher posture-training pass. MotionRecorder is NOT
+    /// started here — it already starts in startSession().
     func startPostureCapture() {
-        guard isPostureTrainingRun,
-              let participant,
-              let modelContext
-        else { return }
+        guard let participant, let modelContext, isSessionActive else { return }
 
+        let posture = isPostureTrainingRun ? selectedPosture : currentAssignedPosture
         postureCapture.start(
             participant: participant,
             sessionId: currentSession?.id,
             studyId: studyId,
-            posture: selectedPosture,
-            modelContext: modelContext
+            posture: posture,
+            modelContext: modelContext,
+            notes: isPostureTrainingRun ? "posture_training_run" : "study_session"
         ) { [weak self] sample in
             guard let self else { return }
             self.pendingHandSamples.append(sample)
@@ -506,14 +894,16 @@ final class SessionManager {
         let accumulatedSamples = pendingHandSamples
         selectedPosture = posture
         isPostureTrainingRun = true
-        startStudy(participant: p, totalSessions: 1, design: .classicOnly)
+        startStudy(
+            participant: p,
+            totalSessions: 1,
+            design: .classicOnly,
+            initialTopic: selectedTopicForNextSession
+        )
         pendingHandSamples = accumulatedSamples
     }
 
-    /// D2c — the most recently captured posture-training frame, for the
-    /// live camera-preview overlay. Reuses PostureCaptureController's single
-    /// HandBurstCapture stream (no second AVCaptureSession). nil when no
-    /// posture training run is active or no frame has arrived yet.
+    /// Latest front-camera frame for the live preview overlay.
     var latestPostureFrame: UIImage? {
         postureCapture.latestFrame
     }
@@ -686,9 +1076,17 @@ final class SessionManager {
 
         let backspaces = pendingEvents.filter { $0.eventType == .delete }.count
         let inserts = pendingEvents.filter { $0.eventType == .insert }
-        let correctChars = inserts.filter { $0.isCorrect }.count
-        // Per-keystroke accuracy: fraction of insert taps that hit the correct key
-        let accuracy = inserts.isEmpty ? 0.0 : Double(correctChars) / Double(inserts.count)
+        let correctChars: Int
+        let accuracy: Double
+        if isFreeTypingStudy {
+            // Free-typing heuristic: penalize corrections by backspace load.
+            let estimatedCorrect = max(0, inserts.count - backspaces)
+            correctChars = estimatedCorrect
+            accuracy = inserts.isEmpty ? 0.0 : Double(estimatedCorrect) / Double(inserts.count)
+        } else {
+            correctChars = inserts.filter { $0.isCorrect }.count
+            accuracy = inserts.isEmpty ? 0.0 : Double(correctChars) / Double(inserts.count)
+        }
 
         trial.finalText = finalText
         trial.endedAt = endTime
@@ -696,7 +1094,7 @@ final class SessionManager {
         trial.backspaceCount = backspaces
         trial.insertCount = inserts.count
         trial.correctChars = correctChars
-        trial.totalTargetChars = trial.targetText.count
+        trial.totalTargetChars = max(trial.targetText.count, finalText.count)
         trial.accuracy = accuracy
         trial.charsPerSecond = cps
         trial.wpm = wpmVal
@@ -735,6 +1133,7 @@ final class SessionManager {
             : completedTrials.map(\.wpm).reduce(0, +) / Double(completedTrials.count)
 
         let sessionEvents = allEvents.filter { $0.studySessionIndex == completedStudySessions }
+        let sessionAnnotations = EditBehaviorAnnotator.annotate(events: sessionEvents)
 
         var flagCounts: [String: Int] = [:]
         var totalInserts = 0
@@ -751,9 +1150,10 @@ final class SessionManager {
         studySessionSummaries.append(StudySessionSummary(
             sessionIndex: completedStudySessions,
             mode: sessionMode == .gaussian ? "gaussian" : "classic",
+            phase: currentStudyPhase.rawValue,
             posture: isPostureTrainingRun
                 ? (selectedPosture == .both ? "Mid" : selectedPosture.displayName)
-                : nil,
+                : currentAssignedPosture.displayName,
             meanAccuracy: currentSession?.meanAccuracy ?? 0,
             meanWPM: sessionWPM,
             totalBackspaces: currentSession?.totalBackspaces ?? 0,
@@ -771,7 +1171,7 @@ final class SessionManager {
         // Only classic sessions train the model — Gaussian sessions run on the
         // frozen snapshot built from the first half of the study.
         if sessionMode == .classic {
-            GaussianModelStore.shared.update(with: sessionEvents)
+            GaussianModelStore.shared.update(with: sessionEvents, annotations: sessionAnnotations)
         }
 
         completedStudySessions += 1
@@ -822,9 +1222,20 @@ final class SessionManager {
     // Restart the full study with the same participant.
     func restartSameSession() {
         guard let p = participant else { return }
-        let total = totalStudySessions
+        let design = studyDesign
+        let role = studyRole
+        let perHand = sessionsPerHandPerPhase
+        let seed = randomizationSeed
         reset()
-        startStudy(participant: p, totalSessions: total)
+        startStudy(
+            participant: p,
+            totalSessions: nil,
+            design: design,
+            role: role,
+            sessionsPerHandPerPhase: perHand,
+            randomizationSeed: seed,
+            initialTopic: selectedTopicForNextSession
+        )
     }
 
     func reset() {
@@ -844,6 +1255,7 @@ final class SessionManager {
         isSessionActive = false
         isTrialActive = false
         isSessionComplete = false
+        isAwaitingSessionStart = false
         completedTrials = []
         liveTypedText = ""
         liveWPM = 0.0
@@ -852,12 +1264,22 @@ final class SessionManager {
         lastKeyLabel = ""
         lastLiveWPMUpdateAt = nil
         currentTargetTextLength = 0
-        totalStudySessions = 4
+        totalStudySessions = 24
         studyDesign = .classicAndAdaptive
         completedStudySessions = 0
         isStudyComplete = false
         studySessionSummaries = []
         studyId = UUID()
+        studyRole = .participant
+        sessionsPerHandPerPhase = 4
+        scheduledSessions = []
+        isAnalyzingPhaseTransition = false
+        hasCompletedPhaseAAnalysis = false
+        phaseBModelSnapshotDate = nil
+        randomizationSeed = Int(Date().timeIntervalSince1970)
+        currentSessionTopic = .weekdayMorning
+        selectedTopicForNextSession = .weekdayMorning
+        isFreeTypingStudy = true
     }
 
     // MARK: - Formatted time
@@ -873,5 +1295,21 @@ final class SessionManager {
         let s = sessionDurationSeconds % 60
         if s == 0 { return "\(m) min" }
         return String(format: "%d:%02d", m, s)
+    }
+}
+
+private struct SeededGenerator: RandomNumberGenerator {
+    private var state: UInt64
+
+    init(seed: UInt64) {
+        state = seed == 0 ? 0x9E3779B97F4A7C15 : seed
+    }
+
+    mutating func next() -> UInt64 {
+        state &+= 0x9E3779B97F4A7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
+        z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
+        return z ^ (z >> 31)
     }
 }

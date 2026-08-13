@@ -33,16 +33,18 @@ struct AnnotatedTypingCanvas: UIViewRepresentable {
         view.backgroundColor = .clear
         view.textContainerInset = UIEdgeInsets(top: 16, left: 12, bottom: 16, right: 12)
         view.textContainer.lineFragmentPadding = 0
-        view.tintColor = .systemBlue
+        view.tintColor = UIColor(red: 0.89, green: 0.52, blue: 0.22, alpha: 1)
+        view.linkTextAttributes = [
+            .foregroundColor: UIColor.label,
+            .underlineColor: UIColor.systemGray,
+            .underlineStyle: NSUnderlineStyle.single.rawValue
+        ]
         // Keep first-responder so the caret blinks; suppress the system keyboard.
         view.inputView = UIView(frame: .zero)
         view.inputAssistantItem.leadingBarButtonGroups = []
         view.inputAssistantItem.trailingBarButtonGroups = []
         view.delegate = context.coordinator
         view.placeholderLabel.text = placeholder
-        view.onTapCharacterIndex = { index in
-            context.coordinator.handleTap(at: index)
-        }
         context.coordinator.apply(to: view, forceCaret: true)
         DispatchQueue.main.async {
             _ = view.becomeFirstResponder()
@@ -147,7 +149,8 @@ struct AnnotatedTypingCanvas: UIViewRepresentable {
                     attributed.addAttributes(
                         [
                             .underlineStyle: NSUnderlineStyle.single.rawValue,
-                            .underlineColor: UIColor.systemGray
+                            .underlineColor: UIColor.systemGray,
+                            .link: URL(string: "revert://autocorrection") as Any
                         ],
                         range: range
                     )
@@ -155,31 +158,17 @@ struct AnnotatedTypingCanvas: UIViewRepresentable {
             }
 
             let offset = view.contentOffset
-            if view.text != parent.text {
+            let textChanged = view.text != parent.text
+            if textChanged {
                 view.attributedText = attributed
             } else {
-                // Refresh underline attributes without resetting caret unnecessarily.
                 view.textStorage.setAttributedString(attributed)
             }
             let clamped = max(0, min(caret, attributed.length))
-            if forceCaret || view.selectedRange.length != 0 || view.selectedRange.location != clamped {
+            if forceCaret || textChanged || (view.selectedRange.length == 0 && view.selectedRange.location != clamped) {
                 view.selectedRange = NSRange(location: clamped, length: 0)
             }
             view.setContentOffset(offset, animated: false)
-        }
-
-        func handleTap(at index: Int) {
-            if let mark = parent.revertible {
-                let range = NSRange(
-                    location: mark.utf16Location,
-                    length: (mark.replacement as NSString).length
-                )
-                if index >= range.location, index < NSMaxRange(range) {
-                    parent.onRevertAutocorrection(mark)
-                    return
-                }
-            }
-            parent.caretUTF16 = max(0, min(index, (parent.text as NSString).length))
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
@@ -198,6 +187,23 @@ struct AnnotatedTypingCanvas: UIViewRepresentable {
         ) -> Bool {
             // All typing comes from the in-app research keyboard.
             false
+        }
+
+        func textView(
+            _ textView: UITextView,
+            shouldInteractWith URL: URL,
+            in characterRange: NSRange,
+            interaction: UITextItemInteraction
+        ) -> Bool {
+            guard URL.scheme == "revert", let mark = parent.revertible else { return false }
+            let range = NSRange(
+                location: mark.utf16Location,
+                length: (mark.replacement as NSString).length
+            )
+            if NSIntersectionRange(characterRange, range).length > 0 {
+                parent.onRevertAutocorrection(mark)
+            }
+            return false
         }
 
         private var preferredLanguage: String {
@@ -230,7 +236,6 @@ struct AnnotatedTypingCanvas: UIViewRepresentable {
 }
 
 final class CursorTextView: UITextView {
-    var onTapCharacterIndex: ((Int) -> Void)?
     let placeholderLabel = UILabel()
 
     override var canBecomeFirstResponder: Bool { true }
@@ -246,21 +251,10 @@ final class CursorTextView: UITextView {
             placeholderLabel.topAnchor.constraint(equalTo: topAnchor, constant: 16)
         ])
 
-        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
-        tap.cancelsTouchesInView = false
-        addGestureRecognizer(tap)
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
-    @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
-        guard gesture.state == .ended else { return }
-        _ = becomeFirstResponder()
-        let point = gesture.location(in: self)
-        if let position = closestPosition(to: point) {
-            onTapCharacterIndex?(offset(from: beginningOfDocument, to: position))
-        }
-    }
 }

@@ -38,6 +38,7 @@ final class GaussianModelStore {
     }
 
     private let filename = "gaussian_taps.json"
+    private let phaseBSnapshotFilename = "gaussian_taps_phase_b_snapshot.json"
     private let allowed: Set<String> = {
         var s = Set<String>()
         for c in "qwertyuiopasdfghjklzxcvbnm" { s.insert(String(c)) }
@@ -53,9 +54,17 @@ final class GaussianModelStore {
     // Append a session's valid taps to the persistent corpus. Inserts train
     // the inferred intended key; delete taps train the delete target and act
     // as implicit correction feedback for nearby inserts.
-    func update(with events: [InputEventData]) {
+    func update(with events: [InputEventData], annotations: [EditBehaviorAnnotation]? = nil) {
         var taps = loadTaps()
-        for e in events {
+        let annByIndex: [Int: EditBehaviorAnnotation] = Dictionary(
+            uniqueKeysWithValues: (annotations ?? []).map { ($0.eventIndex, $0) }
+        )
+        for (idx, e) in events.enumerated() {
+            if let ann = annByIndex[idx],
+               ann.category == "backspace_intent_change_or_cleanup" || ann.category == "cursor_move_intent_change_edit" {
+                // Skip taps likely tied to explicit intent-change editing behavior.
+                continue
+            }
             guard !e.keyLabel.isEmpty,
                   allowed.contains(e.keyLabel),
                   e.keyWidth > 0, e.keyHeight > 0 else { continue }
@@ -95,6 +104,25 @@ final class GaussianModelStore {
 
     func reset() {
         try? FileManager.default.removeItem(at: fileURL())
+        try? FileManager.default.removeItem(at: snapshotFileURL())
+    }
+
+    @discardableResult
+    func savePhaseBSnapshot() -> Bool {
+        let src = fileURL()
+        let dst = snapshotFileURL()
+        do {
+            if FileManager.default.fileExists(atPath: dst.path) {
+                try FileManager.default.removeItem(at: dst)
+            }
+            if FileManager.default.fileExists(atPath: src.path) {
+                try FileManager.default.copyItem(at: src, to: dst)
+                return true
+            }
+        } catch {
+            return false
+        }
+        return false
     }
 
     // MARK: - Storage
@@ -103,6 +131,12 @@ final class GaussianModelStore {
         FileManager.default
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(filename)
+    }
+
+    private func snapshotFileURL() -> URL {
+        FileManager.default
+            .urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(phaseBSnapshotFilename)
     }
 
     private func loadTaps() -> [PersistedTap] {

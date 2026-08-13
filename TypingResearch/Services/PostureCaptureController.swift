@@ -52,6 +52,7 @@ final class PostureCaptureController {
         studyId: UUID,
         posture: HoldingHand,
         modelContext: ModelContext,
+        notes: String = "study_session",
         onSample: @escaping (HandSample) -> Void
     ) {
         guard capture == nil else { return }  // already running
@@ -79,6 +80,7 @@ final class PostureCaptureController {
                 studyId: studyId,
                 posture: posture,
                 modelContext: modelContext,
+                notes: notes,
                 onSample: onSample
             )
         }
@@ -110,6 +112,7 @@ final class PostureCaptureController {
         studyId: UUID,
         posture: HoldingHand,
         modelContext: ModelContext,
+        notes: String,
         onSample: @escaping (HandSample) -> Void
     ) {
         let id = UUID()
@@ -141,7 +144,7 @@ final class PostureCaptureController {
             cameraPosition: "front",
             deviceModel: participant.deviceModel,
             systemVersion: participant.systemVersion,
-            notes: "posture_training_run"
+            notes: notes
         )
         modelContext.insert(sample)
         onSample(sample)
