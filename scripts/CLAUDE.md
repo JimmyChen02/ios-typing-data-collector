@@ -54,12 +54,17 @@ python3 scripts/substitution_metrics.py sessions_raw/*_keystrokes.csv
 
 produces, in `processed-keystrokes/`:
 - `<session>_processed.csv` — every original column plus the label columns
-- `substitution_summary.csv` — one row per session, counts per source/effect/
-  outcome plus `grey_zone_rows`
+- `<session>_summary.csv` — counts per source/effect/outcome plus
+  `grey_zone_rows`
 
-`--out-dir` moves the folder, `--out` moves just the summary, `--labeled-out`
-names the processed file explicitly (one input only). Output folders are created
-if missing.
+Every output is named after its session, so processing a new trial never
+overwrites an earlier one; re-running the **same** session regenerates its two
+files (the point after a rule change).
+
+`--out-dir` moves the folder, `--out` writes one combined summary for the
+run's inputs instead of the per-session files, `--labeled-out` names the
+processed file explicitly (one input only). Output folders are created if
+missing.
 
 **Folder convention:** raw exports downloaded from Drive live in `sessions_raw/`
 as `<session>_keystrokes.csv`; processed output goes in `processed-keystrokes/`.

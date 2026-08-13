@@ -34,7 +34,6 @@ import sys
 # Processed output is the point of the script, so it lands in a folder of its own
 # by default and raw exports in sessions_raw/ are never written back to.
 DEFAULT_OUT_DIR = "processed-keystrokes"
-SUMMARY_BASENAME = "substitution_summary.csv"
 
 SOURCES = [
     "manual_overtype",
@@ -473,7 +472,8 @@ def main(argv=None):
     )
     parser.add_argument(
         "--out",
-        help=f"summary CSV path (default: <out-dir>/{SUMMARY_BASENAME})",
+        help="write one combined summary for this run's inputs at this path, "
+        "instead of the per-session <session>_summary.csv files",
     )
     parser.add_argument(
         "--labeled-out",
@@ -483,10 +483,12 @@ def main(argv=None):
     if args.labeled_out and len(args.keystrokes_inputs) != 1:
         parser.error("--labeled-out requires exactly one keystrokes input")
 
-    summary_path = args.out or os.path.join(args.out_dir, SUMMARY_BASENAME)
-
+    # Every output is named after its session so a new trial never overwrites
+    # an earlier one; a shared summary file would lose other sessions' rows on
+    # each run. --out opts into one combined summary for this run's inputs.
     summaries = []
     written = []
+    summary_paths = []
     for keystrokes_input in args.keystrokes_inputs:
         summary, rows = summarize(keystrokes_input)
         summaries.append(summary)
@@ -494,12 +496,21 @@ def main(argv=None):
             args.out_dir, f"{summary['session_dir']}_processed.csv"
         )
         written.append(write_processed(rows, processed_path))
+        if not args.out:
+            summary_path = os.path.join(
+                args.out_dir, f"{summary['session_dir']}_summary.csv"
+            )
+            _write_csv(summary_path, SUMMARY_FIELDS, [summary])
+            summary_paths.append(summary_path)
 
-    _write_csv(summary_path, SUMMARY_FIELDS, summaries)
+    if args.out:
+        _write_csv(args.out, SUMMARY_FIELDS, summaries)
+        summary_paths.append(args.out)
 
     for path in written:
         print(f"processed -> {path}")
-    print(f"summary   -> {summary_path}")
+    for path in summary_paths:
+        print(f"summary   -> {path}")
 
     # The session name promises a device condition; the labels must agree with
     # it. ac_off with autocorrect rows means the Settings switch was never

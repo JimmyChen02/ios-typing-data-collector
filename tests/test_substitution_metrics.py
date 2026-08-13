@@ -329,6 +329,25 @@ def test_ac_off_session_with_autocorrect_rows_warns(tmp_path, capsys):
     assert "tagged autocorrect-off" in capsys.readouterr().out
 
 
+def test_each_session_gets_its_own_summary_file(tmp_path):
+    # A new trial must never overwrite an earlier session's outputs, so both
+    # the processed CSV and the summary are named after the session.
+    session = write_keystrokes_csv(tmp_path, [
+        (0, "insert", "", "teh", 0, 0, 3, 0, 0, 0),
+        (900, "replace", "teh", "the", 0, 3, 3, 900, 0, 0),
+        (920, "insert", "", " ", 3, 0, 4, 20, 0, 0),
+    ])
+    out_dir = tmp_path / "out"
+    sm.main([str(session), "--out-dir", str(out_dir)])
+    summary_file = out_dir / "Alex,1,left,ac_on_summary.csv"
+    assert (out_dir / "Alex,1,left,ac_on_processed.csv").is_file()
+    assert summary_file.is_file()
+    with summary_file.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 1
+    assert rows[0]["source_autocorrect_engine"] == "1"
+
+
 def test_session_dir_accepted_as_well_as_file(tmp_path):
     session = write_keystrokes_csv(tmp_path, [
         (0, "insert", "", "a", 0, 0, 1, 0, 0, 0),
