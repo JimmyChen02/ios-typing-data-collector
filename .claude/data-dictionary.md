@@ -130,31 +130,73 @@ become stranded and its threshold can be refined offline.
 | `drag` | `touch_phase == "moved"`; collapse contiguous rows into one episode |
 | `keyboard_gesture` | No recent in-app touch and no text change; typically the space-bar trackpad gesture |
 
-**Keystroke `substitution_kind`** — implemented in
-`scripts/substitution_metrics.py`, which writes `keystrokes_labeled.csv`. It is
-**not** present in the `keystrokes.csv` that uploads to Drive; run the script on
-a downloaded session to add it.
+**Keystroke substitution labels** — implemented in
+`scripts/substitution_metrics.py`, which writes `<session>_processed.csv`. They
+are **not** present in the `keystrokes.csv` that uploads to Drive; run the
+script on a downloaded session to add them. Rationale for every rule:
+`.claude/decisions/0003-substitution-taxonomy.md`.
 
-Applies to `event_type` of both `replace` **and** `paste`. A suggestion tap often
+Apply to `event_type` of both `replace` **and** `paste`. A suggestion tap often
 inserts the completion at a collapsed caret (`range_length == 0`, multi-character),
 which the shape classifier calls `paste` even though nothing was pasted.
 
-| Value | Rule | Certain |
+Four orthogonal labels replace the old flat `substitution_kind` enum (kept as a
+derived alias):
+
+| Column | Answers | Certainty |
 |---|---|---|
-| `manual_overtype` | `selected_length_before > 0` — the system never substitutes into a selection | yes |
-| `sentence_caps` | One character each side, same letter ignoring case | yes |
-| `smart_punct` | Both sides punctuation only | yes |
-| `quicktype_pick` | No keystroke within 200 ms before it; autocorrect and inline prediction both need one, so this can only be a bar tap | yes |
-| `inline_prediction` | `marked_text_before == 1`; else the new word extends the typed prefix (`tomo` → `tomorrow`) | mechanical, else inferred |
-| `autocorrect` | Followed a delimiter keystroke and the new word does *not* extend the old (`teh` → `the`) | inferred |
-| `unknown` | Fallthrough | — |
+| `substitution_source` | who initiated the change | inferred — see `substitution_source_confidence` |
+| `substitution_effect` | what changed | certain: pure function of the two strings |
+| `substitution_outcome` | what the user did about it | certain: replayed from the edit script |
+| `revert_latency_ms` | ms until the user first touched the substituted span | certain; empty when `kept` |
+| `next_delimiter_gap_ms` | trailing delimiter gap backing the source label | measured; empty when no delimiter follows within 200 ms |
+| `substitution_kind` | legacy alias of source + effect | — |
 
-The first four are certain. Only `autocorrect` vs `inline_prediction` is inferred,
-and only when `marked_text_before` is 0 — both are accepted by the same space
-keystroke, so they split on completion-versus-correction.
+`substitution_source` priority cascade:
 
-The script warns when an `ac_off` session contains `autocorrect` rows, which means
-the Settings switch was not actually flipped.
+| # | Rule | Source | Confidence |
+|---|---|---|---|
+| 1 | `selected_length_before > 0` — the system never substitutes into a selection | `manual_overtype` | certain |
+| 2 | Both sides punctuation only (smartQuotes/smartDashes, deterministic insert-time rule) | `smart_typography` | certain |
+| 3 | New extends old (`tomo` → `tomorrow`) and trailing gap ≥ 9 ms | `suggestion_bar` | inferred; `grey_zone` when the gap is 7–12 ms |
+| 4 | Extends, gap < 9 ms, `marked_text_before == 1` on an insert earlier in the word | `inline_prediction` | grey_zone |
+| 5 | Extends, gap < 9 ms, no marked hint | `autocorrect_engine` | grey_zone |
+| 6 | Extends, gap undefined | `inline_prediction` | inferred |
+| 7 | Old non-empty (corrections of any shape, incl. `i` → `I`: sentence auto-caps pre-shifts the keyboard and never emits a replace) | `autocorrect_engine` | inferred |
+| 8 | Fallthrough | `unknown` | — |
+
+The trailing gap is iOS's own latency between committing a replacement and
+committing the following delimiter: ~13 ms when the system auto-appends the
+space after a bar tap, ~5 ms when a typed delimiter triggered the change.
+Machine timing, not human — but calibrated on one device, one iOS version, n=3
+confirmed bar taps, hence the grey zone. It applies **only** to completions;
+corrections sit in the high group too and would mislabel.
+
+`substitution_effect`, first match wins (multi-effect rows take the earlier
+label): `capitalization` (same ignoring case), `punctuation` (both sides
+punctuation), `contraction` (stripping apostrophes/quotes from new gives old),
+`completion` (extends), `spacing` (equal ignoring whitespace), `spelling`
+(both non-empty), `other`.
+
+`substitution_outcome`, from replaying the session's edit script and tracking
+each substituted span: `kept` (untouched to end of session),
+`reverted_to_original` (span deleted and the original text retyped),
+`reverted_other` (span deleted, something else — or nothing — in its place),
+`edited_after` (span modified but partly intact). If replay diverges from
+`resulting_text_length` on an unmarked row (a real capture gap — iOS edited
+text without a delegate callback), outcomes resolved before that point are
+kept and the rest stay empty; `kept` is never guessed. While
+`marked_text_before == 1`, `resulting_text_length` legitimately includes the
+uncommitted marked text and is not treated as divergence.
+
+Legacy `substitution_kind` alias: `manual_overtype`;
+`smart_typography` → `smart_punct`; `suggestion_bar` → `quicktype_pick`;
+`inline_prediction`; `autocorrect_engine` + `capitalization` → `sentence_caps`;
+`autocorrect_engine` + anything else → `autocorrect`; `unknown`.
+
+The script warns when an `ac_off` session contains `autocorrect_engine` rows
+(Settings switch not actually flipped) and when an `ac_on` session contains
+none (switch silently left off).
 
 ## Platform limits
 
