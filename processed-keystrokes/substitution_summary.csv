@@ -1,0 +1,3 @@
+session_dir,keystroke_rows,substitution_rows,source_manual_overtype,source_smart_typography,source_suggestion_bar,source_inline_prediction,source_autocorrect_engine,source_unknown,effect_capitalization,effect_punctuation,effect_contraction,effect_completion,effect_spacing,effect_spelling,effect_other,outcome_kept,outcome_reverted_to_original,outcome_reverted_other,outcome_edited_after,grey_zone_rows
+Tran_test1,225,10,0,0,2,1,7,0,4,0,0,4,0,2,0,0,0,1,0,2
+Tran_test2,217,9,0,0,3,0,6,0,2,0,3,3,0,1,0,9,0,0,0,0
