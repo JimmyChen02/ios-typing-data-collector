@@ -56,33 +56,64 @@ final class GaussianModelStore {
     // as implicit correction feedback for nearby inserts.
     func update(with events: [InputEventData], annotations: [EditBehaviorAnnotation]? = nil) {
         var taps = loadTaps()
+        let resolved = annotations == nil ? KeyboardIntentResolver.resolve(events: events) : nil
         let annByIndex: [Int: EditBehaviorAnnotation] = Dictionary(
             uniqueKeysWithValues: (annotations ?? []).map { ($0.eventIndex, $0) }
         )
         for (idx, e) in events.enumerated() {
-            if let ann = annByIndex[idx],
-               ann.category == "backspace_intent_change_or_cleanup" || ann.category == "cursor_move_intent_change_edit" {
-                // Skip taps likely tied to explicit intent-change editing behavior.
+            let intended = resolvedIntendedKey(
+                for: idx,
+                event: e,
+                annotations: annByIndex,
+                fallback: resolved
+            )
+            if e.eventType != .delete, e.keyLabel != "space", intended.isEmpty {
+                // Changed their mind, or this tap has no letter to train.
                 continue
             }
             guard !e.keyLabel.isEmpty,
                   allowed.contains(e.keyLabel),
                   e.keyWidth > 0, e.keyHeight > 0 else { continue }
             guard !KeystrokeCleaner.flag(e).isSpatialOutlier else { continue }
+            let expected: String
+            if e.eventType == .delete {
+                expected = e.expectedChar
+            } else if e.keyLabel == "space" {
+                expected = intended.isEmpty ? "space" : intended
+            } else {
+                expected = intended
+            }
             taps.append(PersistedTap(
                 eventType: e.eventType,
                 keyLabel: e.keyLabel,
-                expectedChar: e.expectedChar,
+                expectedChar: expected,
                 actualChar: e.actualChar,
                 correctedChar: e.correctedChar,
                 tapLocalX: e.tapLocalX,
                 tapLocalY: e.tapLocalY,
                 keyWidth: e.keyWidth,
                 keyHeight: e.keyHeight,
-                isCorrect: e.isCorrect
+                isCorrect: e.eventType == .delete ? e.isCorrect : (expected == e.actualChar)
             ))
         }
         save(taps)
+    }
+
+    private func resolvedIntendedKey(
+        for idx: Int,
+        event e: InputEventData,
+        annotations: [Int: EditBehaviorAnnotation],
+        fallback: KeyboardIntentResolver.Resolution?
+    ) -> String {
+        if let intended = annotations[idx]?.intendedKey {
+            return intended
+        }
+        if let intended = fallback?.intendedKey[idx] {
+            return intended
+        }
+        if e.eventType == .delete { return "" }
+        let letter = e.actualChar.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return letter.count == 1 && letter.rangeOfCharacter(from: .letters) != nil ? letter : ""
     }
 
     // Reconstruct InputEventData envelopes from the persisted taps and

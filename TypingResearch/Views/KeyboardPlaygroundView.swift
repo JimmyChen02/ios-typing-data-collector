@@ -8,6 +8,7 @@ struct KeyboardPlaygroundView: View {
 
     @State private var typedText = ""
     @State private var caretUTF16 = 0
+    @State private var selectionLengthUTF16 = 0
     @State private var events: [PlaygroundEvent] = []
     @State private var shareItem: ShareItem?
     @State private var statusMessage: String?
@@ -26,6 +27,7 @@ struct KeyboardPlaygroundView: View {
                 AnnotatedTypingCanvas(
                     text: $typedText,
                     caretUTF16: $caretUTF16,
+                    selectionLengthUTF16: $selectionLengthUTF16,
                     revertible: revertible,
                     placeholder: "Start typing…"
                 ) { mark in
@@ -53,6 +55,7 @@ struct KeyboardPlaygroundView: View {
                         Button("Clear") {
                             typedText = ""
                             caretUTF16 = 0
+                            selectionLengthUTF16 = 0
                             events = []
                             revertible = nil
                             statusMessage = nil
@@ -66,7 +69,11 @@ struct KeyboardPlaygroundView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
 
-                InAppResearchKeyboardView(text: typedText, caretUTF16: $caretUTF16) { edits in
+                InAppResearchKeyboardView(
+                    text: typedText,
+                    caretUTF16: $caretUTF16,
+                    selectionLengthUTF16: $selectionLengthUTF16
+                ) { edits in
                     handle(edits)
                 }
                 .frame(height: keyboardSize.contentHeight)
@@ -174,16 +181,28 @@ struct KeyboardPlaygroundView: View {
 
         switch edit.kind {
         case .insert:
+            let sel = max(0, min(selectionLengthUTF16, ns.length - caret))
             typedText = ns.replacingCharacters(
-                in: NSRange(location: caret, length: 0),
+                in: NSRange(location: caret, length: sel),
                 with: edit.emittedText
             )
             caretUTF16 = caret + (edit.emittedText as NSString).length
 
         case .delete:
             let delLen = (edit.originalText as NSString).length
-            guard caret >= delLen, delLen > 0 else { return }
-            let loc = caret - delLen
+            guard delLen > 0 else { return }
+            let loc: Int
+            let atCaret = NSRange(location: caret, length: delLen)
+            if NSMaxRange(atCaret) <= ns.length, ns.substring(with: atCaret) == edit.originalText {
+                loc = caret
+            } else if caret >= delLen {
+                loc = caret - delLen
+                guard ns.substring(with: NSRange(location: loc, length: delLen)) == edit.originalText else {
+                    return
+                }
+            } else {
+                return
+            }
             typedText = ns.replacingCharacters(
                 in: NSRange(location: loc, length: delLen),
                 with: ""
@@ -192,13 +211,22 @@ struct KeyboardPlaygroundView: View {
 
         case .replace:
             let origLen = (edit.originalText as NSString).length
-            let loc = max(0, caret - origLen)
+            let loc: Int
+            let atCaret = NSRange(location: caret, length: origLen)
+            if origLen > 0,
+               NSMaxRange(atCaret) <= ns.length,
+               ns.substring(with: atCaret) == edit.originalText {
+                loc = caret
+            } else {
+                loc = max(0, caret - origLen)
+            }
             typedText = ns.replacingCharacters(
                 in: NSRange(location: loc, length: origLen),
                 with: edit.emittedText
             )
             caretUTF16 = loc + (edit.emittedText as NSString).length
         }
+        selectionLengthUTF16 = 0
     }
 
     private func revertAutocorrection(_ mark: RevertibleAutocorrection) {

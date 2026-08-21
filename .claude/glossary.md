@@ -28,3 +28,10 @@ Shared vocabulary for the TypingResearch project.
   needed before the model stabilizes.
 - **Key backoff** — fallback when a key has too few taps: fitted → borrowed (from a
   neighbor) → geometry (classic rect). Reported by `key_backoff_report.py`.
+- **Typo fix / same intent** — the user still wanted the same word (recieve →
+  receive, or teh → the). Those taps train the letters of the final kept word.
+- **Changed their mind / intent change** — they deleted a word and wrote a
+  different one (cat → dog). Old taps are not used to move letter boundaries.
+- **LM wrong, user fixed** — autocorrect or a suggestion replaced the word, then
+  the user edited it back toward what they typed. Original taps train the user's
+  letters, not the LM's.

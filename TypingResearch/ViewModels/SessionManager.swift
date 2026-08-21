@@ -135,11 +135,14 @@ struct EditBehaviorAnnotation: Sendable {
     let usedSuggestion: Bool
     let wrongfullyTypedToken: String
     let llmEditedToken: String
+    let intendedKey: String
+    let boundaryNote: String
 }
 
 enum EditBehaviorAnnotator {
     static func annotate(events: [InputEventData]) -> [EditBehaviorAnnotation] {
         guard !events.isEmpty else { return [] }
+        let resolved = KeyboardIntentResolver.resolve(events: events)
         var rows: [EditBehaviorAnnotation] = []
         rows.reserveCapacity(events.count)
 
@@ -147,9 +150,16 @@ enum EditBehaviorAnnotator {
             let usedAutocorrect = e.editSource == "autocorrection"
             let usedSuggestion = e.editSource == "candidate" && !e.selectedSuggestion.isEmpty
             let cursorMoved = eventLikelyMovedCursor(e)
-            let intentPreserved = inferIntentPreserved(event: e, index: idx, events: events)
-            let wrongToken = inferWrongToken(event: e)
-            let editedToken = inferEditedToken(event: e)
+            let resolvedKind = resolved.eventKind[idx] ?? resolved.tapKind[idx]
+            let intentPreserved: Bool = {
+                if let resolvedKind {
+                    return resolvedKind != .changedMind
+                }
+                return inferIntentPreserved(event: e, index: idx, events: events)
+            }()
+            let wrongToken = resolved.typedWord[idx] ?? inferWrongToken(event: e)
+            let editedToken = resolved.finalWord[idx].flatMap { $0.isEmpty ? nil : $0 }
+                ?? inferEditedToken(event: e)
 
             let category: String = {
                 if e.editSource == "correctionReversion" {
@@ -160,6 +170,12 @@ enum EditBehaviorAnnotator {
                 }
                 if usedSuggestion {
                     return "llm_suggestion_applied"
+                }
+                if resolvedKind == .lmWrongUserFixed {
+                    return "llm_wrong_then_user_fixed"
+                }
+                if resolvedKind == .typoFixSameWord, e.eventType == .delete {
+                    return "backspace_same_intent_correction"
                 }
                 if e.eventType == .delete {
                     return intentPreserved
@@ -188,7 +204,9 @@ enum EditBehaviorAnnotator {
                     usedAutocorrect: usedAutocorrect,
                     usedSuggestion: usedSuggestion,
                     wrongfullyTypedToken: wrongToken,
-                    llmEditedToken: editedToken
+                    llmEditedToken: editedToken,
+                    intendedKey: resolved.intendedKey[idx] ?? "",
+                    boundaryNote: resolved.note[idx] ?? ""
                 )
             )
         }
@@ -300,12 +318,13 @@ enum EditBehaviorAnnotator {
         case "llm_autocorrect_applied": return "LM autocorrect"
         case "llm_suggestion_applied": return "Suggestion tap"
         case "llm_autocorrect_reverted": return "Tapped word to undo autocorrect"
-        case "backspace_same_intent_correction": return "Backspace fix (same word)"
-        case "backspace_intent_change_or_cleanup": return "Backspace that changed the word"
+        case "llm_wrong_then_user_fixed": return "LM was wrong; user fixed the word"
+        case "backspace_same_intent_correction": return "Typo fix (same word)"
+        case "backspace_intent_change_or_cleanup": return "Changed their mind (deleted a different word)"
         case "cursor_move_same_intent_edit": return "Typed after moving caret (same word)"
-        case "cursor_move_intent_change_edit": return "Typed after moving caret (changed meaning)"
+        case "cursor_move_intent_change_edit": return "Typed after moving caret (different word)"
         case "replace_same_intent_edit": return "Replace (same word)"
-        case "replace_intent_change_edit": return "Replace (changed meaning)"
+        case "replace_intent_change_edit": return "Replace (different word)"
         case "normal_typing": return "Normal typing"
         default: return category.replacingOccurrences(of: "_", with: " ")
         }

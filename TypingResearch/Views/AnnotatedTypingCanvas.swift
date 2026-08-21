@@ -17,9 +17,26 @@ struct RevertibleAutocorrection: Equatable {
 struct AnnotatedTypingCanvas: UIViewRepresentable {
     @Binding var text: String
     @Binding var caretUTF16: Int
+    @Binding var selectionLengthUTF16: Int
     var revertible: RevertibleAutocorrection?
     var placeholder: String = "Start typing…"
     var onRevertAutocorrection: (RevertibleAutocorrection) -> Void
+
+    init(
+        text: Binding<String>,
+        caretUTF16: Binding<Int>,
+        selectionLengthUTF16: Binding<Int> = .constant(0),
+        revertible: RevertibleAutocorrection?,
+        placeholder: String = "Start typing…",
+        onRevertAutocorrection: @escaping (RevertibleAutocorrection) -> Void
+    ) {
+        self._text = text
+        self._caretUTF16 = caretUTF16
+        self._selectionLengthUTF16 = selectionLengthUTF16
+        self.revertible = revertible
+        self.placeholder = placeholder
+        self.onRevertAutocorrection = onRevertAutocorrection
+    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -165,8 +182,19 @@ struct AnnotatedTypingCanvas: UIViewRepresentable {
                 view.textStorage.setAttributedString(attributed)
             }
             let clamped = max(0, min(caret, attributed.length))
-            if forceCaret || textChanged || (view.selectedRange.length == 0 && view.selectedRange.location != clamped) {
-                view.selectedRange = NSRange(location: clamped, length: 0)
+            let selLen = max(0, min(parent.selectionLengthUTF16, attributed.length - clamped))
+            let desired = NSRange(location: clamped, length: selLen)
+            if forceCaret || textChanged {
+                view.selectedRange = desired
+            } else if selLen > 0, view.selectedRange != desired {
+                view.selectedRange = desired
+            } else if selLen == 0, view.selectedRange.length == 0,
+                      view.selectedRange.location != clamped {
+                view.selectedRange = desired
+            } else if selLen == 0, view.selectedRange.length > 0,
+                      view.selectedRange.location != clamped {
+                // Caret moved (trackpad / tap) while a stale highlight remained.
+                view.selectedRange = desired
             }
             view.setContentOffset(offset, animated: false)
         }
@@ -174,9 +202,13 @@ struct AnnotatedTypingCanvas: UIViewRepresentable {
         func textViewDidChangeSelection(_ textView: UITextView) {
             guard !isApplying else { return }
             let maxLen = (parent.text as NSString).length
-            let clamped = max(0, min(textView.selectedRange.location, maxLen))
-            if parent.caretUTF16 != clamped {
-                parent.caretUTF16 = clamped
+            let loc = max(0, min(textView.selectedRange.location, maxLen))
+            let len = max(0, min(textView.selectedRange.length, maxLen - loc))
+            if parent.caretUTF16 != loc {
+                parent.caretUTF16 = loc
+            }
+            if parent.selectionLengthUTF16 != len {
+                parent.selectionLengthUTF16 = len
             }
         }
 

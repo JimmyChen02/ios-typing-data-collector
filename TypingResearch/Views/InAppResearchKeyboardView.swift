@@ -29,21 +29,50 @@ struct InAppResearchKeyboardView: UIViewRepresentable {
 
     let text: String
     @Binding var caretUTF16: Int
+    @Binding var selectionLengthUTF16: Int
     let onEdits: ([InAppKeyboardEdit]) -> Void
+
+    init(
+        text: String,
+        caretUTF16: Binding<Int>,
+        selectionLengthUTF16: Binding<Int> = .constant(0),
+        onEdits: @escaping ([InAppKeyboardEdit]) -> Void
+    ) {
+        self.text = text
+        self._caretUTF16 = caretUTF16
+        self._selectionLengthUTF16 = selectionLengthUTF16
+        self.onEdits = onEdits
+    }
 
     func makeUIView(context: Context) -> InAppResearchKeyboard {
         SystemKeyboardMetrics.ensureMeasured()
         let keyboard = InAppResearchKeyboard()
         keyboard.onEdits = onEdits
-        keyboard.onCaretUTF16Change = { caretUTF16 = $0 }
-        keyboard.syncExternalText(text, caretUTF16: caretUTF16, force: true)
+        keyboard.onSelectionChange = { caret, length in
+            caretUTF16 = caret
+            selectionLengthUTF16 = length
+        }
+        keyboard.syncExternalText(
+            text,
+            caretUTF16: caretUTF16,
+            selectionLength: selectionLengthUTF16,
+            force: true
+        )
         return keyboard
     }
 
     func updateUIView(_ keyboard: InAppResearchKeyboard, context: Context) {
         keyboard.onEdits = onEdits
-        keyboard.onCaretUTF16Change = { caretUTF16 = $0 }
-        keyboard.syncExternalText(text, caretUTF16: caretUTF16, force: false)
+        keyboard.onSelectionChange = { caret, length in
+            caretUTF16 = caret
+            selectionLengthUTF16 = length
+        }
+        keyboard.syncExternalText(
+            text,
+            caretUTF16: caretUTF16,
+            selectionLength: selectionLengthUTF16,
+            force: false
+        )
         keyboard.applyDeviceMetrics(keyboardWidth: keyboard.bounds.width)
     }
 }
@@ -81,12 +110,14 @@ final class InAppResearchKeyboard: UIView {
 
     var onEdits: (([InAppKeyboardEdit]) -> Void)?
     var onCaretUTF16Change: ((Int) -> Void)?
+    var onSelectionChange: ((Int, Int) -> Void)?
 
     private let decoder = LocalLanguageDecoder()
     private let haptic = UIImpactFeedbackGenerator(style: .light)
 
     private var localText = ""
     private var localCaretUTF16 = 0
+    private var localSelectionLength = 0
     private var layoutMode: KeyboardLayoutMode = .letters
     private var shiftState: ShiftState = .lowercase
     private var renderedKeys: [InAppRenderedKey] = []
@@ -151,30 +182,40 @@ final class InAppResearchKeyboard: UIView {
     }
 
     /// Keep parent/SwiftUI text in sync without stomping ahead-of-parent local typing.
-    func syncExternalText(_ text: String, caretUTF16: Int, force: Bool) {
-        let clampedCaret = max(0, min(caretUTF16, (text as NSString).length))
+    func syncExternalText(_ text: String, caretUTF16: Int, selectionLength: Int = 0, force: Bool) {
+        let nsLen = (text as NSString).length
+        let clampedCaret = max(0, min(caretUTF16, nsLen))
+        let clampedSel = max(0, min(selectionLength, nsLen - clampedCaret))
         if !force {
             if activeTouch != nil || !secondaryTouchActions.isEmpty { return }
-            // Parent often lags one or more keystrokes behind during fast typing.
-            if localText.hasPrefix(text), localText.count >= text.count {
-                // Still accept an explicit caret move (tap / trackpad) from the parent.
-                if clampedCaret != localCaretUTF16, text == localText || localText.hasPrefix(text) {
-                    if text == localText {
-                        localCaretUTF16 = clampedCaret
-                        refreshCandidates()
-                    }
+            // Same text: accept caret / selection changes from a tap or double-tap.
+            if text == localText {
+                if clampedCaret != localCaretUTF16 || clampedSel != localSelectionLength {
+                    localCaretUTF16 = clampedCaret
+                    localSelectionLength = clampedSel
+                    refreshCandidates()
                 }
                 return
             }
+            // Parent often lags one or more keystrokes behind during fast typing.
+            if localText.hasPrefix(text), localText.count >= text.count {
+                return
+            }
         }
-        if text == localText, clampedCaret == localCaretUTF16 { return }
+        if text == localText,
+           clampedCaret == localCaretUTF16,
+           clampedSel == localSelectionLength {
+            return
+        }
         localText = text
         localCaretUTF16 = clampedCaret
+        localSelectionLength = clampedSel
         refreshCandidates()
     }
 
     private func publishCaret() {
         onCaretUTF16Change?(localCaretUTF16)
+        onSelectionChange?(localCaretUTF16, localSelectionLength)
     }
 
     override func layoutSubviews() {
@@ -401,11 +442,11 @@ final class InAppResearchKeyboard: UIView {
         switch action {
         case .text(let rawText):
             let text = shifted(rawText)
-            insertText(text)
+            let replaced = insertText(text)
             emit([
                 InAppKeyboardEdit(
-                    kind: .insert,
-                    originalText: "",
+                    kind: replaced == nil ? .insert : .replace,
+                    originalText: replaced ?? "",
                     emittedText: text,
                     source: .key,
                     gesture: gesture,
@@ -436,6 +477,28 @@ final class InAppResearchKeyboard: UIView {
             refreshCandidates()
 
         case .space:
+            if localSelectionLength > 0 {
+                let replaced = insertText(" ")
+                emit([
+                    InAppKeyboardEdit(
+                        kind: replaced == nil ? .insert : .replace,
+                        originalText: replaced ?? "",
+                        emittedText: " ",
+                        source: .key,
+                        gesture: gesture,
+                        selectedKeyFrame: frame,
+                        tapInfo: tapInfo,
+                        suggestionsOffered: offered,
+                        selectedSuggestion: nil
+                    )
+                ])
+                if layoutMode == .numbers || layoutMode == .symbols {
+                    layoutMode = .letters
+                }
+                shiftState = .lowercase
+                refreshCandidates()
+                return
+            }
             var edits: [InAppKeyboardEdit] = []
             if applyDoubleSpacePeriodIfNeeded(gesture: gesture, frame: frame, tapInfo: tapInfo, offered: offered, into: &edits) {
                 emit(edits)
@@ -486,6 +549,28 @@ final class InAppResearchKeyboard: UIView {
             refreshCandidates()
 
         case .returnKey:
+            if localSelectionLength > 0 {
+                let replaced = insertText("\n")
+                emit([
+                    InAppKeyboardEdit(
+                        kind: replaced == nil ? .insert : .replace,
+                        originalText: replaced ?? "",
+                        emittedText: "\n",
+                        source: .key,
+                        gesture: gesture,
+                        selectedKeyFrame: frame,
+                        tapInfo: tapInfo,
+                        suggestionsOffered: offered,
+                        selectedSuggestion: nil
+                    )
+                ])
+                if layoutMode == .numbers || layoutMode == .symbols {
+                    layoutMode = .letters
+                }
+                shiftState = .uppercase
+                refreshCandidates()
+                return
+            }
             var edits: [InAppKeyboardEdit] = []
             // Return also commits a pending spelling autocorrect, like iOS.
             if let word = currentWord,
@@ -529,6 +614,44 @@ final class InAppResearchKeyboard: UIView {
 
         case .candidate(let candidate):
             // Explicit tap only. Completions and corrections never auto-fire.
+            if localSelectionLength > 0 {
+                let display = unquotedCandidate(candidate)
+                let replaced = insertText(display)
+                var edits: [InAppKeyboardEdit] = [
+                    InAppKeyboardEdit(
+                        kind: replaced == nil ? .insert : .replace,
+                        originalText: replaced ?? "",
+                        emittedText: display,
+                        source: .candidate,
+                        gesture: gesture,
+                        selectedKeyFrame: frame,
+                        tapInfo: tapInfo,
+                        suggestionsOffered: offered,
+                        selectedSuggestion: display
+                    )
+                ]
+                insertText(" ")
+                edits.append(
+                    InAppKeyboardEdit(
+                        kind: .insert,
+                        originalText: "",
+                        emittedText: " ",
+                        source: .candidate,
+                        gesture: gesture,
+                        selectedKeyFrame: frame,
+                        tapInfo: tapInfo,
+                        suggestionsOffered: offered,
+                        selectedSuggestion: display
+                    )
+                )
+                emit(edits)
+                if layoutMode == .numbers || layoutMode == .symbols {
+                    layoutMode = .letters
+                }
+                shiftState = .lowercase
+                refreshCandidates()
+                return
+            }
             let original = currentWord ?? ""
             let display = unquotedCandidate(candidate)
             // Tapping the quoted literal rejects the pending autocorrect.
@@ -634,14 +757,35 @@ final class InAppResearchKeyboard: UIView {
         return String(words[words.count - 2])
     }
 
-    private func insertText(_ text: String) {
+    /// Inserts `text` at the caret, replacing any selected range (Notes-like).
+    /// Returns the replaced selection, or `nil` if the caret was collapsed.
+    @discardableResult
+    private func insertText(_ text: String) -> String? {
         let ns = localText as NSString
         let caret = max(0, min(localCaretUTF16, ns.length))
-        localText = ns.replacingCharacters(in: NSRange(location: caret, length: 0), with: text)
+        let sel = max(0, min(localSelectionLength, ns.length - caret))
+        let replaced = sel > 0 ? ns.substring(with: NSRange(location: caret, length: sel)) : nil
+        localText = ns.replacingCharacters(in: NSRange(location: caret, length: sel), with: text)
         localCaretUTF16 = caret + (text as NSString).length
+        localSelectionLength = 0
+        return (replaced?.isEmpty == false) ? replaced : nil
+    }
+
+    private func deleteSelectedRange() -> String? {
+        let ns = localText as NSString
+        let caret = max(0, min(localCaretUTF16, ns.length))
+        let sel = max(0, min(localSelectionLength, ns.length - caret))
+        guard sel > 0 else { return nil }
+        let range = NSRange(location: caret, length: sel)
+        let deleted = ns.substring(with: range)
+        localText = ns.replacingCharacters(in: range, with: "")
+        localCaretUTF16 = caret
+        localSelectionLength = 0
+        return deleted
     }
 
     private func deleteBeforeCaret() -> String? {
+        if let deleted = deleteSelectedRange() { return deleted }
         let ns = localText as NSString
         let caret = max(0, min(localCaretUTF16, ns.length))
         guard caret > 0 else { return nil }
@@ -649,6 +793,7 @@ final class InAppResearchKeyboard: UIView {
         let deleted = ns.substring(with: range)
         localText = ns.replacingCharacters(in: range, with: "")
         localCaretUTF16 = range.location
+        localSelectionLength = 0
         return deleted
     }
 
@@ -670,6 +815,7 @@ final class InAppResearchKeyboard: UIView {
             with: replacement
         )
         localCaretUTF16 = loc + (replacement as NSString).length
+        localSelectionLength = 0
     }
 
     private func applyDoubleSpacePeriodIfNeeded(
@@ -692,6 +838,7 @@ final class InAppResearchKeyboard: UIView {
             with: ". "
         )
         localCaretUTF16 = caret + 1
+        localSelectionLength = 0
         edits.append(
             InAppKeyboardEdit(
                 kind: .replace,
@@ -709,6 +856,7 @@ final class InAppResearchKeyboard: UIView {
     }
 
     private func deleteWordBeforeCaret() -> String? {
+        if let deleted = deleteSelectedRange() { return deleted }
         let ns = localText as NSString
         var caret = max(0, min(localCaretUTF16, ns.length))
         guard caret > 0 else { return nil }
@@ -733,6 +881,7 @@ final class InAppResearchKeyboard: UIView {
         let deleted = ns.substring(with: range)
         localText = ns.replacingCharacters(in: range, with: "")
         localCaretUTF16 = start
+        localSelectionLength = 0
         return deleted
     }
 
@@ -809,6 +958,7 @@ final class InAppResearchKeyboard: UIView {
         }
 
         if changed {
+            localSelectionLength = 0
             publishCaret()
             refreshCandidates()
         }
@@ -821,11 +971,13 @@ final class InAppResearchKeyboard: UIView {
             guard caret > 0 else { return false }
             let range = ns.rangeOfComposedCharacterSequence(at: caret - 1)
             localCaretUTF16 = range.location
+            localSelectionLength = 0
             return true
         } else {
             guard caret < ns.length else { return false }
             let range = ns.rangeOfComposedCharacterSequence(at: caret)
             localCaretUTF16 = NSMaxRange(range)
+            localSelectionLength = 0
             return true
         }
     }

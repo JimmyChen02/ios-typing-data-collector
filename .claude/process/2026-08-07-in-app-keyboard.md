@@ -109,3 +109,17 @@ HowToSit image. Sessions are free typing with a topic picker and hold-hand
 instruction on a briefing screen before start. Progress is Session x of 12.
 Participant end-of-session UI is WPM + accuracy only. IMU still records at
 50 Hz per session and ships in the research zip.
+
+## 2026-08-13 — Double-tap + backspace
+
+Double-tap selected a word in `UITextView`, but the canvas only stored the
+caret start. Backspace called `deleteBeforeCaret()` at the word start, which
+is a no-op when the caret is 0 (or deletes the character *before* the word).
+Selection length is now synced; delete/type replace the selected range.
+
+## 2026-08-13 — Intent + LM-wrong boundaries
+
+Intent-change was being used as a junk drawer for most backspaces. Researcher
+UI now splits typo-fix / changed-mind / LM-wrong-then-fixed. Gaussian training
+aligns original letter taps to the word the user kept, so a bad LM suggestion
+that they later edit (cat → car → cat) updates C/A/T, not R.

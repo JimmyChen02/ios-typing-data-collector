@@ -6,6 +6,7 @@ struct TrialView: View {
 
     @State private var typedText: String = ""
     @State private var caretUTF16: Int = 0
+    @State private var selectionLengthUTF16: Int = 0
     @State private var keyboardSize = KeyboardSizeModel()
     @Environment(\.colorScheme) private var colorScheme
     private let showsTapDiagnostics = false
@@ -38,7 +39,11 @@ struct TrialView: View {
             Spacer()
 
             // Classic iOS-style keyboard only — Gaussian hit routing removed for now.
-            InAppResearchKeyboardView(text: typedText, caretUTF16: $caretUTF16) { edits in
+            InAppResearchKeyboardView(
+                text: typedText,
+                caretUTF16: $caretUTF16,
+                selectionLengthUTF16: $selectionLengthUTF16
+            ) { edits in
                 handleKeyboardEdits(edits)
             }
             .frame(height: keyboardSize.totalDockedHeight)
@@ -139,16 +144,31 @@ struct TrialView: View {
 
         switch edit.kind {
         case .insert:
+            let sel = max(0, min(selectionLengthUTF16, ns.length - caret))
             rangeStart = caret
-            rangeLength = 0
+            rangeLength = sel
             replacement = edit.emittedText
-            textAfter = ns.replacingCharacters(in: NSRange(location: caret, length: 0), with: edit.emittedText)
+            textAfter = ns.replacingCharacters(
+                in: NSRange(location: caret, length: sel),
+                with: edit.emittedText
+            )
             caretUTF16 = caret + (edit.emittedText as NSString).length
-            eventType = .insert
+            eventType = sel > 0 ? .replace : .insert
         case .delete:
             let delLen = (edit.originalText as NSString).length
-            guard caret >= delLen, delLen > 0 else { return }
-            let loc = caret - delLen
+            guard delLen > 0 else { return }
+            let loc: Int
+            let atCaret = NSRange(location: caret, length: delLen)
+            if NSMaxRange(atCaret) <= ns.length, ns.substring(with: atCaret) == edit.originalText {
+                loc = caret
+            } else if caret >= delLen {
+                loc = caret - delLen
+                guard ns.substring(with: NSRange(location: loc, length: delLen)) == edit.originalText else {
+                    return
+                }
+            } else {
+                return
+            }
             rangeStart = loc
             rangeLength = delLen
             replacement = ""
@@ -157,17 +177,26 @@ struct TrialView: View {
             eventType = .delete
         case .replace:
             let origLen = (edit.originalText as NSString).length
-            let loc = max(0, caret - min(origLen, caret))
+            let loc: Int
+            let atCaret = NSRange(location: caret, length: origLen)
+            if origLen > 0,
+               NSMaxRange(atCaret) <= ns.length,
+               ns.substring(with: atCaret) == edit.originalText {
+                loc = caret
+            } else {
+                loc = max(0, caret - min(origLen, caret))
+            }
             rangeStart = loc
-            rangeLength = caret - loc
+            rangeLength = origLen
             replacement = edit.emittedText
             textAfter = ns.replacingCharacters(
-                in: NSRange(location: loc, length: caret - loc),
+                in: NSRange(location: loc, length: origLen),
                 with: edit.emittedText
             )
             caretUTF16 = loc + (edit.emittedText as NSString).length
             eventType = .replace
         }
+        selectionLengthUTF16 = 0
 
         let rawEvent = sessionManager.captureRawKeyboardEvent(
             textBefore: textBefore,
@@ -268,6 +297,7 @@ struct TrialView: View {
             AnnotatedTypingCanvas(
                 text: $typedText,
                 caretUTF16: $caretUTF16,
+                selectionLengthUTF16: $selectionLengthUTF16,
                 revertible: nil,
                 placeholder: "Start typing freely about the selected topic..."
             ) { _ in }

@@ -324,7 +324,15 @@ struct ResearcherAnalysisPanel: View {
         let autocorrects = pairs.filter { $0.1.usedAutocorrect }
         let suggestions = pairs.filter { $0.1.usedSuggestion }
         let reverts = pairs.filter { $0.0.editSource == "correctionReversion" }
+        let lmFixed = pairs.filter { $0.1.category == "llm_wrong_then_user_fixed" }
         let intentChanges = pairs.filter { !$0.1.intentPreserved }
+        let boundaryRows = pairs.compactMap { event, ann -> String? in
+            let hit = event.actualChar.lowercased()
+            let isLetterTap = event.editSource == "key" && hit.count == 1 && hit.rangeOfCharacter(from: .letters) != nil
+            guard isLetterTap, !ann.boundaryNote.isEmpty else { return nil }
+            let train = ann.intendedKey.isEmpty ? "skip" : ann.intendedKey
+            return "S\(event.studySessionIndex + 1): hit \(quote(hit)) → \(train == "skip" ? "skip" : "train \(train.uppercased())") · \(ann.boundaryNote)"
+        }
         let cursorKinds = Dictionary(grouping: pairs.compactMap { pair -> String? in
             EditBehaviorAnnotator.cursorEditKind(for: pair.0)
         }, by: { $0 })
@@ -332,11 +340,16 @@ struct ResearcherAnalysisPanel: View {
         return VStack(alignment: .leading, spacing: 16) {
             Text("Researcher Analytics")
                 .font(.headline)
-            HStack {
-                analyticsPill(label: "LM autocorrect", value: "\(autocorrects.count)")
-                analyticsPill(label: "Suggestion tap", value: "\(suggestions.count)")
-                analyticsPill(label: "Cursor edits", value: "\(pairs.filter { $0.1.cursorMoved }.count)")
-                analyticsPill(label: "Intent changes", value: "\(intentChanges.count)")
+            VStack(spacing: 8) {
+                HStack {
+                    analyticsPill(label: "LM autocorrect", value: "\(autocorrects.count)")
+                    analyticsPill(label: "Suggestion tap", value: "\(suggestions.count)")
+                    analyticsPill(label: "Cursor edits", value: "\(pairs.filter { $0.1.cursorMoved }.count)")
+                }
+                HStack {
+                    analyticsPill(label: "Changed mind", value: "\(intentChanges.count)")
+                    analyticsPill(label: "LM wrong, user fixed", value: "\(lmFixed.count)")
+                }
             }
 
             glossarySection
@@ -372,6 +385,20 @@ struct ResearcherAnalysisPanel: View {
                 }
             )
 
+            eventList(
+                title: "LM suggested the wrong word, then they fixed it",
+                empty: "No rejected-then-edited LM words yet.",
+                rows: lmFixed.suffix(16).map { event, ann in
+                    "S\(event.studySessionIndex + 1): \(ann.boundaryNote.isEmpty ? "\(quote(ann.wrongfullyTypedToken)) → \(quote(ann.llmEditedToken))" : ann.boundaryNote)"
+                }
+            )
+
+            eventList(
+                title: "Which letter boundary each tap updates",
+                empty: "No letter-boundary assignments yet.",
+                rows: Array(boundaryRows.suffix(24))
+            )
+
             VStack(alignment: .leading, spacing: 8) {
                 Text("Cursor and delete types")
                     .font(.subheadline.weight(.semibold))
@@ -385,8 +412,8 @@ struct ResearcherAnalysisPanel: View {
             }
 
             eventList(
-                title: "Intent changes — what this means",
-                empty: "No intent-change edits yet.",
+                title: "Changed their mind — old taps are not used",
+                empty: "No change-of-mind edits yet.",
                 rows: intentChanges.suffix(16).map { event, ann in
                     let from = quote(ann.wrongfullyTypedToken.isEmpty ? event.originalText : ann.wrongfullyTypedToken)
                     let to = quote(ann.llmEditedToken.isEmpty ? event.emittedText : ann.llmEditedToken)
@@ -405,16 +432,30 @@ struct ResearcherAnalysisPanel: View {
     }
 
     private var glossarySection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("What the labels mean")
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Typo vs changed their mind")
                 .font(.subheadline.weight(.semibold))
-            glossaryRow("LM autocorrect", "The language model replaced a word after Space or Return, e.g. teh → the.")
+            Text("This is only about which letter the finger was aiming at. It is not about whether the sentence is true.")
+                .foregroundColor(.secondary)
+            glossaryRow(
+                "Typo fix (same word)",
+                "They still wanted the same word. Example: recieve → receive, or teh → the. The mistap updates the letter they meant (the E tap in teh updates H if they kept “the”)."
+            )
+            glossaryRow(
+                "Changed their mind (different word)",
+                "They deleted a word and wrote a different one. Example: cat → dog. The C/A/T taps were not aiming at D/O/G, so those old taps do not move any letter boundary. New taps update the new letters."
+            )
+            glossaryRow(
+                "LM was wrong, then they fixed it",
+                "They typed cat. The model changed it to car. They went back and made it cat (or cats). The model was wrong — we update C, A, T from the original taps, not R. Same if they tapped a bad suggestion and then edited the word."
+            )
+            glossaryRow(
+                "LM was right and they kept it",
+                "They typed teh, the model made the, they left it. We treat that like a typo fix: align teh to the and train T, H, E."
+            )
+            glossaryRow("LM autocorrect", "The model replaced a word after Space or Return.")
             glossaryRow("Suggestion tap", "They tapped a word in the bar above the keys.")
-            glossaryRow("Tapped a word", "They tapped the grey-underlined autocorrect to put the original letters back.")
-            glossaryRow("Backspace at the end", "Delete while the caret was at the end of the text.")
-            glossaryRow("Backspace after moving caret", "They moved the caret (tap in the text or long-press Space), then deleted.")
-            glossaryRow("Typed after moving caret", "They placed the caret in the middle, then typed. We cannot tell tap-vs-trackpad unless they also deleted.")
-            glossaryRow("Intent change", "The edit looks like they changed what they meant, not a small typo fix. Example: deleting a whole word and typing a different one. Same-intent is a nearby fix like recieve → receive.")
+            glossaryRow("Tapped a word", "They tapped the grey underline to put the original letters back.")
         }
         .font(.caption)
     }

@@ -55,6 +55,7 @@ final class DataExporter {
             "category", "intent_preserved", "cursor_moved",
             "used_autocorrect", "used_suggestion",
             "wrongfully_typed_token", "llm_edited_token",
+            "intended_key", "boundary_note",
             "original_text", "emitted_text", "selected_suggestion",
             "text_before", "text_after"
         ].joined(separator: ",")]
@@ -78,6 +79,8 @@ final class DataExporter {
                 ann.usedSuggestion ? "1" : "0",
                 csvEscape(ann.wrongfullyTypedToken),
                 csvEscape(ann.llmEditedToken),
+                csvEscape(ann.intendedKey),
+                csvEscape(ann.boundaryNote),
                 csvEscape(e.originalText),
                 csvEscape(e.emittedText),
                 csvEscape(e.selectedSuggestion),
@@ -469,6 +472,7 @@ final class DataExporter {
             "category", "intent_preserved", "cursor_moved",
             "used_autocorrect", "used_suggestion",
             "wrongfully_typed_token", "llm_edited_token",
+            "intended_key", "boundary_note",
             "original_text", "emitted_text", "selected_suggestion",
             "text_before", "text_after"
         ].joined(separator: ",")]
@@ -491,6 +495,8 @@ final class DataExporter {
                 ann.usedSuggestion ? "1" : "0",
                 csvEscape(ann.wrongfullyTypedToken),
                 csvEscape(ann.llmEditedToken),
+                csvEscape(ann.intendedKey),
+                csvEscape(ann.boundaryNote),
                 csvEscape(e.originalText),
                 csvEscape(e.emittedText),
                 csvEscape(e.selectedSuggestion),
@@ -530,6 +536,8 @@ final class DataExporter {
             let usedSuggestion: Bool
             let wrongfullyTypedToken: String
             let llmEditedToken: String
+            let intendedKey: String
+            let boundaryNote: String
         }
         struct Payload: Codable {
             let sessionId: String
@@ -564,7 +572,9 @@ final class DataExporter {
                 usedAutocorrect: ann?.usedAutocorrect ?? false,
                 usedSuggestion: ann?.usedSuggestion ?? false,
                 wrongfullyTypedToken: ann?.wrongfullyTypedToken ?? "",
-                llmEditedToken: ann?.llmEditedToken ?? ""
+                llmEditedToken: ann?.llmEditedToken ?? "",
+                intendedKey: ann?.intendedKey ?? "",
+                boundaryNote: ann?.boundaryNote ?? ""
             )
         }
         let payload = Payload(
