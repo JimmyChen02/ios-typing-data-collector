@@ -27,6 +27,33 @@ Classifies logged caret/selection rows as typing, tap reposition, double-tap
 selection, drag, keyboard gesture, or other. Add `--events-out cursor_events.csv`
 with one input to save every original row plus its derived `cause`.
 
+## FreeTypeRecorder committed-prefix CER/WER
+
+`prefix_error_metrics.py <keystrokes.csv|session_dir|export_root> [...]`
+
+Replays each edit log without changing it, censors a final word that never
+reached whitespace/punctuation, and calculates retrospective CER/WER whenever
+a word becomes committed. The current committed words are compared only with
+the corresponding final-text prefix, so future text is never counted as an
+error. It also calculates active CER and WER after every edit, including the
+unfinished word, against the same-length character prefix of the final text.
+This keeps a correctly typed partial word at zero while exposing a divergent
+partial word immediately. `raw_active_event_outcome` flags events that
+introduce or correct observable error units. Outputs default to
+`results/prefix-error-metrics/`:
+
+- `session_summary.csv` — raw and spell-normalized references plus final/mean metrics.
+- `timestamp_metrics.csv` — event-by-event committed-prefix CER/WER.
+- `spelling_audit.csv` — every preserved, suggested, or accepted questionable token.
+- `metrics_summary.md` — overall weighted metrics, per-session results, and method notes.
+
+The spelling layer abstains by default. It accepts a correction only from a
+reviewed `--corrections-csv original,replacement` map or when a unique local
+corpus candidate has strong evidence. Raw and normalized results are always
+reported separately. `final_text.txt`, when present, is preferred over replay;
+older exports fall back to a conservative replay that marks unlogged inline
+prediction text as unknown rather than inventing it.
+
 ## Outlier criteria (clean_keystrokes.py)
 `spatial` (norm outside [-0.5,1.5]), `far_from_target` (>1.25 kw), `iki_low` (<50ms,
 double-register), `iki_high` (>3000ms, pause), `trial_start`, `delete_event`,
