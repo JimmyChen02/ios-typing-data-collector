@@ -53,7 +53,7 @@ for why):
 python3 scripts/substitution_metrics.py sessions_raw/*_keystrokes.csv
 ```
 
-produces, in `processed-keystrokes/`:
+produces, in `processed-keystrokes/<session>/`:
 - `<session>_processed.csv` — every original column plus the label columns
 - `<session>_summary.md` — vertical markdown: raw behaviour counts (inserts,
   backspaces, whole-selection deletes), one block per mechanism with its
@@ -71,9 +71,10 @@ produces, in `processed-keystrokes/`:
 content, so treat `processed-keystrokes/` summaries with the same care as
 `sessions_raw/` exports.
 
-Every output is named after its session, so processing a new trial never
-overwrites an earlier one; re-running the **same** session regenerates its two
-files (the point after a rule change).
+Every raw export gets its own `<session>/` folder, so its processed CSV and
+reports stay together. Processing a new trial never overwrites an earlier one;
+re-running the **same** session regenerates that folder's files after a rule
+change.
 
 `--out-dir` moves the folder, `--out` writes one combined summary for the
 run's inputs instead of the per-session files, `--labeled-out` names the
@@ -81,8 +82,8 @@ processed file explicitly (one input only). Output folders are created if
 missing.
 
 **Folder convention:** raw exports downloaded from Drive live in `sessions_raw/`
-as `<session>_keystrokes.csv`; processed output goes in `processed-keystrokes/`.
-The raw files are never modified.
+as `<session>_keystrokes.csv`; each raw export's processed output goes in
+`processed-keystrokes/<session>/`. The raw files are never modified.
 
 The summary's `session_dir` comes from the folder for a `keystrokes.csv` inside a
 session dir, and from the filename (minus `_keystrokes`) for a flat export.
@@ -133,8 +134,9 @@ appears as a category. Substitutions are attributed to the word holding
 their inserted characters; deletes carry a left-biased position marker
 shifted through later edits into final-text coordinates. Words deleted
 entirely are not in the denominator (see `deleted_entirely` outcomes).
-Outputs per session: `<session>_word_edits.csv`, `<session>_word_summary.md`
-— both quote participant text; handle like `sessions_raw/`.
+Outputs per session in `processed-keystrokes/<session>/`:
+`<session>_word_edits.csv`, `<session>_word_summary.md` — both quote
+participant text; handle like `sessions_raw/`.
 
 ## Outlier criteria (clean_keystrokes.py)
 `spatial` (norm outside [-0.5,1.5]), `far_from_target` (>1.25 kw), `iki_low` (<50ms,

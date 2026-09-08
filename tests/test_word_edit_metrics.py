@@ -171,3 +171,12 @@ def test_word_csv_round_trip(tmp_path):
         rows = list(csv.DictReader(handle))
     assert [r["word"] for r in rows] == ["hi", "there"]
     assert [r["edited"] for r in rows] == ["0", "0"]
+
+
+def test_cli_groups_word_artifacts_by_session(tmp_path):
+    path = _write_session(tmp_path, _type("hi there"))
+    out_dir = tmp_path / "processed"
+    wem.main([str(path), "--out-dir", str(out_dir)])
+    session_dir = out_dir / tmp_path.name
+    assert (session_dir / f"{tmp_path.name}_word_edits.csv").is_file()
+    assert (session_dir / f"{tmp_path.name}_word_summary.md").is_file()

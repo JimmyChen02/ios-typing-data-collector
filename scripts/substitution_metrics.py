@@ -899,7 +899,8 @@ def main(argv=None):
     parser.add_argument(
         "--out-dir",
         default=DEFAULT_OUT_DIR,
-        help=f"folder for processed CSVs, one per input (default: {DEFAULT_OUT_DIR})",
+        help=("parent folder for per-session output folders, one per input "
+              f"(default: {DEFAULT_OUT_DIR})"),
     )
     parser.add_argument(
         "--out",
@@ -919,9 +920,9 @@ def main(argv=None):
     if args.labeled_out and len(args.keystrokes_inputs) != 1:
         parser.error("--labeled-out requires exactly one keystrokes input")
 
-    # Every output is named after its session so a new trial never overwrites
-    # an earlier one; a shared summary file would lose other sessions' rows on
-    # each run. --out opts into one combined summary for this run's inputs.
+    # Every session gets its own folder so all artifacts from one raw export
+    # stay together. A shared summary file would lose other sessions' rows on
+    # each run, so --out opts into one combined summary for this run's inputs.
     summaries = []
     written = []
     summary_paths = []
@@ -937,12 +938,13 @@ def main(argv=None):
             }
             for (source, effect, outcome), count in joint_counts(rows).items()
         ]
+        session_out_dir = os.path.join(args.out_dir, summary["session_dir"])
         processed_path = args.labeled_out or os.path.join(
-            args.out_dir, f"{summary['session_dir']}_processed.csv"
+            session_out_dir, f"{summary['session_dir']}_processed.csv"
         )
         written.append(write_processed(rows, processed_path))
         summary_path = os.path.join(
-            args.out_dir, f"{summary['session_dir']}_summary.md"
+            session_out_dir, f"{summary['session_dir']}_summary.md"
         )
         summary_paths.append(
             write_summary_md(summary, rows, calibration, summary_path)

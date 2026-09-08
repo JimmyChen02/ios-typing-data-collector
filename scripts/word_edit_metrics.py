@@ -339,18 +339,19 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("inputs", nargs="+", help="keystrokes.csv files")
     parser.add_argument("--out-dir", default="processed-keystrokes",
-                        help="directory for <session>_word_edits.csv and "
-                             "<session>_word_summary.md")
+                        help="parent directory for per-session output folders")
     args = parser.parse_args(argv)
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     for input_path in args.inputs:
         path = Path(input_path)
-        session_name = path.stem.replace("_keystrokes", "")
+        session_name = sm.session_label(path)
+        session_out_dir = out_dir / session_name
+        session_out_dir.mkdir(parents=True, exist_ok=True)
         words, totals = analyze_session(path)
-        csv_path = out_dir / f"{session_name}_word_edits.csv"
-        md_path = out_dir / f"{session_name}_word_summary.md"
+        csv_path = session_out_dir / f"{session_name}_word_edits.csv"
+        md_path = session_out_dir / f"{session_name}_word_summary.md"
         write_word_csv(words, csv_path)
         write_summary_md(session_name, words, totals, md_path)
         print(f"{session_name}: {totals['edited_words']}/{totals['total_words']} "

@@ -533,8 +533,8 @@ def test_ac_off_session_with_autocorrect_rows_warns(tmp_path, capsys):
 
 
 def test_each_session_gets_its_own_summary_file(tmp_path):
-    # A new trial must never overwrite an earlier session's outputs, so both
-    # the processed CSV and the summary are named after the session.
+    # A new trial must never overwrite an earlier session's outputs, so all
+    # artifacts sit in a folder named after that session.
     session = write_keystrokes_csv(tmp_path, [
         (0, "insert", "", "teh", 0, 0, 3, 0, 0, 0),
         (900, "replace", "teh", "the", 0, 3, 3, 900, 0, 0),
@@ -542,8 +542,9 @@ def test_each_session_gets_its_own_summary_file(tmp_path):
     ])
     out_dir = tmp_path / "out"
     sm.main([str(session), "--out-dir", str(out_dir)])
-    summary_file = out_dir / "Alex,1,left,ac_on_summary.md"
-    assert (out_dir / "Alex,1,left,ac_on_processed.csv").is_file()
+    session_dir = out_dir / "Alex,1,left,ac_on"
+    summary_file = session_dir / "Alex,1,left,ac_on_summary.md"
+    assert (session_dir / "Alex,1,left,ac_on_processed.csv").is_file()
     assert summary_file.is_file()
     text = summary_file.read_text(encoding="utf-8")
     assert "# Alex,1,left,ac_on — substitution summary" in text
@@ -568,7 +569,7 @@ def test_episode_section_pairs_the_three_axes(tmp_path):
     out_dir = tmp_path / "out"
     joint = tmp_path / "joint.csv"
     sm.main([str(session), "--out-dir", str(out_dir), "--joint-out", str(joint)])
-    text = (out_dir / "Alex,1,left,ac_on_summary.md").read_text(encoding="utf-8")
+    text = (out_dir / "Alex,1,left,ac_on" / "Alex,1,left,ac_on_summary.md").read_text(encoding="utf-8")
     assert "## episodes" in text
     assert "- autocorrect · capitalization · kept: 1" in text
     assert "- autocorrect · spelling · deleted_entirely: 1" in text
@@ -599,7 +600,7 @@ def test_episode_lines_quote_observed_strings(tmp_path):
     session = write_keystrokes_csv(tmp_path, rows)
     out_dir = tmp_path / "out"
     sm.main([str(session), "--out-dir", str(out_dir)])
-    text = (out_dir / "Alex,1,left,ac_on_summary.md").read_text(encoding="utf-8")
+    text = (out_dir / "Alex,1,left,ac_on" / "Alex,1,left,ac_on_summary.md").read_text(encoding="utf-8")
     assert "- autocorrect · capitalization · kept: 1" in text
     assert "    i → I" in text
     assert "- autocorrect · spelling · replaced_with_other: 1" in text
@@ -623,7 +624,7 @@ def test_untrusted_region_prints_count_only(tmp_path):
     ])
     out_dir = tmp_path / "out"
     sm.main([str(session), "--out-dir", str(out_dir)])
-    text = (out_dir / "Alex,1,left,ac_on_summary.md").read_text(encoding="utf-8")
+    text = (out_dir / "Alex,1,left,ac_on" / "Alex,1,left,ac_on_summary.md").read_text(encoding="utf-8")
     assert "- autocorrect · spelling · replaced_with_other: 1" in text
     assert "t.ea" not in text
 
@@ -640,7 +641,7 @@ def test_repeated_pairs_dedupe_with_a_multiplier(tmp_path):
     session = write_keystrokes_csv(tmp_path, rows)
     out_dir = tmp_path / "out"
     sm.main([str(session), "--out-dir", str(out_dir)])
-    text = (out_dir / "Alex,1,left,ac_on_summary.md").read_text(encoding="utf-8")
+    text = (out_dir / "Alex,1,left,ac_on" / "Alex,1,left,ac_on_summary.md").read_text(encoding="utf-8")
     assert "- autocorrect · capitalization · kept: 3" in text
     assert "    i → I  (×3)" in text
 
@@ -657,7 +658,7 @@ def test_summary_definitions_live_in_one_glossary_block(tmp_path):
     ])
     out_dir = tmp_path / "out"
     sm.main([str(session), "--out-dir", str(out_dir)])
-    text = (out_dir / "Alex,1,left,ac_on_summary.md").read_text(encoding="utf-8")
+    text = (out_dir / "Alex,1,left,ac_on" / "Alex,1,left,ac_on_summary.md").read_text(encoding="utf-8")
     assert text.count("<details><summary>label definitions</summary>") == 1
     body = text.split("<details>")[0]
     assert " — *" not in body            # no definition on any data line
