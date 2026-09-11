@@ -62,18 +62,20 @@ Purpose of this export: (1) compute typing performance metrics (CER/WER via
 `scripts/prefix_error_metrics.py`, per-word edit rates via
 `scripts/word_edit_metrics.py`, substitution labels via
 `scripts/substitution_metrics.py`); (2) serve as behavioral ground truth for
-evaluating the adaptive (Gaussian) keyboard. Per-keystroke tap coordinates
-for Gaussian fitting are planned but not yet logged — the system keyboard's
-touches are not observable in-app (see `LastTouchTracker.swift`). One session
+evaluating the adaptive (Gaussian) keyboard. Native keyboard-region coordinates
+are observed at UIApplication level; research-key coordinates come from the
+custom key views. Native touches are a separate measurement stream with no
+invented association to asynchronous text edits. One session
 directory (`Documents/Sessions/<hand>/<name>-<n>/`) contains:
 
 | File | Contents |
 |---|---|
-| `keystrokes.csv` | Every text-change event |
+| `keystrokes.csv` | Every text-change event, with measured tap link/geometry when available |
+| `taps.csv` | Measured native keyboard-region or research-key touch-downs |
 | `cursor.csv` | Every caret or selection change |
 | `imu.csv` | Device motion |
 | `final_text.txt` | The text the participant ended with (UTF-8) |
-| `session_meta.json` | Participant, hand, device, and prompt; written at session start |
+| `session_meta.json` | Participant, hand, device, prompt, capture method; measured tap count filled at stop |
 | `face.mov`, `screen.mov`, `seg_images/` | Video and segmented frames |
 
 The loggers start together, so the CSV streams use a common session-relative
@@ -218,10 +220,50 @@ The script warns when an `ac_off` session contains `autocorrect_engine` rows
 (Settings switch not actually flipped) and when an `ac_on` session contains
 none (switch silently left off).
 
-## Platform limits
+## Native keyboard observations
 
-- The offered QuickType candidates cannot be captured. iOS exposes no API for
-  them, and ReplayKit hides the system keyboard from `screen.mov`; only accepted
-  substitutions are observable.
-- Keyboard touches are invisible to the app. Only touches inside the app window
-  populate `touch_*`, which is also what makes space-bar gestures distinguishable.
+- Offered QuickType candidates are not exported as structured text. Accepted
+  substitutions are logged; FreeTypeRecorder's broadcast extension records the
+  whole screen, including the keyboard, for visual review.
+- Cursor `touch_*` fields still describe app-window contacts only. Native keyboard
+  contacts delivered to FreeTypeRecorder are separately recorded in `taps.csv`;
+  they are not attributed to cursor movement or joined to text edits by guesswork.
+
+
+## FreeTypeRecorder native keyboard geometry (2026-09-11)
+
+Columns appended to `keystrokes.csv` (retained for export compatibility):
+
+| Column | Meaning |
+|---|---|
+| `keyboard_mode` | `system` in new sessions; older custom-keyboard exports may contain `research` |
+| `tap_id` | 1-based measured touch ID in `taps.csv`; blank in text-edit rows |
+| `tap_x`, `tap_y` | Actual touch-down, keyboard-local points, top-left origin |
+| `tap_local_x`, `tap_local_y` | Legacy key-local coordinates; blank for Apple keyboard |
+| `tap_norm_x`, `tap_norm_y` | Legacy normalized key-local coordinates; blank for Apple keyboard |
+| `key_label` | Legacy custom-key label; Apple's key identity is unknown and left blank |
+| `key_x`, `key_y` | Legacy key origin; blank for Apple keyboard |
+| `key_width`, `key_height` | Legacy key size; blank for Apple keyboard |
+| `keyboard_width`, `keyboard_height` | Observed keyboard screen rectangle size in points |
+| `tap_coordinate_space` | `keyboard_points` for measured taps; empty otherwise |
+| `tap_screen_x`, `tap_screen_y` | Measured touch-down in screen points |
+| `keyboard_screen_x`, `keyboard_screen_y` | Keyboard rectangle origin in screen points |
+| `tap_source` | `native_keyboard_region`; empty for text edits |
+| `touch_window` | Observed touch window class, for provenance |
+
+`taps.csv` contains `tap_id,t_ms,keyboard_mode` followed by the geometry columns
+(from `tap_x` through `touch_window`). Its `t_ms` is UITouch touch-down uptime
+minus logger-start uptime, in milliseconds. Edit `t_ms` retains the callback
+timestamp. Native touches and edits remain independent; text-edit tap IDs and
+geometry are blank. Do not join by nearest time as ground truth. The keyboard
+rectangle includes the prediction bar. Swipe starts and held keys are touch-downs,
+not guarantees of one edit per touch. Hardware, paste, and accessibility edits do
+not get fabricated coordinates.
+
+New `session_meta.json` files record `keyboardMode=system` and
+`tapCaptureMethod=uiapplication_send_event`, with `measuredTapCount` filled at stop.
+Zero means no touches observed; investigate event availability if the participant
+typed. Older metadata may omit these fields or identify the removed custom keyboard.
+Legacy custom rows used `tap_source=research_key`, key geometry, and verified
+custom-key edit tap IDs; existing saved data is preserved.
+No intent or typing-versus-spelling labels are inferred.

@@ -17,4 +17,7 @@ struct SessionMeta: Codable, Equatable {
     let appVersion: String
     let sessionNumber: Int
     let prompt: String
+    var keyboardMode: String? = nil // absent in older, Apple-keyboard recordings
+    var tapCaptureMethod: String? = nil
+    var measuredTapCount: Int? = nil // filled at stop; 0 means no touches observed
 }

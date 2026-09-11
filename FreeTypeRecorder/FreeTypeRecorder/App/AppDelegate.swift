@@ -5,7 +5,6 @@ import UIKit
 // via SceneDelegate — SwiftUI's own App/WindowGroup APIs don't expose the
 // window itself, and we need to intercept touches at the window level to
 // draw tap ripples on top of everything for the screen recording.
-@main
 final class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func application(

@@ -1,0 +1,4 @@
+tap_id,t_ms,keyboard_mode,tap_x,tap_y,tap_local_x,tap_local_y,tap_norm_x,tap_norm_y,key_label,key_x,key_y,key_width,key_height,keyboard_width,keyboard_height,tap_coordinate_space,tap_screen_x,tap_screen_y,keyboard_screen_x,keyboard_screen_y,tap_source,touch_window
+1,6853.8927,system,19.0000,72.0000,,,,,,,,,,402.0000,336.0000,keyboard_points,19.0000,610.0000,0.0000,538.0000,native_keyboard_region,UIRemoteKeyboardWindow
+2,6887.1637,system,59.0000,72.0000,,,,,,,,,,402.0000,336.0000,keyboard_points,59.0000,610.0000,0.0000,538.0000,native_keyboard_region,UIRemoteKeyboardWindow
+3,6912.1809,system,99.0000,72.0000,,,,,,,,,,402.0000,336.0000,keyboard_points,99.0000,610.0000,0.0000,538.0000,native_keyboard_region,UIRemoteKeyboardWindow

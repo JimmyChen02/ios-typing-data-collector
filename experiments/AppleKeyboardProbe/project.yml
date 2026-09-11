@@ -1,0 +1,44 @@
+name: AppleKeyboardProbe
+options:
+  deploymentTarget:
+    iOS: "15.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: P2LUTF8N6F
+    CODE_SIGN_STYLE: Automatic
+targets:
+  AppleKeyboardProbe:
+    type: application
+    platform: iOS
+    sources: [App]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: jimmyx.applekeyboardprobe
+        TARGETED_DEVICE_FAMILY: "1"
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Keyboard Probe
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+  AppleKeyboardProbeUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: AppleKeyboardProbe
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: jimmyx.applekeyboardprobe.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: AppleKeyboardProbe
+schemes:
+  AppleKeyboardProbe:
+    build:
+      targets:
+        AppleKeyboardProbe: all
+    test:
+      targets: [AppleKeyboardProbeUITests]

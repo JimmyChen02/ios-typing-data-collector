@@ -8,10 +8,9 @@ import UIKit
 /// builds a CursorSample, so a single conversion point keeps the CSV in one
 /// coordinate space.
 ///
-/// This only ever sees in-app touches — the system keyboard renders in its own
-/// window, which apps cannot observe. That blind spot is useful signal rather
-/// than a gap: a caret move with no recent touch here and no accompanying text
-/// change is a keyboard-driven move, i.e. the space-bar trackpad gesture.
+/// This tracker intentionally contains only app-window touches. Native keyboard
+/// touches are collected separately by NativeKeyboardTouchCapture, so they do
+/// not change the coordinate space or attribution used by cursor.csv.
 @MainActor
 final class LastTouchTracker {
     static let shared = LastTouchTracker()

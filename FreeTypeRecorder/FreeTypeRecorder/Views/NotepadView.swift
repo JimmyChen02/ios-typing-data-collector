@@ -123,6 +123,7 @@ struct NotepadView: View {
                     .padding(.horizontal, 10).padding(.vertical, 5)
                     .background(.tint.opacity(0.15), in: Capsule())
             }
+            Text("Apple keyboard").font(.caption).foregroundStyle(.secondary)
             Text(prompt)
                 .font(.headline)
                 .fixedSize(horizontal: false, vertical: true)

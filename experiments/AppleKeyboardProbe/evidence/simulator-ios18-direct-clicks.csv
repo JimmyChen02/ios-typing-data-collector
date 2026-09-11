@@ -1,0 +1,10 @@
+event_kind,t_ms,screen_x_pt,screen_y_pt,within_keyboard_frame,keyboard_x_pt,keyboard_y_pt,keyboard_width_pt,keyboard_height_pt,detail
+"touch_down","3679.0590416640043","292.0","168.0","false","0.0","538.0","402.0","336.0","UIWindow"
+"touch_down","6853.892666636966","19.0","610.0","true","0.0","538.0","402.0","336.0","UIRemoteKeyboardWindow"
+"touch_down","6887.163666659035","59.0","610.0","true","0.0","538.0","402.0","336.0","UIRemoteKeyboardWindow"
+"touch_down","6912.180916639045","99.0","610.0","true","0.0","538.0","402.0","336.0","UIRemoteKeyboardWindow"
+"text_change","6949.335750017781","","","","0.0","538.0","402.0","336.0","Q"
+"text_change","6979.087833373342","","","","0.0","538.0","402.0","336.0","Qw"
+"text_change","6988.082041672897","","","","0.0","538.0","402.0","336.0","Qwe"
+"touch_down","35234.4875416602","203.0","264.0","false","0.0","538.0","402.0","336.0","UIWindow"
+"text_change","35331.525208370294","","","","0.0","538.0","402.0","336.0","Wee"

@@ -66,3 +66,54 @@ Tests: `python3 -m pytest tests/test_substitution_metrics.py`
    iOS edited text without telling the logger. Note it and send the session.
 4. Send back: the raw `_keystrokes.csv`, the screen recording, and your list
    of which behaviours you performed when.
+
+## 4. Keyboard tap collection
+
+FreeTypeRecorder always uses Apple's native keyboard. Coordinate capture starts
+automatically with recording; there is no keyboard-mode picker.
+
+First run a native Apple-keyboard session on the actual collection phone:
+
+1. Type with clearly different contact positions within the same key; use Shift,
+   predictions, backspace, and a swipe. Apple's usual keyboard behavior must remain.
+2. Check that `taps.csv` has `keyboard_mode=system`,
+   `tap_source=native_keyboard_region`, measured screen and keyboard-local points,
+   and keyboard screen bounds. Verify local x/y equal screen x/y minus the
+   keyboard's screen origin. Distinct contacts must preserve distinct positions.
+3. Apple key labels, per-key geometry and normalization must remain blank.
+   Native `keystrokes.csv` rows must not claim a tap ID. Prediction/autocorrect
+   callbacks can be delayed or batched; they are not a verified tap-to-edit join.
+4. Taps on the editor, setup controls, or after recording ends must not appear
+   in the native keyboard stream. Reopen the keyboard and verify capture resumes.
+5. The saved session and automatic Drive backup must include `taps.csv`.
+   `session_meta.json` should have `keyboardMode=system`,
+   `tapCaptureMethod=uiapplication_send_event`, and the matching `measuredTapCount`.
+   If the count is zero despite typing, that device/build has not passed capture
+   verification. Do not substitute key centers or treat zero as absence of taps.
+
+`AppleKeyboardEditorTests.swift` verifies the native editor keeps UIKit's keyboard,
+autocorrect, spell checking and predictions enabled.
+`NativeKeyboardTapTests.swift` checks native geometry, missing key/association
+fields, session boundaries, and event-observer window/editor gating. The probe's
+direct-click simulator CSV is evidence for the mechanism, not a substitute for
+checking the integrated recording/broadcast flow on a physical phone.
+
+### Simulator mouse-click validation
+
+Build and install the Debug FreeTypeRecorder app, then launch it with
+`xcrun simctl launch booted jimmyx.freetyperecorder --keyboard-click-test`.
+This simulator-only screen uses the production editor, application touch observer,
+and CSV logger. Tap **Start**, focus the editor, click onscreen Apple keys, then
+**Stop & Save**. If necessary, show the software keyboard from Simulator's
+**I/O → Keyboard** menu. Use direct mouse clicks: accessibility activation may
+insert text without generating a touch event.
+
+Outputs go to the app's `Documents/SimulatorKeyboardClickTests/<UUID>/` folder.
+`test_meta.json` marks simulator input and excludes camera, broadcast, IMU and
+upload. This route does not create participant sessions or update study progress,
+and it is compiled out of device and Release builds.
+
+The 2026-09-11 direct-click run passed: 8 native keyboard-region touches, including
+the prediction bar, and 9 text-edit callbacks that replay exactly to the final
+text. Editor-area clicks did not increase the keyboard count. See the
+[unmodified integrated exports](experiments/AppleKeyboardProbe/evidence/integrated-simulator-ios18/README.md).

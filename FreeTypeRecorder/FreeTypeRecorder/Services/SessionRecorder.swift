@@ -111,8 +111,11 @@ final class SessionRecorder {
 
         let directory = workingDirectory
         if let directory {
+            Self.writeTapCount(KeystrokeLogger.shared.measuredTapCount, to: directory)
             _ = IMURecorder.shared.stop(writingTo: directory.appendingPathComponent("imu.csv"))
-            _ = KeystrokeLogger.shared.stop(writingTo: directory.appendingPathComponent("keystrokes.csv"))
+            _ = KeystrokeLogger.shared.stop(
+                writingTo: directory.appendingPathComponent("keystrokes.csv"),
+                tapsURL: directory.appendingPathComponent("taps.csv"))
             _ = CursorLogger.shared.stop(writingTo: directory.appendingPathComponent("cursor.csv"))
             do {
                 try finalText.write(
@@ -188,10 +191,23 @@ final class SessionRecorder {
             systemVersion: DeviceInfo.systemVersion,
             appVersion: DeviceInfo.appVersion,
             sessionNumber: sessionNumber,
-            prompt: prompt
+            prompt: prompt,
+            keyboardMode: "system",
+            tapCaptureMethod: "uiapplication_send_event"
         )
         if let data = try? JSONEncoder().encode(meta) {
             try? data.write(to: directory.appendingPathComponent("session_meta.json"))
+        }
+    }
+
+    private static func writeTapCount(_ count: Int, to directory: URL) {
+        let url = directory.appendingPathComponent("session_meta.json")
+        do {
+            var meta = try JSONDecoder().decode(SessionMeta.self, from: Data(contentsOf: url))
+            meta.measuredTapCount = count
+            try JSONEncoder().encode(meta).write(to: url, options: .atomic)
+        } catch {
+            print("SessionRecorder: failed to update measured tap count: \(error)")
         }
     }
 }

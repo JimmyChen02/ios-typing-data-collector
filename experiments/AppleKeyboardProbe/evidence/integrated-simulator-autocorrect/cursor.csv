@@ -1,0 +1,5 @@
+t_ms,sel_start,sel_length,prev_sel_start,prev_sel_length,delta_chars,caret_x,caret_y,caret_h,touch_x,touch_y,touch_phase,tap_count,touch_age_ms,ms_since_last_text_change,text_length
+12153.820,1,0,0,0,1,14.333,7.000,23.667,,,,,,20.790,1
+12229.475,2,0,1,0,1,22.000,7.000,23.667,,,,,,3.748,2
+12281.365,3,0,2,0,1,31.667,7.000,23.667,,,,,,1.470,3
+45670.609,4,0,3,0,1,33.000,7.000,23.667,,,,,,15.079,4

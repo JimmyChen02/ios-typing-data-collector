@@ -97,8 +97,12 @@ targets:
       - path: FreeTypeRecorder/Logic
       - path: FreeTypeRecorder/Models/HoldingHand.swift
       - path: FreeTypeRecorder/Services/KeystrokeLogger.swift
+      - path: FreeTypeRecorder/Services/NativeKeyboardTouchCapture.swift
       - path: FreeTypeRecorder/Services/CursorLogger.swift
       - path: FreeTypeRecorder/Services/LastTouchTracker.swift
+      - path: FreeTypeRecorder/Services/RecentKeysTracker.swift
+      - path: FreeTypeRecorder/Views/LoggingTextView.swift
+      - path: Shared
     settings:
       base:
         DEVELOPMENT_TEAM: P2LUTF8N6F

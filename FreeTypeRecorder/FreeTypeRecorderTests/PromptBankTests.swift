@@ -11,8 +11,8 @@ struct SeededGenerator: RandomNumberGenerator {
 }
 
 final class PromptBankTests: XCTestCase {
-    func test_bankHasAtLeastTenDistinctPrompts() {
-        XCTAssertGreaterThanOrEqual(PromptBank.prompts.count, 10)
+    func test_bankHasAtLeastSixteenDistinctPrompts() {
+        XCTAssertGreaterThanOrEqual(PromptBank.prompts.count, 16)
         XCTAssertEqual(Set(PromptBank.prompts).count, PromptBank.prompts.count)
     }
 

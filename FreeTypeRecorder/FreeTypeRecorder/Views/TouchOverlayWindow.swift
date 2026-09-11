@@ -6,14 +6,10 @@ import UIKit
 /// tap locations visible in the ReplayKit screen recording, since iOS does
 /// not render touch points on-screen by default.
 ///
-/// Note: this only sees touches within the app's own window. The system
-/// keyboard renders in its own separate window (UIRemoteKeyboardWindow),
-/// which apps cannot intercept touches on — this is an intentional iOS
-/// restriction, not a gap in this implementation. The screen recording
-/// still visually shows the real keyboard being used; there's just no dot
-/// drawn on top of it specifically. A custom in-app keyboard would be the
-/// only way around that, at the cost of no longer testing the real system
-/// keyboard's feel.
+/// This window only sees app-content touches. RecordingApplication separately
+/// observes app-delivered native-keyboard touches in their own window and
+/// records them through NativeKeyboardTouchCapture. Keyboard dots are not drawn
+/// here; the keyboard remains visually unchanged.
 ///
 /// The live holding-hand prediction is burned into the segmented/silhouette
 /// video instead of here — see SegmentedFaceCaptureWriter.

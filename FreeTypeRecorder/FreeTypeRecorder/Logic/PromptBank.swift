@@ -16,6 +16,10 @@ enum PromptBank {
         "Who did you talk to today?",
         "What's the weather like where you are right now?",
         "Describe your walk or commute today.",
+        "What is something you learned recently?",
+        "Describe a memorable conversation.",
+        "What do you like to do to relax?",
+        "Describe a place you would like to visit.",
     ]
 
     static func shuffledOrder<G: RandomNumberGenerator>(using generator: inout G) -> [String] {

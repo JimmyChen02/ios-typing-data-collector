@@ -1,0 +1,10 @@
+t_ms,event_type,replaced_text,replacement_text,range_start,range_length,resulting_text_length,inter_key_interval_ms,selected_length_before,marked_text_before,keyboard_mode,tap_id,tap_x,tap_y,tap_local_x,tap_local_y,tap_norm_x,tap_norm_y,key_label,key_x,key_y,key_width,key_height,keyboard_width,keyboard_height,tap_coordinate_space,tap_screen_x,tap_screen_y,keyboard_screen_x,keyboard_screen_y,tap_source,touch_window
+10704.657,insert,,Q,0,0,1,0.000,0,0,system,,,,,,,,,,,,,,,,,,,,,
+10778.604,insert,,w,1,0,2,73.947,0,0,system,,,,,,,,,,,,,,,,,,,,,
+10837.285,insert,,e,2,0,3,58.681,0,0,system,,,,,,,,,,,,,,,,,,,,,
+28631.110,delete,e,,2,1,2,17793.825,0,0,system,,,,,,,,,,,,,,,,,,,,,
+32427.586,insert,,e,2,0,3,3796.476,0,0,system,,,,,,,,,,,,,,,,,,,,,
+32487.164,insert,,t,3,0,4,59.578,0,0,system,,,,,,,,,,,,,,,,,,,,,
+56427.207,delete,t,,3,1,3,23940.043,0,0,system,,,,,,,,,,,,,,,,,,,,,
+60674.706,replace,Qwe,question,0,3,8,4247.499,0,0,system,,,,,,,,,,,,,,,,,,,,,
+60697.416,insert,, ,8,0,9,22.710,0,0,system,,,,,,,,,,,,,,,,,,,,,

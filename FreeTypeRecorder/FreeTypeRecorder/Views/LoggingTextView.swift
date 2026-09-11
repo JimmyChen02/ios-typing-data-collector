@@ -13,6 +13,7 @@ struct LoggingTextView: UIViewRepresentable {
     func makeUIView(context: Context) -> UITextView {
         let textView = UITextView()
         textView.delegate = context.coordinator
+        textView.isEditable = isEditable
         textView.font = .preferredFont(forTextStyle: .body)
         // Deliberately the opposite of TypingResearch's LoggingTextField
         // (which disables these to get clean word-accuracy measurements
@@ -26,6 +27,7 @@ struct LoggingTextView: UIViewRepresentable {
         textView.smartQuotesType = .yes
         textView.smartDashesType = .yes
         textView.smartInsertDeleteType = .yes
+        NativeKeyboardTouchCapture.shared.bind(textView)
         return textView
     }
 
@@ -38,6 +40,11 @@ struct LoggingTextView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator {
         Coordinator(text: $text)
+    }
+
+    static func dismantleUIView(_ uiView: UITextView, coordinator: Coordinator) {
+        NativeKeyboardTouchCapture.shared.unbind(uiView)
+        uiView.delegate = nil
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {

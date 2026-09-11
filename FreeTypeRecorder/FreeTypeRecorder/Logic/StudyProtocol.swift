@@ -1,9 +1,9 @@
 import Foundation
 import Observation
 
-/// Drives the guided pilot: fixed quotas (Left 3 / Right 3 / Both 4 = 10),
+/// Drives the guided pilot: fixed quotas (Left 3 / Right 3 / Both 10 = 16),
 /// a per-participant shuffled prompt order (no repeats), and global session
-/// numbering 1…10 in completion order. Persisted so a run survives app
+/// numbering 1…16 in completion order. Persisted so a run survives app
 /// relaunch. Single source of truth for the study home + recorder.
 @MainActor
 @Observable
@@ -15,11 +15,11 @@ final class StudyProtocol {
     }
 
     static let shared = StudyProtocol()
-    static let totalSessions = 10
+    static var totalSessions: Int { quotaTable.reduce(0) { $0 + $1.count } }
 
     /// Ordered so `availableConditions` reads Left, Right, Both.
     private static let quotaTable: [(hand: HoldingHand, count: Int)] =
-        [(.left, 3), (.right, 3), (.both, 4)]
+        [(.left, 3), (.right, 3), (.both, 10)]
 
     private static let promptOrderKey = "FreeTypeRecorder.promptOrder"
     private static let completedKey = "FreeTypeRecorder.completedSessions"
@@ -34,6 +34,15 @@ final class StudyProtocol {
             ?? PromptBank.prompts
         self.completed = Self.decode([CompletedSession].self, from: defaults, key: Self.completedKey)
             ?? []
+        // Expanding the study must preserve existing completion records and
+        // prompt order. Append only new prompts so sessions 13–16 don't repeat
+        // the last prompt from the earlier 12-prompt bank. Persist the extension
+        // once so its order remains stable across relaunches.
+        let newPrompts = PromptBank.prompts.filter { !promptOrder.contains($0) }
+        if !newPrompts.isEmpty {
+            promptOrder.append(contentsOf: newPrompts.shuffled())
+            persist()
+        }
     }
 
     // MARK: Derived state

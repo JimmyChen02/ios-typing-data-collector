@@ -1,0 +1,14 @@
+{
+  "environment" : "ios_simulator_mouse_clicks",
+  "excludedServices" : [
+    "camera",
+    "broadcast",
+    "imu",
+    "upload"
+  ],
+  "keyboardMode" : "system",
+  "measuredTapCount" : 4,
+  "systemVersion" : "18.3.1",
+  "tapCaptureMethod" : "uiapplication_send_event",
+  "testOnly" : true
+}

@@ -24,4 +24,15 @@ final class SessionMetaTests: XCTestCase {
             XCTAssertTrue(json.contains("\"\(key)\""), "missing key \(key)")
         }
     }
+
+    func testNativeCaptureMetadataAndLegacyCompatibility() throws {
+        let legacy = try JSONDecoder().decode(SessionMeta.self, from: JSONEncoder().encode(sample()))
+        XCTAssertNil(legacy.tapCaptureMethod)
+        XCTAssertNil(legacy.measuredTapCount)
+        var recorded = sample()
+        recorded.keyboardMode = "system"
+        recorded.tapCaptureMethod = "uiapplication_send_event"
+        recorded.measuredTapCount = 3
+        XCTAssertEqual(try JSONDecoder().decode(SessionMeta.self, from: JSONEncoder().encode(recorded)), recorded)
+    }
 }

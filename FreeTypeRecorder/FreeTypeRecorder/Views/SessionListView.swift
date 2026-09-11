@@ -20,6 +20,11 @@ struct StudyHomeView: View {
 
     var body: some View {
         List {
+            Section("Keyboard") {
+                Text("Apple keyboard")
+                Text("Autocorrect and predictions stay on. Tap positions are recorded automatically.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section { progressCard }
             Section { backupFolderRow }
             Section("Recorded sessions") {
@@ -144,13 +149,9 @@ struct StudyHomeView: View {
         HStack(spacing: 10) {
             Text(hand.displayName).font(.subheadline)
             Spacer()
-            HStack(spacing: 5) {
-                ForEach(0..<quota, id: \.self) { i in
-                    Circle()
-                        .fill(i < done ? Color.accentColor : Color.secondary.opacity(0.25))
-                        .frame(width: 9, height: 9)
-                }
-            }
+            Text("\(done) / \(quota)")
+                .font(.subheadline).monospacedDigit()
+                .frame(minWidth: 44, alignment: .trailing)
             Text(done == quota ? "done" : "\(max(quota - done, 0)) left")
                 .font(.caption).foregroundStyle(done == quota ? .green : .secondary)
                 .frame(width: 44, alignment: .trailing)
